@@ -68,7 +68,9 @@ describe("bounded Node folder capture", () => {
     expect(s.info.diagnostics.filter(d => d.code === "symlink-excluded").map(d => d.path).sort()).toEqual(["broken.md", "directory", "external.md", "internal.md", "loop"]);
   });
 
-  it("retains unavailable identities for oversize, invalid encoding and read failures", async () => {
+  // POSIX-only: chmod-based unreadable files.
+
+  it.skipIf(process.platform === "win32")("retains unavailable identities for oversize, invalid encoding and read failures", async () => {
     const root = await fixture({ "big.md": "12345", "bad.md": new Uint8Array([0xc3, 0x28]), "denied.md": "1", "ok.md": "1234" });
     const s = await snapshot(root, { limits: { maxNoteBytes: 4 }, filesystem: { ...nodeWikiFileSystem, open: async path => {
       if (path.endsWith("/denied.md")) throw Error("private host path must not escape");
@@ -130,7 +132,9 @@ describe("bounded Node folder capture", () => {
     expect(await openLocalWikiSnapshot(join(root, "file.md"))).toEqual({ status: "error", error: { code: "root-not-directory" } });
   });
 
-  it("skips special files without opening them", async () => {
+  // POSIX-only: needs FIFOs.
+
+  it.skipIf(process.platform === "win32")("skips special files without opening them", async () => {
     const root = await fixture({ "special.md": "unread" });
     let opened = false;
     const s = await snapshot(root, { filesystem: { ...nodeWikiFileSystem,
@@ -197,7 +201,9 @@ describe("observed filesystem races and failures", () => {
     expect(s.search("outside").hits).toEqual([]);
   });
 
-  it("rejects replacement inode and ancestor symlink swaps through the adapter", async () => {
+  // POSIX-only: needs symlinks (privileged on Windows) and inode identity.
+
+  it.skipIf(process.platform === "win32")("rejects replacement inode and ancestor symlink swaps through the adapter", async () => {
     const root = await fixture({ "dir/a.md": "safe", "replacement.md": "different" });
     const outside = await fixture({ "a.md": "outside" });
     const s = await snapshot(root, { filesystem: { ...nodeWikiFileSystem, open: async path => {
@@ -230,7 +236,9 @@ describe("observed filesystem races and failures", () => {
     expect(s.info.diagnostics).toContainEqual({ code: "file-changed", path: "a.md" });
   });
 
-  it("rejects a sibling-prefix canonical escape and never opens the file", async () => {
+  // POSIX-only: needs symlinks (privileged on Windows).
+
+  it.skipIf(process.platform === "win32")("rejects a sibling-prefix canonical escape and never opens the file", async () => {
     const root = await fixture({ "a.md": "safe" });
     let opened = false;
     const s = await snapshot(root, { filesystem: { ...nodeWikiFileSystem,
@@ -242,7 +250,9 @@ describe("observed filesystem races and failures", () => {
     expect(s.info.diagnostics).toContainEqual({ code: "path-changed", path: "a.md" });
   });
 
-  it("reports descendant listing/stat failures as incomplete discovery", async () => {
+  // POSIX-only: chmod-based unreadable directories.
+
+  it.skipIf(process.platform === "win32")("reports descendant listing/stat failures as incomplete discovery", async () => {
     const root = await fixture({ "denied/a.md": "", "bad.md": "", "good.md": "good" });
     const s = await snapshot(root, { filesystem: { ...nodeWikiFileSystem,
       entries: async function* (path) { if (path.endsWith("/denied")) throw Error(); yield* nodeWikiFileSystem.entries(path); },

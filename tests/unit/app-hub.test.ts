@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { chmodSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { createHash } from "node:crypto";
 import { dispatchHubRequest } from "../../src/main/hub-sync-ipc";
 import { HubError, HubStoreManager, classifySshFailure, inspectFsHub, validateHubTarget } from "../../src/sync-node/app-hub";
@@ -20,7 +20,7 @@ const sha = (data: ArrayBuffer) => createHash("sha256").update(new Uint8Array(da
 
 describe("validateHubTarget", () => {
   it("accepts an absolute folder and a safe ssh host", () => {
-    expect(validateHubTarget({ kind: "fs", path: "/srv/hub/../hub" })).toEqual({ kind: "fs", path: "/srv/hub" });
+    expect(validateHubTarget({ kind: "fs", path: "/srv/hub/../hub" })).toEqual({ kind: "fs", path: resolve("/srv/hub") });
     expect(validateHubTarget({ kind: "ssh", host: "geode-hub", path: "/home/rick/geode-hub/Personal" })).toEqual({ kind: "ssh", host: "geode-hub", path: "/home/rick/geode-hub/Personal" });
     expect(validateHubTarget({ kind: "ssh", host: "rick@10.0.0.4", path: "hub" })).toMatchObject({ kind: "ssh", host: "rick@10.0.0.4" });
   });
@@ -66,7 +66,8 @@ describe("inspectFsHub (Test connection / create pre-check; nothing is created)"
     expect(existsSync(join(root, "a"))).toBe(false);
     expect((await inspectFsHub(hub, false)).detail).toContain("does not exist yet");
   });
-  it.skipIf(process.getuid?.() === 0)("an unwritable ancestor is reported as 'cannot create', naming the typed path", async () => {
+  // POSIX-only: relies on chmod 0500; Windows ACLs do not make a directory unwritable this way.
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)("an unwritable ancestor is reported as 'cannot create', naming the typed path", async () => {
     const root = dir("ro"); chmodSync(root, 0o500);
     try { await expect(inspectFsHub(join(root, "hub"), true)).rejects.toMatchObject({ message: expect.stringMatching(/Cannot create .*hub: no write permission in/) }); }
     finally { chmodSync(root, 0o700); }

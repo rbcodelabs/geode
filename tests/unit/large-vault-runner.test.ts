@@ -6,7 +6,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { distribution, deadline } from "../../scripts/large-vault-sample.mjs";
 import { pairedSummary, runChild, stageDependencies } from "../../scripts/large-vault-runner-lib.mjs";
-describe("external benchmark contracts", () => {
+// POSIX-only: OS ownership/monitoring uses POSIX process groups and ps ('monitoring-unavailable' on Windows).
+describe.skipIf(process.platform === "win32")("external benchmark contracts", () => {
     it("arms OS ownership before allowing sample code to execute", async () => {
         const { collectProcessGroupRss } = await import("../../scripts/large-vault-runner-lib.mjs");
         const root = await realpath(await mkdtemp(join(tmpdir(), "stress-arm-test-")));

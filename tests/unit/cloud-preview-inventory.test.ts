@@ -31,7 +31,7 @@ describe("exact preview resource inventory", () => {
     try {
       const path = join(dir,"inventory.json"); await saveInventory(path,manifest());
       expect(JSON.parse(await readFile(path,"utf8"))).toEqual(manifest());
-      expect((await stat(path)).mode & 0o777).toBe(0o600);
+      if (process.platform !== "win32") expect((await stat(path)).mode & 0o777).toBe(0o600); // POSIX permission bits; Windows has no 0600
       await expect(saveInventory(path,manifest())).rejects.toThrow();
     } finally { await rm(dir,{recursive:true,force:true}); }
   });

@@ -1,3 +1,4 @@
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { selectVaultWindowAction } from "../../src/main/vault-window-selection";
 
@@ -18,6 +19,6 @@ describe("selectVaultWindowAction", () => {
   it("creates a window with the requested vault as an explicit launch target", () => {
     expect(selectVaultWindowAction("/vaults/new", 7, [
       { windowId: 7, vaultPath: "/vaults/current" },
-    ])).toEqual({ kind: "create", vaultPath: "/vaults/new" });
+    ])).toEqual({ kind: "create", vaultPath: resolve("/vaults/new") });
   });
 });

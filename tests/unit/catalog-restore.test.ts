@@ -228,7 +228,8 @@ describe("materializeRestoredVault", () => {
     await expect(readFile(join(outside, "diagram.png"))).rejects.toThrow();
   });
 
-  it("refuses a symlink planted at the final component rather than following it", async () => {
+  // POSIX-only: creating symlinks needs a privilege Windows does not grant by default.
+  it.skipIf(process.platform === "win32")("refuses a symlink planted at the final component rather than following it", async () => {
     const root = await freshRoot();
     const outside = await freshRoot();
     await symlink(join(outside, "planted.md"), join(root, "Index.md"), "file");

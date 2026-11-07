@@ -1,5 +1,5 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join, resolve, dirname } from "node:path";
+import { join, resolve, dirname, sep } from "node:path";
 import { expect, it } from "vitest";
 
 const root = resolve(__dirname, "../../src/sync-core");
@@ -15,7 +15,7 @@ it("src/sync-core imports only itself, src/shared, and no platform packages", ()
       expect(spec, file).not.toMatch(/^(electron|node:|fs|path|os|child_process)(\/|$)/);
       if (spec.startsWith(".")) {
         const target = resolve(dirname(file), spec);
-        const ok = target.startsWith(root + "/") || target.startsWith(resolve(root, "../shared") + "/");
+        const ok = target.startsWith(root + sep) || target.startsWith(resolve(root, "../shared") + sep);
         expect(ok, `${file} imports ${spec}`).toBe(true);
       }
     }

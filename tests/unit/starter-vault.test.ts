@@ -102,7 +102,7 @@ describe("copyStarterVault", () => {
 
     await copyStarterVault(dest, resources);
 
-    const files = await listAllFiles(dest);
+    const files = (await listAllFiles(dest)).map((file) => file.split(path.sep).join("/"));
     expect(files).toEqual([
       ".geode/app.json",
       "Reading/Building a Second Brain.md",

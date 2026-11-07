@@ -513,7 +513,9 @@ describe("ExternalRootDesktopBoundary text reads", () => {
       .rejects.toMatchObject({ code: "session-changed" });
   });
 
-  it("opens nonblocking so a last-moment FIFO substitution cannot hang the host", async () => {
+  // POSIX-only: needs FIFOs / unix-domain sockets; external roots are macOS-only in the product.
+
+  it.skipIf(process.platform === "win32")("opens nonblocking so a last-moment FIFO substitution cannot hang the host", async () => {
     const { repo, boundary } = await fixture();
     await fs.writeFile(path.join(repo, "note.txt"), "hello");
     const attached = await attachRepo(boundary);
@@ -523,7 +525,9 @@ describe("ExternalRootDesktopBoundary text reads", () => {
     expect(flags & fsConstants.O_NONBLOCK).toBe(fsConstants.O_NONBLOCK);
   });
 
-  it("rejects special filesystem nodes before opening a handle", async () => {
+  // POSIX-only: needs FIFOs / unix-domain sockets; external roots are macOS-only in the product.
+
+  it.skipIf(process.platform === "win32")("rejects special filesystem nodes before opening a handle", async () => {
     const { repo, boundary } = await fixture();
     const socket = createServer();
     await new Promise<void>((resolve, reject) => {

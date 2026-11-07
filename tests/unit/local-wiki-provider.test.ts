@@ -251,7 +251,8 @@ describe("local wiki provider: portability collisions", () => {
 });
 
 describe("local wiki provider: symlink and containment defence", () => {
-  it("refuses to write through a symlink planted at the target path", async () => {
+  // POSIX-only: creating symlinks needs a privilege Windows does not grant by default.
+  it.skipIf(process.platform === "win32")("refuses to write through a symlink planted at the target path", async () => {
     const root = await fixture();
     roots.push(root);
     const outside = await mkdtemp(join(tmpdir(), "geode-outside-"));

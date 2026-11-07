@@ -140,7 +140,8 @@ describe("the session prefix", () => {
   beforeAll(async () => { fake = await writeFakePsql(); });
   afterAll(async () => { await rm(fake.directory, { recursive: true, force: true }); });
 
-  it("pins standard_conforming_strings rather than depending on the server default", async () => {
+  // POSIX-only: spawns a fake `psql` shell script (Windows: spawn EFTYPE).
+  it.skipIf(process.platform === "win32")("pins standard_conforming_strings rather than depending on the server default", async () => {
     // `literal()` doubles quotes and nothing else, which is only correct while
     // this setting is on. It is reachable from `postgresql.conf` and from
     // `PGOPTIONS`; `psql -X` only rules out `.psqlrc`. Note text is fully
@@ -161,7 +162,8 @@ describe("the session prefix", () => {
   });
 });
 
-describe("reading a restore across a pipe chunk boundary", () => {
+// POSIX-only: spawns a fake `psql` shell script (Windows: spawn EFTYPE).
+describe.skipIf(process.platform === "win32")("reading a restore across a pipe chunk boundary", () => {
   let fake: FakePsql;
   beforeAll(async () => { fake = await writeFakePsql(); });
   afterAll(async () => { await rm(fake.directory, { recursive: true, force: true }); });

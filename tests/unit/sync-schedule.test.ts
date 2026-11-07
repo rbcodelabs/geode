@@ -22,7 +22,8 @@ const spec = (over: Partial<ScheduleSpec> = {}): ScheduleSpec => ({
 });
 
 describe("renderSchedule (pure)", () => {
-  it("launchd: label from a short root hash, interval, absolute argv, log paths, RunAtLoad false, throttle", () => {
+  // POSIX-only: launchd/systemd unit files are POSIX; the renderer resolves paths with the host path module and Windows scheduling is unsupported (defaultPlatform() falls back to systemd: known gap).
+  it.skipIf(process.platform === "win32")("launchd: label from a short root hash, interval, absolute argv, log paths, RunAtLoad false, throttle", () => {
     const u = renderSchedule(spec());
     const hash = scheduleHash("/Users/me/Vault");
     expect(hash).toMatch(/^[0-9a-f]{8}$/);
@@ -47,7 +48,9 @@ describe("renderSchedule (pure)", () => {
     expect(service).toMatch(/Environment="PATH=[^"\n]*\/opt\/n\\\\x\/bin/);
   });
 
-  it("systemd: service + timer, SuccessExitStatus 4 5 6, XDG log dir, enable --now", () => {
+  // POSIX-only: launchd/systemd unit files are POSIX; the renderer resolves paths with the host path module and Windows scheduling is unsupported (defaultPlatform() falls back to systemd: known gap).
+
+  it.skipIf(process.platform === "win32")("systemd: service + timer, SuccessExitStatus 4 5 6, XDG log dir, enable --now", () => {
     const u = renderSchedule(spec({ platform: "systemd", intervalSeconds: 900, xdgStateHome: "/state", xdgConfigHome: "/cfg" }));
     const [service, timer] = u.files;
     expect(service.path).toBe(`/cfg/systemd/user/geode-wiki-sync-${scheduleHash("/Users/me/Vault")}.service`);
@@ -60,7 +63,9 @@ describe("renderSchedule (pure)", () => {
     expect(u.activate).toEqual([["systemctl", "--user", "daemon-reload"], ["systemctl", "--user", "enable", "--now", `${u.label}.timer`]]);
   });
 
-  it("is deterministic and quotes awkward paths", () => {
+  // POSIX-only: launchd/systemd unit files are POSIX; the renderer resolves paths with the host path module and Windows scheduling is unsupported (defaultPlatform() falls back to systemd: known gap).
+
+  it.skipIf(process.platform === "win32")("is deterministic and quotes awkward paths", () => {
     expect(renderSchedule(spec())).toEqual(renderSchedule(spec()));
     const odd = renderSchedule(spec({ root: "/Users/me/My <Vault> & \"Notes\"" }));
     expect(odd.files[0].content).toContain("My &lt;Vault&gt; &amp; &quot;Notes&quot;");
@@ -149,7 +154,9 @@ describe("sync schedule via the CLI", () => {
     expect(calls).toEqual([]);
   });
 
-  it("install -> status -> uninstall on an approved vault; nothing activates without --activate", async () => {
+  // POSIX-only: launchd/systemd unit files are POSIX; the renderer resolves paths with the host path module and Windows scheduling is unsupported (defaultPlatform() falls back to systemd: known gap).
+
+  it.skipIf(process.platform === "win32")("install -> status -> uninstall on an approved vault; nothing activates without --activate", async () => {
     const { cli, calls, results } = harness(); const v = vault();
     put(v.root, "a.md", "a");
     await cli(sync(v, "init", "--store", v.hub, "--create"), v.env);

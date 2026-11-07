@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import {
   describeSyncPolicy,
   hubRequestBlockReason,
@@ -197,7 +197,7 @@ describe("validateHubTarget with policy (applied before any connection)", () => 
     }
   });
   it("is unchanged with no policy, and structural problems still win over policy", () => {
-    expect(validateHubTarget({ kind: "fs", path: "/srv/hub" }, null)).toEqual({ kind: "fs", path: "/srv/hub" });
+    expect(validateHubTarget({ kind: "fs", path: "/srv/hub" }, null)).toEqual({ kind: "fs", path: resolve("/srv/hub") });
     expect(() => validateHubTarget({ kind: "fs", path: "relative" }, { enabled: false })).toThrow(/absolute path/);
   });
 });
