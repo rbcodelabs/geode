@@ -53,6 +53,7 @@ it("drives the real binary in real subprocesses, with an enforced layering", () 
     "src/renderer/comments/model.ts",
     "src/renderer/policy-layering.ts",
     "src/renderer/policy.ts",
+    "src/shared/fsync-directory.ts",
     "src/shared/hub-sync.ts",
     "src/shared/portable-assets.ts",
     "src/shared/store-errors.ts",

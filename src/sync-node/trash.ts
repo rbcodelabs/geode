@@ -1,13 +1,11 @@
+import { fsyncDirectory } from "../shared/fsync-directory";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
 /** Injectable filesystem seam so tests (and hosts) can simulate cross-device moves. */
 export interface TrashIo { rename?(from: string, to: string): Promise<void>; }
 
-async function syncDirectory(directory: string): Promise<void> {
-  const handle = await fs.open(directory, "r");
-  try { await handle.sync(); } finally { await handle.close(); }
-}
+const syncDirectory = (directory: string): Promise<void> => fsyncDirectory(directory);
 
 async function mkdirDurable(directory: string): Promise<void> {
   const missing: string[] = []; let current = directory;
