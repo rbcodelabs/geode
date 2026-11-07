@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { defaultFolderName, resolveFolderName, sanitizeFolderName } from "../../src/renderer/internal-plugins/icloud-sync/folders";
 import { FolderSelection, inspectFolder, listRemoteFolders } from "../../src/renderer/internal-plugins/icloud-sync/folder-selection";
 import { createIcloudProvider } from "../../src/renderer/internal-plugins/icloud-sync/provider";
-import { createFakeHarness, createNodeHarness, type IcloudHarness } from "../helpers/icloud-harness";
+import { createFakeHarness, createNodeHarness, NODE_BRIDGE_SUPPORTED, type IcloudHarness } from "../helpers/icloud-harness";
 
 describe("sanitizeFolderName", () => {
   it("NFC-normalises, strips separators, leading dots and control characters", () => {
@@ -57,7 +57,7 @@ describe("resolveFolderName", () => {
 
 describe.each([
   ["fake bridge", createFakeHarness],
-  ["node fs bridge", createNodeHarness],
+  ...(NODE_BRIDGE_SUPPORTED ? [["node fs bridge", createNodeHarness]] : []),
 ] as Array<[string, () => IcloudHarness]>)("folder selection over the %s", (_name, makeHarness) => {
   let h: IcloudHarness;
   beforeEach(() => {

@@ -32,7 +32,7 @@ describe("container location", () => {
   it("maps the container id to its on-disk directory (dots become ~)", () => {
     expect(ICLOUD_CONTAINER_ID).toBe("iCloud.com.rbcodelabs.geode");
     expect(containerDirName(ICLOUD_CONTAINER_ID)).toBe("iCloud~com~rbcodelabs~geode");
-    expect(realDocumentsDir("/Users/me")).toBe("/Users/me/Library/Mobile Documents/iCloud~com~rbcodelabs~geode/Documents");
+    expect(realDocumentsDir("/Users/me")).toBe(path.join("/Users/me", "Library", "Mobile Documents", "iCloud~com~rbcodelabs~geode", "Documents"));
   });
 
   it("GEODE_ICLOUD_BASE replaces the Documents directory; blank means the real container", () => {
