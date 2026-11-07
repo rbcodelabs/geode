@@ -18,5 +18,14 @@ test("plugin view and Menu work in the real app", async () => {
     const vp = h.page.viewportSize()!;
     expect(box.x + box.width).toBeLessThanOrEqual(vp.width);
     expect(box.y + box.height).toBeLessThanOrEqual(vp.height);
+    // Anchored menu (the Agent Threads connection-pill pattern): opens directly under its anchor.
+    await h.page.keyboard.press("Escape");
+    const pillBox = (await h.page.locator(".mp-pill").boundingBox())!;
+    await h.page.locator(".mp-pill").click();
+    const m2 = (await h.page.locator(".menu").boundingBox())!;
+    expect(Math.abs(m2.x - pillBox.x)).toBeLessThanOrEqual(2);
+    expect(m2.y).toBeGreaterThanOrEqual(pillBox.y + pillBox.height - 2);
+    expect(m2.y).toBeLessThanOrEqual(pillBox.y + pillBox.height + 8);
+
   } finally { await h.close(); }
 });
