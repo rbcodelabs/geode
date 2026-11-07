@@ -1,0 +1,21 @@
+# Keep line endings LF in the repository AND in working trees. Git for Windows defaults to core.autocrlf=true, which
+# rewrites text files to CRLF on checkout; that breaks fixture hashes and byte-exact assertions in the test suite.
+* text=auto eol=lf
+
+# Binary assets: never normalize.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.avif binary
+*.bmp binary
+*.ico binary
+*.icns binary
+*.mp4 binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.zip binary
+*.dmg binary
+*.pdf binary
