@@ -33,7 +33,7 @@ describe("two NodeHost-backed vaults converge through the real engine and an FsS
     expect(text(A.root, "dir/b.md")).toBeUndefined();
     // the deleted file went to the device trash of A, not oblivion
     const trashed = readdirSync(join(A.dev.stateDir, "trash"), { recursive: true }) as string[];
-    expect(trashed.some(p => p.endsWith("dir/b.md"))).toBe(true);
+    expect(trashed.some(p => p.split("\\").join("/").endsWith("dir/b.md"))).toBe(true); // readdir returns backslashes on Windows
 
     renameSync(join(A.root, "dir/deep/c.md"), join(A.root, "dir/deep/renamed.md")); await A.dev.sync(); await B.dev.sync();
     expect(text(B.root, "dir/deep/renamed.md")).toBe("three"); expect(text(B.root, "dir/deep/c.md")).toBeUndefined();

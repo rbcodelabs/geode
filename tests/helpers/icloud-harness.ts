@@ -40,6 +40,14 @@ export interface IcloudHarness {
 
 const MARKER = ".geode-sync/marker.json";
 
+/**
+ * Whether the real Node-fs bridge leg can run on this platform. That leg forces `platform: "darwin"` so the macOS
+ * dataless-file logic (`stat.blocks === 0 && stat.size > 0`) runs against a temp directory. `stat.blocks` is only
+ * meaningful on POSIX filesystems (Windows reports 0 for every file, so every file looks evicted), and the real bridge
+ * only ever runs on macOS in production. Windows runs the fake-bridge leg, which covers the same provider contract.
+ */
+export const NODE_BRIDGE_SUPPORTED = process.platform !== "win32";
+
 export function createNodeHarness(): IcloudHarness & { documents: string } {
   const documents = fs.mkdtempSync(path.join(os.tmpdir(), "icloud-documents-"));
   let handler: (folder: string, rel: string) => void = () => {};

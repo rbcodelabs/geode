@@ -16,7 +16,7 @@ import {
 } from "../../src/renderer/internal-plugins/icloud-sync/provider";
 import { vaultFolderName } from "../../src/renderer/internal-plugins/icloud-sync/folders";
 import type { SyncRemoteEntry, SyncSession } from "../../src/renderer/sync/types";
-import { createFakeHarness, createNodeHarness, type IcloudHarness } from "../helpers/icloud-harness";
+import { createFakeHarness, createNodeHarness, NODE_BRIDGE_SUPPORTED, type IcloudHarness } from "../helpers/icloud-harness";
 
 const enc = (s: string) => new TextEncoder().encode(s).buffer as ArrayBuffer;
 const dec = (b: ArrayBuffer) => new TextDecoder().decode(b);
@@ -29,7 +29,7 @@ const signal = () => new AbortController().signal;
  */
 describe.each([
   ["fake bridge", createFakeHarness],
-  ["node fs bridge", createNodeHarness],
+  ...(NODE_BRIDGE_SUPPORTED ? [["node fs bridge", createNodeHarness]] : []),
 ] as Array<[string, () => IcloudHarness]>)("iCloud provider over the %s", (_name, makeHarness) => {
   let h: IcloudHarness;
   let sessions: SyncSession[];
@@ -556,7 +556,7 @@ describe.each([
   });
 });
 
-describe("iCloud provider over the node fs bridge only", () => {
+describe.skipIf(!NODE_BRIDGE_SUPPORTED)("iCloud provider over the node fs bridge only", () => {
   let h: ReturnType<typeof createNodeHarness>;
   beforeEach(() => {
     h = createNodeHarness();

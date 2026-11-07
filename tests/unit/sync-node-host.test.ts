@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { chmodSync, existsSync, mkdirSync, readdirSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
-import { join, relative } from "node:path";
+import { join, relative, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { buildHistoryPorts, SyncBlockedError } from "../../src/sync-core/ports";
 import { DEFAULT_SYNC_SCOPE, isPathInSyncScope, portableConfigCategory } from "../../src/sync-core/scope";
@@ -43,7 +43,8 @@ describe("vault scan", () => {
     expect(paths(report.entries)).toEqual(["Same.md"]); expect(report.blocked).toEqual([]);
   });
 
-  it("reports evicted files that keep their name (blocks === 0, size > 0) as BLOCKED icloud-evicted", async () => {
+  // `stat.blocks` is POSIX-only (Windows reports 0 for every file), and eviction detection is macOS-only in production.
+  it.skipIf(process.platform === "win32")("reports evicted files that keep their name (blocks === 0, size > 0) as BLOCKED icloud-evicted", async () => {
     const root = dir("evicted");
     put(root, "gone.md", "contents"); put(root, "empty.md", ""); put(root, "here.md", "x");
     const io: ScanIo = {
@@ -166,7 +167,8 @@ describe("vault scan", () => {
     });
   });
 
-  it("an unreadable directory yields a PARTIAL scan, and the engine then refuses to plan (never infers deletes)", async () => {
+  // Relies on POSIX permissions (chmod 000); Windows ACLs do not make a directory unreadable this way.
+  it.skipIf(process.platform === "win32")("an unreadable directory yields a PARTIAL scan, and the engine then refuses to plan (never infers deletes)", async () => {
     const root = dir("partial"), state = dir("partial-state");
     put(root, "ok.md"); put(root, "locked/hidden.md");
     chmodSync(join(root, "locked"), 0o000);
@@ -286,8 +288,8 @@ describe("state directory", () => {
     await expect(NodeHost.open({ root })).rejects.toThrow("vaultId or stateDir");
   });
   it("defaults to ~/.geode/sync/<vaultId>, honours GEODE_SYNC_HOME, and refuses path-like vault ids", () => {
-    expect(defaultStateDir("v1", {}, "/home/u")).toBe("/home/u/.geode/sync/v1");
-    expect(defaultStateDir("v1", { GEODE_SYNC_HOME: "/data/sync" }, "/home/u")).toBe("/data/sync/v1");
+    expect(defaultStateDir("v1", {}, "/home/u")).toBe(join("/home/u", ".geode", "sync", "v1"));
+    expect(defaultStateDir("v1", { GEODE_SYNC_HOME: "/data/sync" }, "/home/u")).toBe(join(resolve("/data/sync"), "v1")); // GEODE_SYNC_HOME is path.resolve()d (adds a drive letter on Windows)
     expect(() => defaultStateDir("../x", {}, "/h")).toThrow(SyncStateDirError);
   });
   it("persists device state durably and lays out ops/, trash/, recovery/ under it; storage and apply demand the lease", async () => {
@@ -325,15 +327,19 @@ describe("cross-process lock", () => {
     release(); expect(await holding).toBe("done");
     expect(existsSync(join(state, "lock"))).toBe(false);
     expect(await b.run(async () => 2)).toBe(2);
-    // a lock held by a different live process (pid 1, this boot) is respected
+    // a lock held by a different live process (this process's parent, this boot) is respected. (pid 1 is not a live process on Windows.)
     mkdirSync(join(state, "lock"));
-    writeFileSync(join(state, "lock", "owner.json"), JSON.stringify({ pid: 1, bootId: currentBootId(), token: "x", startedAt: Date.now() }));
+    writeFileSync(join(state, "lock", "owner.json"), JSON.stringify({ pid: process.ppid, bootId: currentBootId(), token: "x", startedAt: Date.now() }));
     await expect(a.run(async () => 3)).rejects.toMatchObject({ code: "locked" });
   });
   it("recovers a stale lock: dead pid, or a different boot id", async () => {
     const root = dir("stale"), state = join(dir("stale-state"), "s"); const host = await openHost(root, state);
     const dead = spawnSync(process.execPath, ["-e", "0"]).pid!;
-    for (const owner of [{ pid: dead, bootId: currentBootId() }, { pid: process.pid, bootId: "a-previous-boot" }]) {
+    const owners = [{ pid: dead, bootId: currentBootId() }];
+    // KNOWN GAP: currentBootId() is "unknown" on Windows (no boot-id source), so a lock left by a crashed run whose pid was reused after
+    // a reboot is not recognised as stale there. Only exercise the boot-id path where a boot id exists.
+    if (currentBootId() !== "unknown") owners.push({ pid: process.pid, bootId: "a-previous-boot" });
+    for (const owner of owners) {
       mkdirSync(join(state, "lock"), { recursive: true });
       writeFileSync(join(state, "lock", "owner.json"), JSON.stringify({ ...owner, token: "stale", startedAt: 1 }));
       expect(await host.run(async () => "ran")).toBe("ran");
@@ -355,7 +361,8 @@ describe("opt-in iCloud hydration", () => {
     const scanned = await host.vault.reconcileScan();
     expect(calls).toEqual([]); expect(reasons(scanned.blocked)).toEqual({ "A.md": "icloud-not-downloaded" });
   });
-  it("with hydrateIcloud, runs brctl download with bounded parallelism, polls until materialised, rescans, and leaves failures blocked", async () => {
+  // Materialisation is judged by POSIX `stat.blocks`; hydration shells out to macOS `brctl`, so this is macOS-only.
+  it.skipIf(process.platform === "win32")("with hydrateIcloud, runs brctl download with bounded parallelism, polls until materialised, rescans, and leaves failures blocked", async () => {
     const root = dir("hydrate"), state = join(dir("hydrate-state"), "s");
     put(root, ".A.md.icloud", "stub"); put(root, ".B.md.icloud", "stub"); put(root, ".C.md.icloud", "stub"); put(root, ".D.md.icloud", "stub");
     let live = 0, peak = 0; const calls: string[] = [];
