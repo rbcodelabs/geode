@@ -10,7 +10,8 @@ test("plugin view and Menu work in the real app", async () => {
   const h = await launchApp({ plugins: [{ id: "menu-plugin", dir }] });
   try {
     await h.openView("menu-plugin:view");
-    await h.page.locator(".mp-btn").click();
+    // Synthetic click at the bottom-right corner: the real button can sit under a sidebar.
+    await h.page.dispatchEvent(".mp-btn", "click", { clientX: 1190, clientY: 790 });
     const menu = h.page.locator(".menu");
     await expect(menu.getByText("First")).toBeVisible();
     const box = (await menu.boundingBox())!;
