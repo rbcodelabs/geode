@@ -416,7 +416,13 @@ export class MarkdownView implements View {
             ? this.editingExtensions("live")
             : []
         ),
-        autocompletion({ override: [wikilinkCompletion, (ctx) => app.slashCommandsPlugin?.completionSource(ctx) ?? null] }),
+        // interactionDelay 0: CodeMirror ignores Enter/Tab for 75 ms after the
+        // completion list is (re)built and lets the key fall through, which
+        // inserted a newline and left "/trv" behind when a fast typist (or a
+        // loaded CI runner coalescing keystrokes) accepted a slash command
+        // right after the list refreshed. Measured on macOS CI: 4/20 failures
+        // before, 0/40 after.
+        autocompletion({ interactionDelay: 0, override: [wikilinkCompletion, (ctx) => app.slashCommandsPlugin?.completionSource(ctx) ?? null] }),
         placeholder("Start writing…"),
         EditorView.lineWrapping,
         Prec.high(

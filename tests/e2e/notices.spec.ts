@@ -11,7 +11,7 @@ const MAIN_JS = `
   module.exports.default = class extends Plugin {
     onload() {
       new Notice('plugin persistent', 0);
-      new Notice('plugin timed', 500);
+      new Notice('plugin timed', 4000);
 
       const fragment = document.createDocumentFragment();
       fragment.append('fragment content ');
@@ -22,7 +22,7 @@ const MAIN_JS = `
       new Notice(fragment, 0);
 
       this.app.notify('app persistent', 0);
-      this.app.notify('app timed', 500);
+      this.app.notify('app timed', 4000);
     }
   };
 `;
@@ -55,11 +55,16 @@ test("notices can be dismissed without breaking interactive content and still ti
     const appPersistent = window.locator(".notice", { hasText: "app persistent" });
     const fragmentNotice = window.locator(".notice", { hasText: "fragment content" });
 
+    // The timed notices start their countdown when the plugin loads, which is
+    // before this test can observe the window. Assert them first, with a
+    // duration well above the slowest observed startup gap on a loaded CI
+    // runner (500 ms made them vanish before the first assertion on ~30% of
+    // macOS runs), then check the persistent ones.
+    await expect(window.locator(".notice", { hasText: "plugin timed" })).toBeVisible();
+    await expect(window.locator(".notice", { hasText: "app timed" })).toBeVisible();
     await expect(pluginPersistent).toBeVisible();
     await expect(appPersistent).toBeVisible();
     await expect(fragmentNotice).toBeVisible();
-    await expect(window.locator(".notice", { hasText: "plugin timed" })).toBeVisible();
-    await expect(window.locator(".notice", { hasText: "app timed" })).toBeVisible();
 
     const pluginClose = pluginPersistent.getByRole("button", { name: "Dismiss notification" });
     await expect(pluginClose).toBeVisible();
