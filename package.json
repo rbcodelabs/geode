@@ -21,6 +21,7 @@
     "test:unit": "vitest run",
     "test:e2e": "npm run build && playwright test",
     "test:e2e:native-fullscreen": "npm run build && GEODE_NATIVE_FULLSCREEN_E2E=1 playwright test tests/e2e/window-chrome.spec.ts",
+    "test:plugin-harness": "node packages/plugin-test/build.mjs && playwright test -c packages/plugin-test/playwright.config.ts",
     "test:mobile": "npm run build:mobile && playwright test --config playwright.mobile.config.ts",
     "e2e:kill": "node scripts/e2e-clean.mts",
     "e2e:threads-plugin": "playwright test tests/e2e/threads-sandbox-offer.spec.ts --retries=0",
