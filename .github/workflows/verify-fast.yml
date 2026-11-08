@@ -112,6 +112,11 @@ jobs:
           fi
       - name: Build
         run: npm run build
+      - name: Plugin harness (browser layer)
+        if: matrix.shard == 1
+        run: |
+          npx playwright install chromium
+          xvfb-run -a npm run test:plugin-harness
       - name: E2E (shard ${{ matrix.shard }}/${{ env.E2E_SHARDS }})
         # One worker per display: workers sharing an Xvfb display fight over input focus.
         # See scripts/e2e-linux-shards.mts for the full explanation.
