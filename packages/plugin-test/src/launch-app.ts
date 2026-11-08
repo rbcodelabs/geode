@@ -1,4 +1,4 @@
-import { _electron as electron, type ElectronApplication, type Page } from "@playwright/test";
+import { _electron as electron, type ElectronApplication, type Page } from "playwright-core";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

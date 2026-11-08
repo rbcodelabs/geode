@@ -1,4 +1,4 @@
-import { chromium, type Browser, type BrowserType, type Page } from "@playwright/test";
+import { chromium, type Browser, type BrowserType, type Page } from "playwright-core";
 import fs from "node:fs";
 import path from "node:path";
 import type { HarnessSeed } from "./setup";
