@@ -52,7 +52,18 @@ export async function launchApp(opts: LaunchAppOptions): Promise<AppHarness> {
   });
   const page = await app.firstWindow();
   await page.setViewportSize(opts.viewport ?? { width: 1200, height: 800 });
-  await page.waitForFunction((ids) => ids.every((id) => !!(window as any).app?.pluginManager?.getPlugin(id)), opts.plugins.map((p) => p.id), { timeout: 30_000 });
+  const logs: string[] = [];
+  page.on("console", (m) => { if (m.type() === "error" || m.type() === "warning") logs.push(`${m.type()}: ${m.text().slice(0, 400)}`); });
+  page.on("pageerror", (e) => logs.push(`pageerror: ${String(e).slice(0, 400)}`));
+  try {
+    await page.waitForFunction((ids) => ids.every((id) => !!(window as any).app?.pluginManager?.getPlugin(id)), opts.plugins.map((p) => p.id), { timeout: 30_000 });
+  } catch (e) {
+    const state = await page.evaluate(() => {
+      const a = (window as any).app;
+      return { hasApp: !!a, pm: a?.pluginManager ? Object.keys(a.pluginManager).slice(0, 20) : null, body: document.body.innerText.slice(0, 300) };
+    }).catch((err) => String(err));
+    throw new Error(`plugins did not load: ${JSON.stringify(state)}\n${logs.slice(0, 15).join("\n")}\n${String(e)}`);
+  }
   return {
     app, page, vault,
     async openView(type) {
