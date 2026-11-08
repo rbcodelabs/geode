@@ -15,8 +15,13 @@ test("connection pill menu opens under the pill in the real app", async () => {
     await h.page.evaluate(async () => {
       const plugin = (window as any).app.pluginManager.getPlugin("claude-threads");
       const manager = plugin.manager;
-      const client = { connect() {}, connection: { status: "connected", attempt: 0 }, onState: () => () => {} };
-      plugin.daemonRegistry = { nameOf: () => "my-server", clientFor: () => client };
+      const conn = { status: "connected", attempt: 0 };
+      // Same surface the plugin's own screenshot harness fakes (test/harness/index.ts).
+      plugin.daemonRegistry = {
+        nameOf: () => "my-server", capabilitiesOf: () => ["host.tools", "harness.claude"], warm: async () => {},
+        clientFor: () => ({ connect() {}, get connection() { return conn; } }),
+        stateOf: () => conn, onState: () => () => {},
+      };
       const t = manager.createThread("Pill test");
       t.remote = { daemonId: "my-server", ownership: "client", remoteCwd: "/srv/workspaces/agent-threads", lastSeq: 0, ownerClientId: "harness" };
       const leaf = (window as any).app.workspace.getLeavesOfType("claude-threads:chat")[0];
