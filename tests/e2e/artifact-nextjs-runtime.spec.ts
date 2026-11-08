@@ -10,10 +10,11 @@ const repoRoot = path.resolve(__dirname, "..", "..");
 interface FakeServer { port: number; hits: string[]; close(): Promise<void> }
 
 /** Stands in for `next dev`: a plain node:http server on 127.0.0.1. */
-async function listen(body: (port: number) => string): Promise<FakeServer> {
+async function listen(body: (port: number) => string, redirectTo?: () => string): Promise<FakeServer> {
   const hits: string[] = [];
   const server = http.createServer((req, res) => {
     hits.push(req.url ?? "");
+    if (redirectTo && req.url?.startsWith("/redir")) { res.writeHead(302, { location: redirectTo() }); res.end(); return; }
     // A CSP from the dev server must be replaced by Geode's, not trusted.
     res.writeHead(200, { "content-type": "text/html; charset=utf-8", "content-security-policy": "default-src *" });
     res.end(body((server.address() as AddressInfo).port));
@@ -49,7 +50,8 @@ function setup(prefix: string, manifest: Record<string, unknown>) {
 
 test("nextjs artifact loads from one loopback origin and nothing else", async () => {
   const other = await listen(() => "<h1>other</h1>");
-  const dev = await listen(() => `<!doctype html><title>Dev proof</title><main id="r" style="background:#123456;color:#fff;height:100vh">ready</main>`);
+  const dev = await listen(() => `<!doctype html><title>Dev proof</title><main id="r" style="background:#123456;color:#fff;height:100vh">ready</main>`,
+    () => `http://127.0.0.1:${other.port}/from-redirect`);
   const { temp, userDataDir, artifactRoot } = setup("geode-artifact-next-e2e-", {});
   const url = `http://127.0.0.1:${dev.port}`;
 
@@ -66,6 +68,8 @@ test("nextjs artifact loads from one loopback origin and nothing else", async ()
     // No vault bridge / guest preload on an http origin.
     await expect(view.locator(".artifact-view-vault-badge")).toBeHidden();
     const exec = (code: string) => frame.evaluate((guest, c) => (guest as any).executeJavaScript(c), code);
+    // With a user gesture, so Chromium's popup blocker does not pre-empt Geode's own handler.
+    const execGesture = (code: string) => frame.evaluate((guest, c) => (guest as any).executeJavaScript(c, true), code);
 
     await expect.poll(() => exec(`document.title`)).toBe("Dev proof");
     expect(await exec(`typeof require`)).toBe("undefined");
@@ -78,12 +82,25 @@ test("nextjs artifact loads from one loopback origin and nothing else", async ()
     expect(await exec(`fetch("http://127.0.0.1:${other.port}/x").then(() => "allowed", () => "blocked")`)).toBe("blocked");
     expect(await exec(`fetch("https://example.com/x").then(() => "allowed", () => "blocked")`)).toBe("blocked");
     expect(await exec(`new Promise((resolve) => { const ws = new WebSocket("ws://127.0.0.1:${other.port}/"); ws.onopen = () => resolve("allowed"); ws.onerror = () => resolve("blocked"); })`)).toBe("blocked");
-    expect(await exec(`String(window.open("https://example.com"))`)).toBe("null");
+    // Popup denial is enforced in two layers (the artifact <webview> has no allowpopups, and
+    // main's window-open handler denies nextjs guests). A mutation run that removed only the
+    // handler line stayed green, so this pins the combined behaviour, not the single line:
+    // no popup request ever reaches the renderer and nothing reaches another origin.
+    await window.evaluate(() => { (window as any).__popupRequests = []; (window as any).geode.onGuestWindowOpen((r: { url: string }) => (window as any).__popupRequests.push(r.url)); });
+    expect(await execGesture(`String(window.open("https://example.com"))`)).toBe("null");
+    await execGesture(`window.open("http://127.0.0.1:${other.port}/popup")`);
+    await execGesture(`(() => { const a = document.createElement("a"); a.href = "http://127.0.0.1:${other.port}/anchor"; a.target = "_blank"; document.body.append(a); a.click(); })()`);
+    // A server-issued 302 to another origin is blocked for both fetch and navigation.
+    expect(await exec(`fetch("/redir").then(() => "allowed", () => "blocked")`)).toBe("blocked");
+    await exec(`location.href = "/redir-nav"`);
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    expect(await window.evaluate(() => (window as any).__popupRequests)).toEqual([]);
 
     await exec(`location.href = "http://127.0.0.1:${other.port}/escape"`);
     await exec(`location.href = "https://example.com/escape"`);
     await expect.poll(() => frame.evaluate((guest) => (guest as any).getURL())).toBe(`${url}/`);
     expect(other.hits).toEqual([]);
+    expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(1);
 
     // Capture of the live guest.
     await view.getByRole("button", { name: "Capture artifact screenshot" }).click();
@@ -97,8 +114,13 @@ test("nextjs artifact loads from one loopback origin and nothing else", async ()
   }
 });
 
-test("captures a nextjs dev server with no open view via a hidden webContents", async () => {
-  const dev = await listen(() => `<!doctype html><body style="margin:0;background:#c0392b"><h1>hidden capture</h1>`);
+test("captures a nextjs dev server with no open view via a hidden host window", async () => {
+  const other = await listen(() => "<h1>other</h1>");
+  // The page tries to reach another loopback port: the capture session must enforce the same origin filter.
+  const dev = await listen(() => `<!doctype html><body style="margin:0;background:#c0392b"><h1>hidden capture</h1><script>
+    fetch("http://127.0.0.1:${other.port}/f").catch(() => {});
+    try { new WebSocket("ws://127.0.0.1:${other.port}/w"); } catch {}
+  </script>`);
   const { temp, userDataDir, artifactRoot } = setup("geode-artifact-next-capture-e2e-", {});
   const app = await electron.launch({ args: [repoRoot, `--user-data-dir=${userDataDir}`], cwd: repoRoot });
   try {
@@ -110,15 +132,30 @@ test("captures a nextjs dev server with no open view via a hidden webContents", 
     expect(result.width).toBeGreaterThan(0);
     expect(fs.statSync(result.path).size).toBeGreaterThan(0);
     expect(dev.hits.length).toBeGreaterThan(0);
+    // The image must actually contain the page: viewport aspect ratio and the page's colour
+    // at the centre and bottom row (catches an empty image and a clipped content area).
+    const px = await app.evaluate(({ nativeImage }, file) => {
+      const img = nativeImage.createFromPath(file);
+      const { width, height } = img.getSize();
+      const bmp = img.toBitmap(); // BGRA
+      const at = (x: number, y: number) => { const i = (y * width + x) * 4; return [bmp[i + 2], bmp[i + 1], bmp[i]]; };
+      return { width, height, center: at(width >> 1, height >> 1), bottom: at(width >> 1, height - 2) };
+    }, result.path);
+    expect(px.width % 720).toBe(0);
+    expect(px.height / px.width).toBeCloseTo(480 / 720, 2);
+    expect(px.center).toEqual([0xc0, 0x39, 0x2b]);
+    expect(px.bottom).toEqual([0xc0, 0x39, 0x2b]);
+    expect(other.hits).toEqual([]);
     expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(windowCount);
 
     // A hostile URL is rejected by main before anything loads.
     const rejected = await window.evaluate(([root]) => (window as any).geode.captureArtifact(root, { url: "http://localhost:3000" })
       .then(() => "ok", (error: Error) => error.message), [artifactRoot]);
     expect(rejected).toContain("127.0.0.1");
+    expect(other.hits).toEqual([]);
   } finally {
     await app.close().catch(() => {});
-    await dev.close();
+    await Promise.all([dev.close(), other.close()]);
     fs.rmSync(temp, { recursive: true, force: true });
   }
 });
