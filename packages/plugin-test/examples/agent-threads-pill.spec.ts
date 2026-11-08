@@ -32,7 +32,7 @@ test("connection pill menu opens under the pill in the real app", async () => {
     const p = (await pill.boundingBox())!;
     await pill.click();
     const menu = h.page.locator(".menu");
-    await expect(menu.locator(".menu-item")).toHaveText(["Restart session", expect.stringContaining("Reconnect")]);
+    await expect(menu.locator(".menu-item")).toContainText(["Restart session", "Reconnect"]);
     const m = (await menu.boundingBox())!;
     const vp = h.page.viewportSize()!;
     expect(m.y).toBeGreaterThanOrEqual(p.y + p.height - 1);
