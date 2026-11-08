@@ -12,15 +12,15 @@ test("connection pill menu opens under the pill in the real app", async () => {
     await h.page.evaluate(() => (window as any).app.commands.executeCommandById("claude-threads:open-claude-threads"));
     await h.page.waitForSelector(".ct-input");
     // Fake only the connection: a remote thread on a daemon whose socket reports "connected".
-    await h.page.evaluate(() => {
+    await h.page.evaluate(async () => {
       const plugin = (window as any).app.pluginManager.getPlugin("claude-threads");
       const manager = plugin.manager;
       const client = { connect() {}, connection: { status: "connected", attempt: 0 }, onState: () => () => {} };
       plugin.daemonRegistry = { nameOf: () => "my-server", clientFor: () => client };
       const t = manager.createThread("Pill test");
       t.remote = { daemonId: "my-server", ownership: "client", remoteCwd: "/srv/workspaces/agent-threads", lastSeq: 0, ownerClientId: "harness" };
-      const leaf = (window as any).app.workspace.getLeavesOfType("claude-threads")[0];
-      leaf?.view?.focusThread?.(t.id);
+      const leaf = (window as any).app.workspace.getLeavesOfType("claude-threads:chat")[0];
+      await leaf?.view?.focusThread?.(t.id);
     });
     const pill = h.page.locator('[data-testid="remote-pill"]');
     await expect(pill).toHaveText("Connected");
