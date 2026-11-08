@@ -46,8 +46,11 @@ and an explicitly reviewed extension. This is that extension.
   preload, no Node, and keep the ephemeral partition, denied permissions and
   blocked downloads. No file watcher is attached; HMR handles updates.
 - **Capture.** With a live guest, capture uses it. Otherwise main captures
-  through an unattached offscreen `WebContentsView` bound to a throwaway session
-  with the same restrictions. No visible window is created.
+  through a never-shown offscreen `BrowserWindow` (`show: false`, content-sized
+  to the manifest viewport) bound to a throwaway session with the same
+  restrictions. An unattached `WebContentsView` is not used: it has no host
+  surface, never paints, and `capturePage()` returns an empty 0x0 image
+  (observed). No visible window is created.
 
 ## Threat model
 
@@ -62,6 +65,45 @@ and an explicitly reviewed extension. This is that extension.
   the LAN, or the internet through fetch, XHR, WebSocket, or navigation.
 - `unsafe-eval`/`unsafe-inline` widen what that one origin's own scripts can do
   but not where they can connect or what they can access.
+
+## Open requirements: local daemon and multiple vaults (not built)
+
+Everything above assumes the dev server listens on the Mac's own loopback. The
+local daemon (an `agent-threads` daemon in an Apple `container` VM, see
+`docs/design/enterprise-controls.md` section 4) runs `next dev` inside the VM,
+so its loopback is not the Mac's. The design is to publish the dev-server port
+from the container to the Mac's `127.0.0.1`. With two vaults open, each with its
+own container, a hardcoded host port can collide, or worse, make one vault's
+artifact load the other vault's app, because the exact-origin filter checks
+host and port, not who owns the port.
+
+**None of the following is implemented or tested.** Today the manifest takes a
+literal loopback URL, and nothing ties a port to a container.
+
+1. **Dynamic host ports per container.** Publish with an OS-assigned host port
+   (for example `127.0.0.1:0:<container-port>`) and read back the assigned port.
+   No fixed host port is configured or assumed. The dev server inside the
+   container must bind `0.0.0.0` (a server bound to the VM's `127.0.0.1` cannot
+   be forwarded).
+2. **Logical reference in manifest v2, not a raw port.** The manifest names the
+   dev server logically (for example a `devServer` id scoped to the vault)
+   instead of `http://127.0.0.1:<port>`. Main resolves the reference to the
+   current host port at load time. This is a schema change on top of the
+   current v2 and needs its own version or field gating, and the existing
+   literal-URL path stays valid for dev servers started on the Mac.
+3. **Ownership check before load.** Before registering or loading, main
+   verifies the resolved host port is published by the daemon container that
+   belongs to this artifact's vault. If the port is unowned, owned by another
+   vault's container, or the container is gone, registration fails closed. The
+   exact-origin filter then allows only the verified origin.
+4. **Loopback-only publishing.** Ports are published to the Mac's `127.0.0.1`
+   only, never `0.0.0.0` or a LAN address. The strict URL parser's rejection of
+   other hosts stays unchanged.
+
+Still to decide: where the container-to-vault mapping lives, how main queries
+the container runtime, how this interacts with the `threadExecution` policy
+(`localDaemon`), and what happens when the container restarts and the host port
+changes (likely the same re-register-in-place behavior as a stale URL).
 
 ## Rejected alternatives
 
