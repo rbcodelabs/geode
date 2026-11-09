@@ -35,7 +35,7 @@ export function popoverPosition(
   const maxLeft = bounds.width - MARGIN - size.width;
   const left = Math.max(MARGIN, Math.min(anchor.x, maxLeft));
   const below = anchor.y + anchor.height + GAP;
-  if (below + size.height <= bounds.height - MARGIN) return { left, top: below, placement: "below" };
+  if (below + size.height <= bounds.height - MARGIN) return { left, top: Math.max(MARGIN, below), placement: "below" };
   const above = anchor.y - GAP - size.height;
   if (above >= MARGIN) return { left, top: above, placement: "above" };
   return { left, top: Math.max(MARGIN, bounds.height - MARGIN - size.height), placement: "overlay" };

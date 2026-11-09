@@ -63,6 +63,10 @@ describe("popoverPosition", () => {
     expect(p.top).toBeGreaterThanOrEqual(8);
     expect(p.top + 240).toBeLessThanOrEqual(520 - 8);
   });
+  it("never places the popover above the top of the stage when the element is scrolled out of view", () => {
+    const p = popoverPosition({ x: 100, y: -300, width: 80, height: 30 }, size, bounds);
+    expect(p.top).toBeGreaterThanOrEqual(8);
+  });
   it("works in a narrow stage that is smaller than the popover", () => {
     const p = popoverPosition({ x: 20, y: 20, width: 40, height: 20 }, size, { width: 300, height: 600 });
     expect(p.left).toBe(8);

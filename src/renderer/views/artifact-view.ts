@@ -8,6 +8,10 @@ import {
   ARTIFACT_VAULT_RESPONSE_CHANNEL,
 } from "../../artifacts/guest-protocol";
 import { ArtifactVaultBridge } from "../artifacts/vault-bridge";
+import { ArtifactInspectorBridge, artifactFeedbackTarget, isPickAvailable, type InspectorHover, type InspectorWebview } from "./artifact-inspector-bridge";
+import type { ArtifactFeedbackTarget } from "../../artifacts/feedback-contract";
+import { PickController, type FocusTarget, type PickState } from "../artifacts/pick-controller";
+import { PickPopover, popoverPosition } from "../artifacts/pick-popover";
 
 type ViewportPreset = "desktop" | "tablet" | "mobile" | "custom" | "fill";
 interface Viewport { preset: ViewportPreset; width: number; height: number }
@@ -19,6 +23,7 @@ export interface ArtifactViewState {
   runtime?: "static" | "nextjs";
 }
 interface ArtifactWebview extends HTMLElement { src: string; reload(): void; send(channel: string, ...args: unknown[]): void }
+const PICK_STATUS = "Pick mode: click an element, or use [ ] and Enter. Esc exits.";
 interface WebviewIpcMessageEvent extends Event { channel: string; args: unknown[] }
 
 const VIEWPORTS: Record<Exclude<ViewportPreset, "custom">, Viewport> = {
@@ -54,6 +59,18 @@ export class ArtifactView implements View, ReloadableView {
   private revision = 0;
   private unwatchVault: (() => void) | undefined;
   private readonly vaultBadgeEl = document.createElement("span");
+  // Element picker (ADR 0006 D8). Present only for a static artifact whose inspector preload is attached.
+  private readonly pickButton = document.createElement("button");
+  private readonly hoverEl = document.createElement("span");
+  private readonly overlayEl = document.createElement("div");
+  private bridge: ArtifactInspectorBridge | null = null;
+  private pick: PickController | null = null;
+  private popover: PickPopover | null = null;
+  private pickTarget: ArtifactFeedbackTarget | null = null;
+  private unsubscribeFeedback: (() => void) | undefined;
+  private handlerName = "the plugin";
+  private guestLoaded = false;
+  private guestLoadFailed = false;
 
   constructor(private readonly app: App, private readonly leaf: WorkspaceLeaf) {
     this.containerEl.className = "artifact-view";
@@ -84,7 +101,21 @@ export class ArtifactView implements View, ReloadableView {
       viewports.append(button);
     }
     toolbar.append(viewports);
-    toolbar.append(this.iconButton("camera", "Capture artifact screenshot", () => { void this.capture(); }));
+    toolbar.append(this.iconButton("camera", "Capture artifact screenshot", () => {
+      // The highlight must not appear in a manual capture: pick mode goes off first.
+      this.pick?.captureRequested();
+      void this.capture();
+    }));
+    this.pickButton.className = "clickable-icon artifact-view-toolbar-btn artifact-view-pick-btn";
+    this.pickButton.type = "button";
+    this.pickButton.title = "Pick element to comment";
+    this.pickButton.setAttribute("aria-label", "Pick element to comment");
+    this.pickButton.setAttribute("aria-pressed", "false");
+    this.pickButton.hidden = true; // hidden, not disabled, until a handler can receive feedback
+    setIcon(this.pickButton, "mouse-pointer-click");
+    // Enter/Space on the button arrive as a click with detail 0.
+    this.pickButton.addEventListener("click", (event) => this.togglePick(event.detail === 0 ? "keyboard" : "pointer"));
+    toolbar.append(this.pickButton);
     this.diagnosticsButton.className = "artifact-view-diagnostics-btn";
     this.diagnosticsButton.type = "button";
     this.diagnosticsButton.textContent = "Diagnostics 0";
@@ -98,11 +129,15 @@ export class ArtifactView implements View, ReloadableView {
     this.statusEl.textContent = "Waiting for artifact…";
     this.vaultBadgeEl.className = "artifact-view-vault-badge";
     this.vaultBadgeEl.hidden = true;
-    toolbar.append(this.vaultBadgeEl, this.statusEl);
+    this.hoverEl.className = "artifact-view-hover";
+    this.hoverEl.hidden = true;
+    toolbar.append(this.vaultBadgeEl, this.statusEl, this.hoverEl);
     this.stageEl.className = "artifact-view-stage";
     this.diagnosticsEl.className = "artifact-view-diagnostics";
     this.diagnosticsEl.hidden = true;
-    this.containerEl.append(toolbar, this.stageEl, this.diagnosticsEl);
+    this.overlayEl.className = "artifact-view-overlay";
+    this.containerEl.append(toolbar, this.stageEl, this.diagnosticsEl, this.overlayEl);
+    this.containerEl.addEventListener("keydown", (event) => this.onContainerKeydown(event));
   }
 
   private iconButton(icon: string, label: string, action: () => void): HTMLButtonElement {
@@ -164,13 +199,18 @@ export class ArtifactView implements View, ReloadableView {
     }
     const fill = viewport.preset === "fill";
     this.containerEl.classList.toggle("is-fill", fill);
-    this.statusEl.textContent = fill ? "Fill" : `${viewport.width} × ${viewport.height}`;
+    if (this.pick?.state.phase === "off" || !this.pick) this.statusEl.textContent = this.viewportStatus();
     for (const button of this.containerEl.querySelectorAll<HTMLElement>("[data-viewport]")) {
       const active = button.dataset.viewport === viewport.preset;
       button.classList.toggle("is-active", active);
       button.setAttribute("aria-pressed", String(active));
     }
     this.persistState();
+  }
+
+  private viewportStatus(): string {
+    const viewport = this.viewport;
+    return !viewport || viewport.preset === "fill" ? "Fill" : `${viewport.width} × ${viewport.height}`;
   }
 
   private async load(root: string): Promise<void> {
@@ -203,8 +243,15 @@ export class ArtifactView implements View, ReloadableView {
       frame.setAttribute("partition", registration.partition);
       frame.setAttribute("aria-label", registration.title);
       frame.src = registration.entryUrl;
+      frame.addEventListener("did-finish-load", () => {
+        this.guestLoaded = true;
+        this.guestLoadFailed = false;
+        this.updatePickAvailability();
+      });
       frame.addEventListener("did-fail-load", (event) => {
-        const detail = event as unknown as { errorDescription?: string; validatedURL?: string };
+        const detail = event as unknown as { errorDescription?: string; validatedURL?: string; errorCode?: number; isMainFrame?: boolean };
+        // ERR_ABORTED (-3) is a superseded load (a reload racing the previous one), not a failure.
+        if (detail.errorCode !== -3 && detail.isMainFrame !== false) { this.guestLoadFailed = true; this.updatePickAvailability(); }
         if (detail.validatedURL === registration.entryUrl) {
           this.containerEl.dataset.loadError = detail.errorDescription || "Artifact failed to load.";
           this.statusEl.textContent = `Artifact unavailable: ${this.containerEl.dataset.loadError}`;
@@ -212,6 +259,7 @@ export class ArtifactView implements View, ReloadableView {
       });
       if (registration.vault) this.attachVaultBridge(frame, registration);
       this.webview = frame;
+      if (registration.runtime === "static" && registration.inspector) this.attachInspector(frame, registration);
       this.stageEl.appendChild(frame);
       this.applyViewport(this.viewport);
       this.pollTimer = setInterval(() => { void this.pollRuntime(); }, 400);
@@ -247,6 +295,154 @@ export class ArtifactView implements View, ReloadableView {
     this.vaultBadgeEl.title = `This artifact may read Bases results from:\n${grant.allowlist.join("\n")}`;
   }
 
+  // ---- element picker (ADR 0006 D8) ----
+
+  /** Whether the Pick toggle is offered right now. Also gates the palette command. */
+  canTogglePick(): boolean {
+    return !this.pickButton.hidden;
+  }
+
+  togglePick(via: "pointer" | "keyboard"): void {
+    if (this.canTogglePick()) this.pick?.toggle(via);
+  }
+
+  private attachInspector(frame: ArtifactWebview, registration: ArtifactRegistration): void {
+    const target = artifactFeedbackTarget(registration, this.root);
+    const registry = this.app.artifactFeedback;
+    this.pickTarget = target;
+    this.guestLoaded = false;
+    this.guestLoadFailed = false;
+    const bridge = new ArtifactInspectorBridge({
+      webview: frame as unknown as InspectorWebview,
+      registration,
+      target,
+      registry,
+      getRevision: () => this.revision,
+      getViewportPreset: () => this.viewport?.preset ?? "fill",
+      callbacks: {
+        onHover: (hover) => this.showHover(hover),
+        onSelect: (snapshot) => this.pick?.selected(snapshot, document.activeElement === frame ? "guest" : "toggle"),
+        onCancel: () => { this.pick?.cancelFromGuest(); },
+      },
+    });
+    const controller = new PickController({
+      setGuestMode: (mode) => bridge.setMode(mode),
+      submit: (snapshot, comment) => bridge.submit(snapshot, comment),
+      focus: (where) => this.focusPick(where),
+      changed: (state) => this.renderPick(state),
+    });
+    const popover = new PickPopover(document, {
+      onComment: (text) => controller.setComment(text),
+      onSend: () => controller.send(),
+      onCancel: () => { controller.cancel(); },
+      onDone: () => controller.done(),
+      onEscape: () => { controller.escape(); },
+    });
+    popover.el.hidden = true;
+    this.overlayEl.replaceChildren(popover.el);
+    this.bridge = bridge;
+    this.pick = controller;
+    this.popover = popover;
+    // dom-ready fires for every document the guest starts; an open popover then goes stale.
+    frame.addEventListener("dom-ready", () => controller.pageReloaded());
+    this.unsubscribeFeedback = registry.onDidChange(() => this.updatePickAvailability());
+    this.updatePickAvailability();
+  }
+
+  private detachInspector(): void {
+    this.unsubscribeFeedback?.();
+    this.unsubscribeFeedback = undefined;
+    this.pick?.dispose();
+    this.bridge?.dispose();
+    this.pick = null;
+    this.bridge = null;
+    this.popover = null;
+    this.pickTarget = null;
+    this.guestLoaded = false;
+    this.guestLoadFailed = false;
+    this.overlayEl.replaceChildren();
+    this.pickButton.hidden = true;
+    this.pickButton.setAttribute("aria-pressed", "false");
+    this.pickButton.classList.remove("is-active");
+    this.hoverEl.hidden = true;
+    this.containerEl.classList.remove("is-picking");
+  }
+
+  /** Visible iff static + inspector + a handler passes canHandle + the guest is loaded without error. */
+  private updatePickAvailability(): void {
+    const target = this.pickTarget;
+    const available = !!target && !!this.webview && this.guestLoaded && !this.guestLoadFailed
+      && isPickAvailable(this.registration, this.app.artifactFeedback, target);
+    if (target) this.handlerName = this.app.artifactFeedback.describeHandler(target) ?? this.handlerName;
+    this.pickButton.hidden = !available;
+    this.pick?.setAvailable(available);
+  }
+
+  private focusPick(where: FocusTarget): void {
+    if (where === "toggle") this.pickButton.focus();
+    else if (where === "guest") this.webview?.focus();
+    else if (where === "comment") this.popover?.focusComment();
+    else this.popover?.focusDone();
+  }
+
+  private showHover(hover: InspectorHover): void {
+    this.hoverEl.hidden = false;
+    this.hoverEl.textContent = hover.label ? `<${hover.tag}> ${hover.label}` : `<${hover.tag}> ${Math.round(hover.rect.width)} × ${Math.round(hover.rect.height)}`;
+    // Pointer hovering is visual only; a keyboard walk is announced.
+    this.hoverEl.setAttribute("aria-live", hover.via === "keyboard" ? "polite" : "off");
+  }
+
+  private renderPick(state: PickState): void {
+    const picking = state.phase !== "off";
+    this.pickButton.setAttribute("aria-pressed", String(picking));
+    this.pickButton.classList.toggle("is-active", picking);
+    this.containerEl.classList.toggle("is-picking", picking);
+    if (state.phase === "pick") this.statusEl.textContent = PICK_STATUS;
+    else if (state.phase === "off" && this.statusEl.textContent === PICK_STATUS) this.statusEl.textContent = this.viewportStatus();
+    if (state.phase !== "pick") { this.hoverEl.hidden = true; this.hoverEl.textContent = ""; }
+    const popover = this.popover;
+    if (!popover) return;
+    popover.el.hidden = state.phase !== "popover";
+    if (state.phase === "popover") {
+      popover.render(state, this.handlerName);
+      this.positionPopover(state);
+    }
+  }
+
+  /** Below the selected element, flipped above or clamped to the stage; it does not follow scrolling. */
+  private positionPopover(state: PickState): void {
+    const popover = this.popover;
+    const snapshot = state.snapshot;
+    if (!popover || !snapshot || !this.webview) return;
+    const container = this.containerEl.getBoundingClientRect();
+    const stage = this.stageEl.getBoundingClientRect();
+    const frame = this.webview.getBoundingClientRect();
+    const box = snapshot.selection.boundingBox.viewport;
+    const placed = popoverPosition(
+      { x: frame.left - stage.left + box.x, y: frame.top - stage.top + box.y, width: box.width, height: box.height },
+      { width: popover.el.offsetWidth, height: popover.el.offsetHeight },
+      { width: stage.width, height: stage.height },
+    );
+    popover.el.style.left = `${Math.round(stage.left - container.left + placed.left)}px`;
+    popover.el.style.top = `${Math.round(stage.top - container.top + placed.top)}px`;
+  }
+
+  /** Esc and the [ ] walk keys while focus is in the embedder chrome (toolbar, popover). */
+  private onContainerKeydown(event: KeyboardEvent): void {
+    const pick = this.pick;
+    if (!pick || event.defaultPrevented || event.isComposing) return;
+    if (event.key === "Escape") {
+      if (pick.escape()) { event.preventDefault(); event.stopPropagation(); }
+      return;
+    }
+    if (pick.state.phase !== "pick" || event.metaKey || event.ctrlKey || event.altKey) return;
+    if (event.target instanceof HTMLTextAreaElement || event.target instanceof HTMLInputElement) return;
+    if (event.key === "[" || event.key === "]") {
+      event.preventDefault();
+      this.bridge?.sendKey(event.key === "[" ? "parent" : "child");
+    }
+  }
+
   private async pollRuntime(): Promise<void> {
     if (!this.registration) return;
     const state = await window.geode.getArtifactState(this.registration.registrationId).catch(() => null);
@@ -254,7 +450,9 @@ export class ArtifactView implements View, ReloadableView {
     if (state.revision > this.revision) {
       this.revision = state.revision;
       this.webview?.reload();
-      this.statusEl.textContent = `Reloaded · ${this.viewport?.preset === "fill" ? "Fill" : `${this.viewport?.width} × ${this.viewport?.height}`}`;
+      if (!this.pick || this.pick.state.phase === "off") {
+        this.statusEl.textContent = `Reloaded · ${this.viewport?.preset === "fill" ? "Fill" : `${this.viewport?.width} × ${this.viewport?.height}`}`;
+      }
     }
     this.renderDiagnostics(state.diagnostics);
   }
@@ -294,6 +492,7 @@ export class ArtifactView implements View, ReloadableView {
     this.unwatchVault?.();
     this.unwatchVault = undefined;
     this.vaultBadgeEl.hidden = true;
+    this.detachInspector();
     this.webview?.remove();
     this.webview = null;
     this.revision = 0;
