@@ -721,3 +721,55 @@ Create the bridge in `load()` for static artifacts with `registration.inspector`
 `onCancel` carries no state; apply the D8 Esc rules in the view.
 `app.artifactFeedback.onDidChange` and `has(target)` drive Pick visibility; the registry already settles in-flight
 submits as `unavailable` on disposal.
+
+## Implementation notes: Phase 1 part 2 (pick UI and Electron e2e)
+
+**Files.** `src/renderer/artifacts/pick-controller.ts` (pure state machine, host surface: `setGuestMode`, `submit`,
+`focus`, `changed`), `src/renderer/artifacts/pick-popover.ts` (popover DOM, `popoverPosition`, `popoverStatus`,
+`describeSelectionForDisclosure`), wiring in `src/renderer/views/artifact-view.ts` (`attachInspector`/`detachInspector`,
+created in `load()` for `runtime === "static"` with `registration.inspector`, disposed in `release()`), the
+`artifact.toggle-pick` action and "Toggle element picker" command in `src/renderer/app.ts` (no default hotkey; available
+only while the Pick button is visible), CSS next to the other `.artifact-view-*` rules in `styles/app.css`.
+e2e: `tests/e2e/artifact-element-picker.spec.ts`, fixtures in `tests/e2e/helpers/artifact-picker-fixtures.ts`, and the fake
+handler plugin `tests/fixtures/plugins/artifact-feedback-probe/` (registers through the public
+`Plugin.registerArtifactFeedbackHandler`, records every request).
+
+**Deviations and settled details.**
+- Accepted state is the ADR's: the status shows the plugin message ("Sent." by default), Done takes focus, Enter/Esc/Done
+  close it and end pick mode. It does not auto-close.
+- The popover heading is `Comment on <tag>`. The selection carries no per-element class list (only ancestors do), so the
+  `.class` suffix of D8 is replaced by a second line with the accessible name or text and the selector.
+- Focus after Done/Cancel restores what held it before the selection (`FocusOrigin`: the webview for a pick that began in
+  the page, else the toggle); Esc with no popover and the toggle itself return focus to the toggle.
+- A pointer hover is shown in a small toolbar readout (`.artifact-view-hover`, `<tag> w x h`); a keyboard walk shows the
+  label and is `aria-live="polite"`. This is also the embedder-observable hover state the e2e asserts on.
+- Visibility also requires the guest to have finished loading once and no main-frame load failure; `ERR_ABORTED` (-3, a
+  reload racing the previous load) is ignored so the 400 ms revision reload does not hide the toggle or end pick mode.
+- Esc and `[`/`]` from the embedder chrome are handled by one `keydown` listener on the view container (bubble phase, so
+  the popover's own Esc handler runs first). `[`/`]` are not forwarded from the textarea. Enter is never forwarded.
+- The popover stays open across a reload and goes stale on `dom-ready`; pick mode re-arms because the bridge re-sends the
+  mode on the guest's `ready`.
+- `ArtifactFeedbackService.describeHandler(target)` was added (internal, not in the plugin contract) so the copy can say
+  "Sending to {displayName}...".
+- The popover also shows Send and Cancel in DOM order Send, Cancel (tab order) and lays them out reversed with CSS.
+
+**Test seams used.** The 15 s submit timeout is shortened in e2e by assigning `app.artifactFeedback.timeoutMs` (a plain
+TypeScript-private field); the 15 s wording and the abort are unit tested in the registry tests. Guest input comes from
+`webContents.sendInputEvent` on the artifact guest (trusted events), highlight pixels from `guest.capturePage`.
+Playwright's CDP page screenshot does not composite the `<webview>` guest under Xvfb, so the visual evidence uses the
+window's own `webContents.capturePage`.
+
+**Verified in real Electron (Linux, Xvfb).** The host preload attaches to a live webview and select/hover/cancel/ready
+round-trip; highlight draws and recovers when the page removes its host every 100 ms; a 1000/s removal flood does not
+spin the renderer and Esc still exits; `document.open()` is healed by the 1 Hz listener re-assertion; forged
+`postMessage`/`MessageEvent`/`CustomEvent` traffic with the real channel names, synthetic mouse/pointer events, patched
+`getBoundingClientRect`/`getComputedStyle`/`attachShadow` produce no selection; the page's own capture and bubble
+listeners see no trusted press/release/click during pick (a bare `mousemove` still reaches the page by design, D4); a
+real click yields exactly one selection with the true rect; `.threads-design/` is unreadable by `img`, `script` and
+navigation (case, percent-encoded, `..` and backslash variants), a write there neither bumps the revision nor reloads,
+a write to `index.html` does; hover on a 5k-node page measured p50 7 ms and p95 17 ms (80 trusted mouse moves, loaded
+shared host; recorded, not gated).
+
+**Still NOT verified:** DPR 2 capture on a real Retina display; webview coordinates under non-default zoom (the popover
+anchor assumes zoom 1); `isMainFrame` on `ipc-message` in Electron 42 (the bridge drops sub-frame messages only when
+the flag is present); zero CSP console errors from the preload under a strict author CSP; macOS (all e2e ran on Linux).
