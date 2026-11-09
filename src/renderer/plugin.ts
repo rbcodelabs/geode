@@ -8,6 +8,7 @@ import type { EditorView } from "@codemirror/view";
 import type { MarkdownView } from "./views/markdown-view";
 import type { QuickSwitcherProvider } from "./quick-switcher-providers";
 import type { SyncProvider } from "./sync/types";
+import type { ArtifactFeedbackHandler, ArtifactFeedbackRegistration } from "../artifacts/feedback-contract";
 import { notifyThreadsDataSaved } from "./integrations/threads-projects";
 
 export type { PluginManifest } from "./plugin-manifest";
@@ -240,6 +241,32 @@ export abstract class Plugin extends Component {
       },
     };
     this.register(this.app.registerQuickSwitcherProvider(guarded));
+  }
+
+  /**
+   * Geode-only. Offer to receive element feedback from the artifact preview
+   * (ADR 0006): the user picks an element, types a comment, and Geode calls
+   * `handler.submit`. The Pick button exists only while some handler can handle
+   * the artifact. Feature-detect with `typeof plugin.registerArtifactFeedbackHandler
+   * === "function"` and `app.artifactFeedback?.contractVersions.includes(1)`.
+   *
+   * The owner identity comes from this plugin's manifest, never from the handler.
+   * Never throws for caller mistakes (a structured status is returned); throws
+   * only when this plugin generation is inactive. The handler is disposed on
+   * unload, settling any in-flight submit as unavailable. A throwing, rejecting,
+   * hanging or malformed handler is converted to a rejected outcome and logged
+   * with console.warn, deliberately NOT routed through errorHandler (that would
+   * quarantine the whole plugin). Obsidian lacks this method.
+   */
+  registerArtifactFeedbackHandler(handler: ArtifactFeedbackHandler): ArtifactFeedbackRegistration {
+    this.assertHostGeneration();
+    const registry = this.app.artifactFeedback;
+    if (!registry || typeof registry.register !== "function") {
+      return { status: "unavailable", message: "This host does not support artifact feedback.", dispose() {} };
+    }
+    const registration = registry.register({ pluginId: this.manifest.id, displayName: this.manifest.name }, handler);
+    if (registration.status === "registered") this.register(() => registration.dispose());
+    return registration;
   }
 
   /** Register a full-vault remote transport owned by this plugin. */

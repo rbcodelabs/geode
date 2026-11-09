@@ -133,6 +133,7 @@ import { createDismissibleNotice } from "./notice";
 import { Scope } from "./api/suggest";
 import { Keymap } from "./api/keymap";
 import { setIcon } from "./api/icons";
+import { ArtifactFeedbackService } from "./artifacts/feedback-registry";
 import { collectQuickSwitcherItems, type QuickSwitcherPluginItem, type QuickSwitcherProvider } from "./quick-switcher-providers";
 import { FileManager } from "./file-manager";
 import { measureOperation } from "./perf-instrumentation";
@@ -2866,6 +2867,12 @@ export class App {
   basesViews = new Map<string, BasesViewRegistration>();
   /** Quick switcher row providers registered by plugins; see `registerQuickSwitcherProvider`. */
   quickSwitcherProviders = new Set<QuickSwitcherProvider>();
+  /**
+   * Plugin-facing registry for artifact element feedback (ADR 0006). Plugins reach
+   * it through `Plugin.registerArtifactFeedbackHandler` and read it as the
+   * `ArtifactFeedbackRegistry` interface; `register`/`submit` are internal.
+   */
+  readonly artifactFeedback: ArtifactFeedbackService;
   workspace!: Workspace;
   statusBar!: StatusBar;
   private ribbonActionsEl!: HTMLElement;
@@ -2960,6 +2967,7 @@ export class App {
 
   constructor(host: HostServices = getHostServices()) {
     this.host = host;
+    this.artifactFeedback = new ArtifactFeedbackService({ enabled: host.capabilities.artifacts });
     this.propertyTypes.onError(() => this.notify("Could not save property types. Check the assignment and try again."));
     this.dailyNotes = new DailyNotesService(host.config);
     this.templates = new TemplatesService(host.config);
