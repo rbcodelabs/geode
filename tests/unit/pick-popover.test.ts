@@ -95,6 +95,10 @@ describe("popoverStatus", () => {
     const timeout = popoverStatus({ ...base, submit: "rejected", outcome: rejected("No response from Design in 15 s. It may have been received; check the thread before retrying. Retry reuses the same selection id.", "timeout") }, "Design");
     expect(timeout.text).toMatch(/^No response from Design in 15 s/);
     expect(timeout.text).not.toBe(plugin.text);
+    // disposed while the send was in flight: neutral and true (the plugin may already have sent it)
+    const inflight = popoverStatus({ ...base, submit: "rejected", handlerGone: true, outcome: rejected("Design was unloaded before it answered. Check the thread to see whether your comment arrived.", "disposed") }, "Design");
+    expect(inflight.text).toBe("Design was unloaded before it answered. Check the thread to see whether your comment arrived.");
+    expect(inflight.text).not.toContain("cannot be sent");
     expect(popoverStatus({ ...base, handlerGone: true }, "Design").text).toBe("Design is no longer available, so this comment cannot be sent. Cancel to keep browsing.");
   });
   it("appends the stale note to whatever else is shown", () => {

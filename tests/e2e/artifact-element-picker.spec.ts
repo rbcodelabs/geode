@@ -353,7 +353,8 @@ test.describe("element picker", () => {
       await popoverOf(s.window).getByRole("button", { name: "Send" }).click();
       await expect(statusOf(s.window)).toHaveText("Sending to Design Probe…");
       await probe.dispose(s.window);
-      await expect(statusOf(s.window)).toContainText("no longer available");
+      await expect(statusOf(s.window)).toContainText("was unloaded before it answered. Check the thread to see whether your comment arrived.");
+      await expect(statusOf(s.window)).not.toContainText("cannot be sent");
       await expect(popoverOf(s.window).getByRole("button", { name: /Retry|Send/ })).toBeDisabled();
       await expect(popoverOf(s.window).getByRole("button", { name: "Cancel" })).toBeEnabled();
     } finally { await s.cleanup(); }

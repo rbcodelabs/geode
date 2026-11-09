@@ -220,7 +220,7 @@ describe("disposal", () => {
     const pending = svc.submit(target, request());
     reg.dispose();
     const outcome = await pending;
-    expect(outcome).toEqual({ status: "rejected", reason: "unavailable", message: "Plugin A is no longer available.", source: "disposed" });
+    expect(outcome).toEqual({ status: "rejected", reason: "unavailable", message: "Plugin A was unloaded before it answered. Check the thread to see whether your comment arrived.", source: "disposed" });
     expect(signal.aborted).toBe(true);
     release(accepted);
     await Promise.resolve();

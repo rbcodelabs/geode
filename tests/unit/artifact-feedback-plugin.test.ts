@@ -36,7 +36,7 @@ describe("Plugin.registerArtifactFeedbackHandler", () => {
     plugin.registerArtifactFeedbackHandler({ contractVersion: 1, submit: (_r, ctx) => { signal = ctx.signal; return new Promise(() => {}); } });
     const pending = svc.submit(target, request);
     await plugin.unloadAndWait();
-    expect(await pending).toMatchObject({ status: "rejected", reason: "unavailable", message: "Threads Design is no longer available.", source: "disposed" });
+    expect(await pending).toMatchObject({ status: "rejected", reason: "unavailable", message: "Threads Design was unloaded before it answered. Check the thread to see whether your comment arrived.", source: "disposed" });
     expect(signal.aborted).toBe(true);
     expect(svc.has(target)).toBe(false);
   });

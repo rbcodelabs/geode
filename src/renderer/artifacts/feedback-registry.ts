@@ -95,7 +95,9 @@ export class ArtifactFeedbackService implements ArtifactFeedbackRegistry {
           flight.settle({
             status: "rejected",
             reason: "unavailable",
-            message: `${entry.owner.displayName} is no longer available.`,
+            // Neutral and true: the plugin may already have issued the send. The handler is gone, so it cannot
+            // supply its own message for this case.
+            message: `${entry.owner.displayName} was unloaded before it answered. Check the thread to see whether your comment arrived.`,
             source: "disposed",
           });
         }

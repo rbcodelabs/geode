@@ -819,3 +819,10 @@ Documented residuals (no code change):
   sidecar). The containment check shares the property.
 - **A14: Windows/NTFS aliases are unverified.** `.threads-design::$INDEX_ALLOCATION` and 8.3 short names are not matched by
   layer 1 and the on-disk layers have not been run on Windows. Geode ships on macOS today.
+
+**Disposal while a send is in flight (wording).** When the handler is disposed or its plugin unloaded with a submit in
+flight, the plugin may already have issued the send, so the popover says "{name} was unloaded before it answered. Check
+the thread to see whether your comment arrived." (`source: "disposed"`, reason `unavailable`, Retry behaviour unchanged).
+The plain "no longer available, so this comment cannot be sent" wording remains only for a popover that was never
+submitted (idle) or when no handler matched. A plugin-provided message for the disposed case is not possible: the handler
+is already gone when Geode settles the call, so Geode must word it itself.

@@ -58,7 +58,11 @@ export function popoverStatus(state: PickState, displayName: string): { text: st
   let alert = false;
   if (state.submit === "pending") text = `Sending to ${displayName}…`;
   else if (state.submit === "accepted") text = state.outcome?.message || "Sent.";
-  else if (state.handlerGone) text = `${displayName} is no longer available, so this comment cannot be sent. Cancel to keep browsing.`;
+  else if (state.handlerGone && state.submit === "rejected" && state.outcome?.source === "disposed") {
+    // Disposed while the send was in flight: show the registry's neutral message, not "cannot be sent".
+    text = state.outcome.message ?? "";
+    alert = true;
+  } else if (state.handlerGone) text = `${displayName} is no longer available, so this comment cannot be sent. Cancel to keep browsing.`;
   else if (state.submit === "rejected") { text = state.outcome?.message ?? "The comment could not be sent."; alert = true; }
   if (state.stale) text = text ? `${text} ${STALE_NOTE}` : STALE_NOTE;
   return { text, alert };
