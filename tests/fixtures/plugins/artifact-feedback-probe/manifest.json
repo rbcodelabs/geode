@@ -1,0 +1,8 @@
+{
+  "id": "artifact-feedback-probe",
+  "name": "Design Probe",
+  "version": "1.0.0",
+  "minAppVersion": "0.1.0",
+  "description": "Registers a fake artifact feedback handler (ADR 0006) so e2e tests exercise the real registry, bridge, preload and popover.",
+  "author": "geode"
+}

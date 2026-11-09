@@ -119,7 +119,7 @@ export class PickController {
 
   /** Done after an accepted submission: single-shot, so pick mode ends. */
   done(): void {
-    if (this.current.phase === "popover" && this.current.submit !== "pending") this.exit("toggle");
+    if (this.current.phase === "popover" && this.current.submit !== "pending") this.exit(this.origin);
   }
 
   /**
@@ -169,7 +169,7 @@ export class PickController {
     this.token++;
   }
 
-  private exit(focus: "toggle" | null): void {
+  private exit(focus: FocusOrigin | null): void {
     this.token++;
     this.set({ ...IDLE, handlerGone: this.current.handlerGone });
     this.host.setGuestMode("off");

@@ -349,3 +349,17 @@ describe("PickController: external changes", () => {
     expect(changes.at(-1)?.comment).toBe("hi");
   });
 });
+
+describe("PickController: focus after a completed pick", () => {
+  it("returns focus to the page when the pick began with focus in the page (ADR: restore what held it)", async () => {
+    const { controller, submits, focuses } = setup();
+    controller.enter("keyboard");
+    controller.selected(snapshot(), "guest");
+    controller.setComment("Looks off");
+    controller.send();
+    submits[0]!.deferred.resolve(accepted());
+    await flush();
+    controller.done();
+    expect(focuses.at(-1)).toBe("guest");
+  });
+});
