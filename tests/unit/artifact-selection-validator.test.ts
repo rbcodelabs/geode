@@ -128,7 +128,28 @@ describe("computed style allowlist", () => {
   });
 });
 
+describe("viewport sanity", () => {
+  it("rejects a devicePixelRatio that is zero, negative, non-finite or absurd, and absurd viewport sizes", () => {
+    for (const dpr of [0, -1, Number.NaN, Number.POSITIVE_INFINITY, 17, 1e6]) {
+      expect(accept({ ...valid(), viewport: { ...valid().viewport, devicePixelRatio: dpr } }), String(dpr)).toBeNull();
+    }
+    expect(accept({ ...valid(), viewport: { ...valid().viewport, width: 100_001 } })).toBeNull();
+    expect(accept({ ...valid(), viewport: { ...valid().viewport, devicePixelRatio: 16 } })).not.toBeNull();
+    expect(accept({ ...valid(), viewport: { ...valid().viewport, devicePixelRatio: 0.5 } })).not.toBeNull();
+  });
+});
+
 describe("redaction invariants (vault: read)", () => {
+  it("drops the route's fragment and query and the landmark, but keeps the path", () => {
+    const input = { ...valid(), route: "/index.html?note=Secret#/notes/Quarterly layoffs", landmark: "Quarterly layoffs" };
+    const out = accept(input, true)!;
+    expect(out.route).toBe("/index.html");
+    expect(out.landmark).toBeNull();
+    const plain = accept(input, false)!;
+    expect(plain.route).toBe(input.route);
+    expect(plain.landmark).toBe("Quarterly layoffs");
+  });
+
   it("forces empty text anchor, null name and strips text and non-whitelisted attribute values from outerHTML", () => {
     const html = '<div id="x" class="c" title="private" data-note="n" role="r">Salary 100k<b data-variation="B" href="/secret">more</b></div>';
     const out = accept({ ...valid(), outerHTML: { html, truncated: false }, textAnchor: { tag: "div", text: "Salary" }, a11y: { role: "r", name: "Salary", tabIndex: null } }, true)!;

@@ -174,6 +174,12 @@ function computedStyles(value: unknown): Record<string, string> | null {
   return out;
 }
 
+const MAX_DPR = 16;
+const MAX_VIEWPORT_PX = 1e5;
+
+/** The route without its query and fragment: hash-routed pages put data (note titles) there. */
+const pathOnly = (route: string): string => route.replace(/[?#].*$/s, "");
+
 /** Returns the rebuilt, validated select message, or null when anything is wrong. */
 export function validateGuestSelect(raw: unknown, options: { redacted: boolean }): GuestSelectMessage | null {
   const b = bag(raw);
@@ -209,6 +215,8 @@ export function validateGuestSelect(raw: unknown, options: { redacted: boolean }
   const dpr = vp ? num(vp.devicePixelRatio) : null;
   const scrollX = vp ? num(vp.scrollX) : null, scrollY = vp ? num(vp.scrollY) : null;
   if (width === null || height === null || dpr === null || scrollX === null || scrollY === null || width < 0 || height < 0) return null;
+  // A zero/negative/absurd ratio or a huge viewport is nonsense from a lying guest; the ratio is forwarded to the plugin.
+  if (!(dpr > 0 && dpr <= MAX_DPR) || width > MAX_VIEWPORT_PX || height > MAX_VIEWPORT_PX) return null;
 
   const a11y = bag(b.a11y);
   const role = a11y ? nullableStr(a11y.role, INSPECTOR_CAPS.roleUnits) : undefined;
@@ -219,12 +227,12 @@ export function validateGuestSelect(raw: unknown, options: { redacted: boolean }
 
   const redacted = options.redacted;
   return {
-    route,
+    route: redacted ? pathOnly(route) : route,
     tag: t,
     selector,
     selectorAlternates: alternates,
     textAnchor: { tag: anchorTag, text: redacted ? "" : anchorText },
-    landmark,
+    landmark: redacted ? null : landmark,
     outerHTML: { html: redacted ? redactHtml(html) : html, truncated: outer!.truncated as boolean },
     ancestors: anc,
     computedStyles: styles,
