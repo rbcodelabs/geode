@@ -3,6 +3,7 @@ import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import type { Session, WebContents, WebPreferences } from "electron";
 import { BrowserWindow, session } from "electron";
+import { INSPECT_PROTOCOL_VERSION } from "../artifacts/inspector-protocol";
 import { parseArtifactManifestJson, type ArtifactManifest, type ArtifactManifestIssue } from "../artifacts/manifest";
 import {
   ARTIFACT_SCHEME,
@@ -30,6 +31,13 @@ export interface ArtifactRegistration {
    * on every guest request; main attaches the guest preload only when set.
    */
   vault?: { access: "read"; allowlist: string[] };
+  /**
+   * Present iff the host-owned element inspector preload was registered on this
+   * artifact's session (static artifacts only, ADR 0006 D5). The Pick button
+   * depends on this flag, not on guesswork; a failed registration leaves it
+   * absent and the artifact still opens.
+   */
+  inspector?: { protocol: typeof INSPECT_PROTOCOL_VERSION };
 }
 
 export interface ArtifactDiagnostic {
@@ -73,6 +81,8 @@ interface ActiveArtifact extends ArtifactRegistration {
   /** Next.js artifacts only: the single http origin (and ws twin) the guest may reach. */
   allowedOrigin?: string;
   guest?: WebContents;
+  /** Id returned by `registerPreloadScript` for the inspector; unregistered on dispose. */
+  inspectorPreloadId?: string;
 }
 
 export interface ArtifactRegisterOptions {
@@ -143,7 +153,11 @@ export function serializeArtifactRegistrationError(error: unknown): ArtifactRegi
 
 /** Owns all privileged state and policy for untrusted static artifacts. */
 export class ArtifactRuntime {
-  constructor(private readonly guestPreloadPath: string = path.join(__dirname, "artifact-guest-preload.js")) {}
+  constructor(
+    private readonly guestPreloadPath: string = path.join(__dirname, "artifact-guest-preload.js"),
+    /** Injectable like `guestPreloadPath` so tests can use a fake. */
+    private readonly inspectorPreloadPath: string = path.join(__dirname, "artifact-inspector-preload.js"),
+  ) {}
 
   private readonly registrations = new Map<string, ActiveArtifact>();
   private readonly registrationsByPartition = new Map<string, ActiveArtifact>();
@@ -215,6 +229,9 @@ export class ArtifactRuntime {
       await watcher?.close();
       throw error;
     }
+    // Deliberately here and not in configureSession: that is shared with captureHeadless,
+    // whose offscreen session must never get the inspector. Static artifacts only (ADR 0005).
+    if (!devServer) this.registerInspectorPreload(active);
     this.registrations.set(registrationId, active);
     this.registrationsByPartition.set(partition, active);
     return {
@@ -226,7 +243,24 @@ export class ArtifactRuntime {
       runtime: active.runtime,
       viewport: active.viewport,
       ...(active.vault ? { vault: active.vault } : {}),
+      ...(active.inspectorPreloadId ? { inspector: { protocol: INSPECT_PROTOCOL_VERSION } } : {}),
     };
+  }
+
+  /**
+   * Session-level frame preload, alongside (never instead of) the vault preload that
+   * `webPreferences.preload` may carry. A failure only loses the picker.
+   */
+  private registerInspectorPreload(active: ActiveArtifact): void {
+    try {
+      active.inspectorPreloadId = active.artifactSession.registerPreloadScript({
+        type: "frame",
+        filePath: this.inspectorPreloadPath,
+      });
+    } catch (error) {
+      active.inspectorPreloadId = undefined;
+      console.warn(`[artifact] inspector preload registration failed for "${active.artifactId}"; the picker is unavailable`, error);
+    }
   }
 
   private async configureSession(
@@ -273,9 +307,11 @@ export class ArtifactRuntime {
     webPreferences.sandbox = true;
     webPreferences.webSecurity = true;
     webPreferences.allowRunningInsecureContent = false;
-    // The guest preload exists only for artifacts whose validated manifest
-    // opted into vault reads. It is a separate, minimal contextBridge surface
-    // (see the Compass "ADR - Artifact vault read bridge"); every other artifact keeps preload undefined.
+    // `webPreferences.preload` is the vault bridge slot: set only for artifacts whose validated
+    // manifest opted into vault reads (a separate, minimal contextBridge surface, see the Compass
+    // "ADR - Artifact vault read bridge"), undefined for every other artifact. It does not mean
+    // "no preload at all": static artifacts also carry the host-owned inspector, which is
+    // registered on the session (registerPreloadScript) and coexists with this slot (ADR 0006 D5).
     webPreferences.preload = active.vault ? this.guestPreloadPath : undefined;
     return true;
   }
@@ -421,6 +457,10 @@ export class ArtifactRuntime {
   }
 
   private async dispose(active: ActiveArtifact): Promise<void> {
+    if (active.inspectorPreloadId) {
+      try { active.artifactSession.unregisterPreloadScript(active.inspectorPreloadId); }
+      catch (error) { console.warn(`[artifact] inspector preload unregister failed for "${active.artifactId}"`, error); }
+    }
     await active.watcher?.close();
     if (!active.allowedOrigin) active.artifactSession.protocol.unhandle(ARTIFACT_SCHEME);
     await Promise.allSettled([active.artifactSession.clearCache(), active.artifactSession.clearStorageData()]);
