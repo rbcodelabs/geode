@@ -10,7 +10,7 @@ edit, structured-context delivery and `nextjs` support are out of scope.
 
 Note on numbering: `docs/adr/` already contains `0006-contextual-document-actions.md`
 (the directory has several duplicate numbers). This file keeps the number 0006 because
-the feature spec, the Compass solution and the plugin contract all cite "ADR 0006".
+the feature spec, the product tracking item and the plugin contract all cite "ADR 0006".
 
 ## Context
 
@@ -34,7 +34,7 @@ Constraints that shape the design:
 - A Pick button must appear only when something can actually receive the
   feedback. Geode ships the feature and the plugin ships in lockstep, but either
   side may be older than the other and must degrade without errors.
-- Phase 0 spikes (`threads-design-2026-11-08-p0-spike-{A,B,C}`) established:
+- Phase 0 spikes (three throwaway experiments, not part of this repository) established:
   a session-level preload works under the unchanged CSP and does not displace the
   vault preload (`registerPreloadScript`); the isolated world resists a hostile
   page; hover must send tag + rect only; `.threads-design/` is served today and
@@ -773,3 +773,49 @@ shared host; recorded, not gated).
 **Still NOT verified:** DPR 2 capture on a real Retina display; webview coordinates under non-default zoom (the popover
 anchor assumes zoom 1); `isMainFrame` on `ipc-message` in Electron 42 (the bridge drops sub-frame messages only when
 the flag is present); zero CSP console errors from the preload under a strict author CSP; macOS (all e2e ran on Linux).
+
+## Implementation notes: review fix pass (security and QA findings)
+
+Fixed in code (each with a test that failed first):
+- **Dropped selects no longer strand the guest (B1).** The bridge keeps separate sliding-window budgets: hover 30/s,
+  select 4/s, cancel 10/s, ready 10/s. A `select` that is dropped for any reason (size, arity, rate, validation) while the
+  user is in pick mode re-sends `mode: pick`, because the guest enters its local hold when it sends a select.
+- **Bounded guest work (A1).** Raw attribute values are cut to 2x the kept cap and raw text nodes to a fixed length
+  BEFORE any regex or copy runs, so a 720k-character `style` or a multi-megabyte text node costs milliseconds.
+- **Keyboard-activated clicks (A2).** A trusted click with `detail === 0` (Space/Enter on a focused control) selects its
+  own target, never the element at (0, 0).
+- **Validator (A4, A5).** `0 < devicePixelRatio <= 16` and viewport sizes <= 1e5. For `vault: read` artifacts the embedder
+  also drops the route's query and fragment and nulls `landmark` (kept attribute values and selectors remain the accepted
+  residual).
+- **Data-only boundary (A6).** `canHandle` is read inside the try; the `target` is frozen; every attempt receives its own
+  copy of the screenshot bytes. The held snapshot keeps the PNG while the popover is open (retry needs it) and is dropped
+  when the popover closes. This amends the earlier "no reference after the call settles" sentence: the guarantee is per call.
+- **Plugin-facing registry (A7).** `app.artifactFeedback` is a frozen read-only view (`has`, `onDidChange`,
+  `contractVersions`). The full service lives on the internal `app.artifactFeedbackService`; `register` is reachable only
+  through `Plugin.registerArtifactFeedbackHandler`. Routing is unchanged (first registered handler whose `canHandle` passes,
+  no fall-through): an early handler without `canHandle` takes every static artifact and can starve later ones, accepted
+  for the exactly-one-recipient guarantee; handlers should set `canHandle`.
+- **Popover (A8, A9).** Placement is clamped inside the stage in every branch (the textarea is always visible). Esc during
+  IME composition is ignored. The status is a single politeness: `role="status"` with `aria-live="polite"`, or
+  `role="alert"` with no `aria-live`.
+- **Missing preload (A10).** The runtime checks the preload file exists before registering and before setting
+  `registration.inspector`; otherwise Pick stays hidden and a warning is logged.
+- **Inode layer (A12).** The inode comparison is skipped when the reserved directory's `ino` is 0 (FAT/exFAT, SMB, some
+  FUSE); the realpath layer still applies.
+- **UX.** A rejection has its own error colour, icon and left border (contrast-checked pairs, at least 4.5:1 in both themes);
+  the selected element stays marked by a non-interactive embedder box while the popover is open; the toolbar no longer wraps
+  "Diagnostics" or clips the hint (the hint is hidden below 700 px while picking, the hover chip takes the room); an
+  accepted comment leaves a persistent "sent" chip in the toolbar until the next pick (no pins in Phase 1).
+
+Documented residuals (no code change):
+- **A3: the page can disable the picker.** Timer and animation-frame ids live in a namespace shared with the page, so a
+  page can clear the guest's re-assertion timer and then call `document.open()` to erase its listeners. The result is
+  availability only: pick mode looks on, the page receives the user's clicks and keys, and no selection is ever forged.
+- **A11: watcher cost and ordering.** Revision bumps are asynchronous and unordered, with a handful of fs calls per event
+  while `.threads-design/` exists. Fine for ordinary edits; a build writing thousands of files creates many concurrent
+  checks. Coalescing per tick is a possible later optimization.
+- **A13: check-to-read race.** A symlink swapped between the reserved-path check and the read could bypass the deny, but
+  the page has no write access, so the page cannot exploit it (the agent that can write the artifact can already read the
+  sidecar). The containment check shares the property.
+- **A14: Windows/NTFS aliases are unverified.** `.threads-design::$INDEX_ALLOCATION` and 8.3 short names are not matched by
+  layer 1 and the on-disk layers have not been run on Windows. Geode ships on macOS today.
