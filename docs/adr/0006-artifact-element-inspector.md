@@ -648,3 +648,76 @@ and event re-check, protocol deny, `ArtifactRegistration.inspector`),
 (toggle, overlay, popover, IPC handler), `src/renderer/plugin.ts`
 (`registerArtifactFeedbackHandler`), `src/renderer/app.ts` (`artifactFeedback`),
 `esbuild.config.mjs` (second preload entry).
+
+## Implementation notes: Phase 1 part 1 (contract, registry, preload, bridge)
+
+Everything except the visible UI. Settled details and deviations, in the order a
+reviewer will meet them:
+
+**Files.** `src/artifacts/feedback-contract.ts` (verbatim contract types, no imports) and
+`src/artifacts/inspector-protocol.ts` (channels, caps, the 40-name style allowlist, guest message types);
+`src/renderer/artifacts/feedback-registry.ts` (`ArtifactFeedbackService`, `app.artifactFeedback`);
+`Plugin.registerArtifactFeedbackHandler` in `src/renderer/plugin.ts`;
+`src/main/artifact-inspector-guest.ts` (all guest logic, no Electron import, runs under jsdom) with the thin
+`src/main/artifact-inspector-preload.ts` entry (esbuild entry added);
+`src/renderer/artifacts/selection-validator.ts` (pure validator) and
+`src/renderer/views/artifact-inspector-bridge.ts` (bridge). The ADR's map named
+`artifact-view.ts` for the IPC handler; the bridge file lives in `views/` as the task asked, the view only instantiates it.
+
+**New dev dependency: `jsdom` (devDependency, tests only).** D9 specifies the preload is tested under jsdom
+and the unit suite had none (it used hand-rolled fakes). jsdom 31 supports constructable stylesheets,
+`adoptedStyleSheets`, closed shadow roots and iframes, which is what the preload tests need. The guest harness
+mints `isTrusted === true` events through a deep import of jsdom's internal `lib/generated/idl/utils.js`
+(`dispatchEvent()` resets `isTrusted` to false); that is test-only and will need a touch on a jsdom major bump.
+
+**Registry.**
+- `ArtifactFeedbackService.submit()` resolves to `ArtifactFeedbackOutcome`, a `ArtifactFeedbackResult` plus
+  `source: "handler" | "timeout" | "disposed" | "no-handler" | "invalid-result"`. The contract types are untouched;
+  `source` lets the popover word "no response in 15 s" differently from "the plugin said no", as D8 requires.
+- Timeout and a thrown/rejected submit map to `rejected, reason: "failed"`; disposal to `unavailable`; no
+  matching handler to `unavailable` with `source: "no-handler"`.
+- `enabled` is `host.capabilities.artifacts`, so the browser/mobile host registers as `unavailable`.
+- `Plugin.registerArtifactFeedbackHandler` returns `unavailable` (never throws) when the host has no
+  `app.artifactFeedback`, and throws only for an inactive plugin generation.
+- Owner id and display name come from the manifest; a handler cannot override them.
+
+**Guest.**
+- Listeners are registered at document start and stay registered in every mode; in `off` the handler returns
+  immediately and never calls `preventDefault`. "Off listens to nothing" in D4 is therefore "inert", not
+  "absent" (removing and re-adding would let a page listener registered in between run first).
+- The highlight host exists only in `pick` (removed in `hold` and `off`) and is moved with
+  `CSSStyleSheet.replaceSync` of a one-rule sheet, not by mutating an inline style.
+- Escape sends `cancel` in `pick` and `hold`; the embedder decides what it means (a pending popover ignores it).
+- `selector` can be the empty string when no candidate verifies (for example 2000+ siblings: sibling counting is
+  bounded). Selector candidates in order: `[data-testid]`, unique `#id`, `tag.class.class`, `of-type` path anchored at
+  a unique ancestor id, `nth-child` path; the first verified is primary, up to 3 more are alternates.
+- `outerHTML` budgets: 600 nodes, 25 ms, 4096 units; iterative (a 4000-deep tree does not recurse); text is HTML-escaped
+  so page text cannot forge tags; on* and srcdoc values, data: URIs, script bodies and comments are elided.
+- `tabIndex` is the explicit attribute, else the natural value when focusable, else null.
+- Keyboard hover `label` is omitted for redacted artifacts.
+
+**Bridge and validator.**
+- A hostile own key (`__proto__`, `constructor`, `prototype`) at any validated level REJECTS the message. D3 said
+  "dropped"; rejecting is stricter and costs nothing (a benign guest never sends one).
+- Non-allowlisted `computedStyles` keys are dropped silently; a message with more than 80 raw style keys is rejected.
+- Redaction invariants are enforced by scrubbing (empty text anchor, null name, `redactHtml` pass over `outerHTML`),
+  not by rejecting, so a selection on a vault artifact still works.
+- Rate limits: 30 inspector messages per second in total (`ready` included) and 4 selects per second, counted on a
+  1 s sliding window. "One outstanding select" is implemented by the bridge entering `hold` on the first accepted
+  select, before the screenshot is taken; the UI returns to `pick` with `setMode("pick")`.
+- Selections are immutable (`freezePlain`) and carry no guest-supplied identity. `stale` is true when the
+  runtime revision advanced OR the guest announced a new document (`ready`) since the selection; the
+  revision alone would miss a manual reload.
+- Empty selector is accepted; an `isMainFrame === false` flag on the `ipc-message` event drops the message when
+  Electron supplies it (NOT VERIFIED that Electron 42 does; the sender check is `event.target === webview`).
+
+**Seams for the UI engineer** (all in `artifact-inspector-bridge.ts`):
+`artifactFeedbackTarget(registration, root)`, `isPickAvailable(registration, app.artifactFeedback, target)` (add the
+view-local "webview attached, no load error"), `new ArtifactInspectorBridge({ webview, registration, target,
+registry: app.artifactFeedback, getRevision, getViewportPreset, callbacks })`, `setMode`, `sendKey`, `submit`, `dispose`.
+The webview element needs `capturePage(rect)` (already a `<webview>` method) and `addEventListener("ipc-message")`.
+Create the bridge in `load()` for static artifacts with `registration.inspector`, dispose it in `release()`/`load()`.
+`onSelect` means the bridge is in `hold`; call `setMode("pick")` on cancel and `setMode("off")` to leave pick.
+`onCancel` carries no state; apply the D8 Esc rules in the view.
+`app.artifactFeedback.onDidChange` and `has(target)` drive Pick visibility; the registry already settles in-flight
+submits as `unavailable` on disposal.
