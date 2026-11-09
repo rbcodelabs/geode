@@ -145,7 +145,8 @@ export class PickPopover {
     this.done = make("button", "mod-cta pick-popover-done");
     this.done.type = "button";
     this.done.textContent = "Done";
-    actions.append(this.cancel, this.send, this.done);
+    // DOM order is tab order (primary first); CSS lays the row out reversed.
+    actions.append(this.send, this.cancel, this.done);
 
     this.el.append(this.heading, this.target, this.area, details, this.status, actions);
 
