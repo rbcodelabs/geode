@@ -667,3 +667,83 @@ test.describe("element picker", () => {
     } finally { await s.cleanup(); }
   });
 });
+
+test.describe("element picker visual states", () => {
+  test.setTimeout(180_000);
+  const outDir = process.env.PICKER_SHOTS_DIR ?? path.join(repoRoot, "test-results", "p1-screenshots");
+
+  for (const [size, dims] of [["desktop", [1100, 700]], ["narrow", [640, 700]]] as const) {
+    test(`(m) screenshots: ${size} window, light and dark`, async () => {
+      fs.mkdirSync(outDir, { recursive: true });
+      const s = await basicSession({ size: [dims[0], dims[1]] });
+      try {
+        await s.window.evaluate(() => {
+          const app = (window as any).app;
+          app.artifactFeedback.timeoutMs = 1000;
+          for (const sidebar of [app.workspace.leftSidebar, app.workspace.rightSidebar]) if (!sidebar.collapsed) sidebar.toggle();
+        });
+        const view = s.window.locator(".artifact-view");
+        // A page screenshot (CDP) does not composite the webview guest under Xvfb; the window's own capture does.
+        const windowShot = async (file: string) => {
+          const box = (await view.boundingBox())!;
+          const png = await s.app.evaluate(async ({ BrowserWindow }, r) => {
+            const image = await BrowserWindow.getAllWindows()[0]!.webContents.capturePage(r);
+            return image.toPNG().toString("base64");
+          }, { x: Math.round(box.x), y: Math.round(box.y), width: Math.round(box.width), height: Math.round(box.height) });
+          fs.writeFileSync(file, Buffer.from(png, "base64"));
+        };
+        for (const theme of ["light", "dark"] as const) {
+          await s.window.emulateMedia({ colorScheme: theme });
+          await expect(s.window.locator("body")).toHaveClass(theme === "dark" ? /theme-dark/ : /^((?!theme-dark).)*$/);
+          let n = 0;
+          const shot = async (name: string) => {
+            await s.window.waitForTimeout(250);
+            await windowShot(path.join(outDir, `${size}-${theme}-${String(++n).padStart(2, "0")}-${name}.png`));
+          };
+          await probe.setMode(s.window, "never");
+          await shot("toggle-off");
+          await toggleOf(s.window).click();
+          await shot("toggle-on");
+          await moveTo(s.app, 150, BUY_CENTER.y);
+          await expect(s.window.locator(".artifact-view-hover")).toContainText("<button>");
+          await shot("highlight");
+          await clickAt(s.app, 150, BUY_CENTER.y);
+          await expect(popoverOf(s.window)).toBeVisible();
+          await popoverOf(s.window).getByRole("textbox").fill("Make this button larger and use our brand green.");
+          await shot("popover-idle");
+          await popoverOf(s.window).getByRole("button", { name: "Send" }).click();
+          await expect(statusOf(s.window)).toHaveText("Sending to Design Probe…");
+          await shot("popover-pending");
+          await expect(statusOf(s.window)).toContainText("No response from Design Probe", { timeout: 8_000 });
+          await shot("popover-timeout");
+          await probe.setMode(s.window, "reject");
+          await popoverOf(s.window).getByRole("button", { name: "Retry" }).click();
+          await expect(statusOf(s.window)).toContainText("still working on an earlier comment");
+          await shot("popover-rejected");
+          await probe.setMode(s.window, "accept");
+          await popoverOf(s.window).getByRole("button", { name: "Retry" }).click();
+          await expect(statusOf(s.window)).toHaveText("Queued for the agent.");
+          await shot("popover-accepted");
+          await popoverOf(s.window).getByRole("button", { name: "Done" }).click();
+          await expect(popoverOf(s.window)).toBeHidden();
+        }
+        if (size === "desktop") {
+          // a fixed viewport preset: the popover is clamped to the stage, not the page
+          await s.window.emulateMedia({ colorScheme: "light" });
+          await s.window.locator('[data-viewport="mobile"]').click();
+          await toggleOf(s.window).click();
+          await clickAt(s.app, 100, 224);
+          await expect(popoverOf(s.window)).toBeVisible();
+          await popoverOf(s.window).getByRole("textbox").fill("Larger please.");
+          await s.window.waitForTimeout(250);
+          await windowShot(path.join(outDir, "desktop-light-fixed-mobile-popover-idle.png"));
+          const box = await popoverOf(s.window).boundingBox();
+          const stage = await s.window.locator(".artifact-view-stage").boundingBox();
+          expect(box!.x).toBeGreaterThanOrEqual(stage!.x - 1);
+          expect(box!.x + box!.width).toBeLessThanOrEqual(stage!.x + stage!.width + 1);
+          expect(box!.y + box!.height).toBeLessThanOrEqual(stage!.y + stage!.height + 1);
+        }
+      } finally { await s.cleanup(); }
+    });
+  }
+});

@@ -5854,8 +5854,13 @@ body.is-mobile .empty-state-action-hint {
   width: 100%;
   min-height: 72px;
   resize: vertical;
+  border: 1px solid var(--background-modifier-border-hover);
+  border-radius: var(--radius-s);
+  background: var(--background-primary);
+  color: var(--text-normal);
   font: inherit;
 }
+.pick-popover-comment[readonly] { opacity: 0.7; }
 .pick-popover-comment:focus-visible,
 .pick-popover-details summary:focus-visible,
 .pick-popover-actions button:focus-visible { outline: 2px solid var(--interactive-accent); outline-offset: 1px; }
