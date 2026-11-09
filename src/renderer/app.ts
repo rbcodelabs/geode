@@ -2967,7 +2967,8 @@ export class App {
 
   constructor(host: HostServices = getHostServices()) {
     this.host = host;
-    this.artifactFeedback = new ArtifactFeedbackService({ enabled: host.capabilities.artifacts });
+    // Tolerant of minimal test hosts without a capabilities table; real hosts always declare `artifacts`.
+    this.artifactFeedback = new ArtifactFeedbackService({ enabled: host.capabilities?.artifacts !== false });
     this.propertyTypes.onError(() => this.notify("Could not save property types. Check the assignment and try again."));
     this.dailyNotes = new DailyNotesService(host.config);
     this.templates = new TemplatesService(host.config);
