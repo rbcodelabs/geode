@@ -235,3 +235,14 @@ describe("disposal", () => {
     expect(h.submit).not.toHaveBeenCalled();
   });
 });
+
+describe("describeHandler (popover copy)", () => {
+  it("names the handler that would receive a submission, or null when none would", () => {
+    const svc = new ArtifactFeedbackService();
+    expect(svc.describeHandler(target)).toBeNull();
+    svc.register(ownerA, handler({ canHandle: () => false }));
+    expect(svc.describeHandler(target)).toBeNull();
+    svc.register(ownerB, handler());
+    expect(svc.describeHandler(target)).toBe("Plugin B");
+  });
+});

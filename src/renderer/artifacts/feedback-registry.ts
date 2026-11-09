@@ -108,6 +108,11 @@ export class ArtifactFeedbackService implements ArtifactFeedbackRegistry {
     return this.resolve(target) !== null;
   }
 
+  /** Display name of the plugin that would receive a submission for this target (popover copy), or null. */
+  describeHandler(target: ArtifactFeedbackTarget): string | null {
+    return this.resolve(target)?.owner.displayName ?? null;
+  }
+
   onDidChange(listener: () => void): () => void {
     this.listeners.add(listener);
     return () => { this.listeners.delete(listener); };
