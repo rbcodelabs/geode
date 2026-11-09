@@ -1,7 +1,7 @@
 import path from "node:path";
 import { promises as fs } from "node:fs";
 
-export type ArtifactPathErrorCode = "invalid_root" | "outside_root" | "missing_entry" | "entry_not_file";
+export type ArtifactPathErrorCode = "invalid_root" | "outside_root" | "reserved_path" | "missing_entry" | "entry_not_file";
 
 export class ArtifactPathError extends Error {
   constructor(readonly code: ArtifactPathErrorCode, message: string) {
