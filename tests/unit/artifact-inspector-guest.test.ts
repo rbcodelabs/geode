@@ -8,6 +8,9 @@ import {
 import { startInspector } from "../../src/main/artifact-inspector-guest";
 import { boot, trusted, type GuestHarness } from "../helpers/inspector-guest-harness";
 
+// jsdom builds and heavy-DOM walks are slow on shared CI runners (macOS timed out the default 5 s once).
+vi.setConfig({ testTimeout: 30_000 });
+
 const PAGE = `<body>
   <main>
     <h2>Pricing</h2>
@@ -362,23 +365,27 @@ describe("outerHTML sanitization", () => {
     h.deliver(INSPECT_CHANNEL.mode, modePick);
     const started = Date.now();
     const msg = selectOn(h, big);
-    expect(Date.now() - started).toBeLessThan(3000);
+    expect(Date.now() - started).toBeLessThan(10_000); // generous: slow CI runners
     expect(msg.outerHTML.truncated).toBe(true);
     expect(msg.outerHTML.html.length).toBeLessThanOrEqual(4096);
     expect(visits).toBeLessThan(5000);
-  });
+  }, 30_000);
 
   it("survives absurd nesting without recursion", () => {
-    let nested = "<i>leaf</i>";
-    for (let i = 0; i < 4000; i++) nested = `<span>${nested}</span>`;
+    // Built with createElement/appendChild: parsing a 4000-deep innerHTML string is what made this slow on CI runners.
+    // 4000 is still far above the walker's 600-node budget, so a recursive or unbounded walk would blow up.
+    const DEPTH = 4000;
+    expect(DEPTH).toBeGreaterThan(INSPECTOR_CAPS.walkerNodes * 4);
     const h = boot(`<body></body>`, { start: false });
-    h.doc.body.innerHTML = nested;
+    let parent: Element = h.doc.body;
+    for (let i = 0; i < DEPTH; i++) { const span = h.doc.createElement("span"); parent.appendChild(span); parent = span; }
+    parent.appendChild(h.doc.createElement("i")).textContent = "leaf";
     h.start();
     h.deliver(INSPECT_CHANNEL.mode, modePick);
     const msg = selectOn(h, h.doc.body.firstElementChild!);
     expect(msg.outerHTML.html.length).toBeLessThanOrEqual(4096);
     expect(msg.outerHTML.truncated).toBe(true);
-  });
+  }, 30_000);
 
   it("stops on the time budget", () => {
     let clock = 0;
@@ -642,19 +649,19 @@ describe("bounded work and click provenance (review A1, A2)", () => {
     const h = pick(`<body><div id="v" style="${hostile}">x</div></body>`);
     const started = Date.now();
     const payload = selectOn(h, $(h, "#v")) as { outerHTML: { html: string } };
-    expect(Date.now() - started).toBeLessThan(500);
+    expect(Date.now() - started).toBeLessThan(5000); // unbounded took ~26 s; a loaded CI runner needs headroom
     expect(payload.outerHTML.html.length).toBeLessThanOrEqual(INSPECTOR_CAPS.outerHtmlUnits);
-  }, 5000);
+  }, 30_000);
 
   it("selects an element holding one huge text node (and collects its text anchor) in milliseconds", () => {
     const h = pick(`<body><p id="t"></p></body>`);
     $(h, "#t").appendChild(h.doc.createTextNode(`${"lorem ipsum   ".repeat(500_000)}end`));
     const started = Date.now();
     const payload = selectOn(h, $(h, "#t")) as { textAnchor: { text: string }; outerHTML: { html: string } };
-    expect(Date.now() - started).toBeLessThan(500);
+    expect(Date.now() - started).toBeLessThan(5000);
     expect(payload.textAnchor.text.length).toBeLessThanOrEqual(INSPECTOR_CAPS.textAnchorUnits);
     expect(payload.outerHTML.html.length).toBeLessThanOrEqual(INSPECTOR_CAPS.outerHtmlUnits);
-  }, 5000);
+  }, 30_000);
 
   it("a keyboard-activated click (detail 0, coordinates 0,0) selects its target, not whatever sits at (0,0)", () => {
     const h = pick();

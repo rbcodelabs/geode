@@ -25,6 +25,8 @@ describe("isReservedArtifactPath (layer 1, lexical)", () => {
     ["encoded traversal back into it", "sub/%2e%2e/.threads-design/x"],
     ["backslash separator", ".threads-design\\selections\\x.json"],
     ["leading backslash", "\\.threads-design\\x"],
+    ["NTFS alternate data stream of the directory", ".threads-design::$INDEX_ALLOCATION/x"],
+    ["NTFS named stream", ".threads-design:stream"],
     ["long s folding (U+017F)", ".threadſ-design/x"],
     ["fullwidth full stop", "．threads-design/x"],
     ["trailing dot", ".threads-design./x"],

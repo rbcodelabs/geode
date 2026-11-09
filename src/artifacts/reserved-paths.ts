@@ -18,6 +18,10 @@ function foldName(segment: string): string {
   // Trailing dots and spaces are dropped by Windows-style name resolution; repeat once because
   // case mapping can expose new ones.
   folded = folded.replace(TRAILING_DOTS_AND_SPACES, "");
+  // NTFS stream syntax: `name::$INDEX_ALLOCATION` and `name:stream` open the directory or file itself on Windows.
+  // A colon never belongs in a real artifact path segment, so compare only the part before it (a 404 on over-match).
+  const colon = folded.indexOf(":");
+  if (colon >= 0) folded = folded.slice(0, colon).replace(TRAILING_DOTS_AND_SPACES, "");
   return folded;
 }
 

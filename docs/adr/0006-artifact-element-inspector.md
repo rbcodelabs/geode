@@ -826,3 +826,17 @@ the thread to see whether your comment arrived." (`source: "disposed"`, reason `
 The plain "no longer available, so this comment cannot be sent" wording remains only for a popover that was never
 submitted (idle) or when no handler matched. A plugin-provided message for the disposed case is not possible: the handler
 is already gone when Geode settles the call, so Geode must word it itself.
+
+**CI findings (Windows and macOS).**
+- The reserved-dir fake-fs tests keyed their fake paths with POSIX strings while the module normalises with `node:path`, so
+  they failed on `windows-latest`; they now build every key with `path.join`/`path.resolve`.
+- Windows review of the module: `isInside` uses `path.relative` (case-insensitive on win32), the lexical layer already treats
+  `\` as a separator, and `fs.promises.realpath` is the native implementation, so 8.3 short names (for example
+  `.THREAD~1`) expand to the long name and also share the directory's file index (inode layer). `ino` of 0 skips the inode
+  layer. One real gap fixed: NTFS stream syntax (`.threads-design::$INDEX_ALLOCATION`, `.threads-design:stream`) now matches
+  in layer 1 (the part before the first colon is compared). Still unverified on a real Windows volume beyond the unit suite
+  (junctions and ReFS identities).
+- The case-insensitive-filesystem test (inode layer alone) ran and passed on the macOS CI runner (3 skipped there against 4 on
+  Linux), which is macOS verification of that layer.
+- Heavy-DOM guest tests (50k nodes, 4000-deep nesting, 720k-character style) use explicit 30 s timeouts and build nesting with
+  `createElement`; the macOS runner timed out the default 5 s once.

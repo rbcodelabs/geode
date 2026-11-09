@@ -10,6 +10,8 @@ import {
 } from "../../src/renderer/artifacts/pick-popover";
 import type { SelectionSnapshot } from "../../src/renderer/views/artifact-inspector-bridge";
 
+vi.setConfig({ testTimeout: 30_000 }); // a fresh JSDOM per test is slow on shared CI runners
+
 const selection = (over: Record<string, unknown> = {}) => ({
   schemaVersion: 1, selectionId: "sel_" + "a".repeat(32), artifactId: "demo", artifactRevision: 1, viewSessionId: "reg",
   viewportPreset: "fill", capturedAt: "2026-11-08T00:00:00.000Z", redacted: false, route: "/index.html", tag: "button",
