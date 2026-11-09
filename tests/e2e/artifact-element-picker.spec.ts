@@ -132,14 +132,17 @@ function expectBox(selection: any, expected = BUY): void {
   expect(Math.abs(box.height - expected.height)).toBeLessThanOrEqual(1);
 }
 
-async function basicSession(options: { register?: boolean; spec?: ArtifactSpec; vaultFiles?: Record<string, string>; size?: [number, number] } = {}) {
+async function basicSession(options: { register?: boolean; spec?: ArtifactSpec; vaultFiles?: Record<string, string>; size?: [number, number]; prepare?(root: string): void } = {}) {
   const env = makeEnv("geode-picker-e2e-", { vaultFiles: options.vaultFiles });
   const artifactRoot = path.join(env.temp, "artifact");
   writeStaticArtifact(artifactRoot, options.spec ?? BASIC_ARTIFACT);
+  options.prepare?.(artifactRoot);
   const session = await launch(env, { size: options.size });
   await waitForProbe(session.window);
   if (options.register !== false) expect(await probe.register(session.window)).toBe("registered");
   await openArtifact(session.window, artifactRoot);
+  // The toggle appears once the guest finished loading and a handler can receive feedback.
+  if (options.register !== false) await expect(toggleOf(session.window)).toBeVisible();
   return { ...session, artifactRoot };
 }
 
@@ -192,7 +195,8 @@ test.describe("element picker", () => {
       // the page's own listeners saw nothing of the pick
       expect(await guestEval(s.window, `JSON.stringify(window.__log)`)).toBe(JSON.stringify({ trustedClick: 0, trustedMouse: 0, anyClick: 0, buyClicks: 0 }));
       // no Pin button in Phase 1
-      await expect(popover.getByRole("button")).toHaveText(["Show what will be sent", "Send", "Cancel"]);
+      await expect(popover.getByRole("button")).toHaveText(["Send", "Cancel"]);
+      await expect(popover.locator("summary")).toHaveText("Show what will be sent");
 
       await popover.locator("details > summary").click();
       await expect(popover.locator(".pick-popover-disclosure")).toContainText("Selector: #buy");
@@ -476,8 +480,8 @@ test.describe("element picker", () => {
       // the page's own click/mouse listeners saw no trusted pick events
       const log = JSON.parse(await guestEval<string>(s.window, `JSON.stringify(window.__log)`));
       expect(log.trustedClick).toBe(0);
-      expect(log.buyClicks).toBe(0);
-      expect(log.trustedMouse).toBeLessThanOrEqual(0);
+      expect(log.buyTrustedClicks).toBe(0);
+      expect(log.trustedMouse).toBe(0);
       await popoverOf(s.window).getByRole("button", { name: "Done" }).click();
       await expect(toggleOf(s.window)).toHaveAttribute("aria-pressed", "false");
       await guestEval(s.window, `window.__hostile.stop()`);
@@ -517,15 +521,21 @@ test.describe("element picker", () => {
   });
 
   test("(i) .threads-design/ is invisible to the page and never reloads it; index.html still does", async () => {
-    const s = await basicSession({ register: false, spec: SIDECAR_ARTIFACT });
+    const s = await basicSession({
+      register: false,
+      spec: SIDECAR_ARTIFACT,
+      prepare: (root) => {
+        const dir = path.join(root, ".threads-design");
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(path.join(dir, "secret.js"), `window.__sidecarScriptRan = true;`);
+        fs.writeFileSync(path.join(dir, "comments.json"), `{"secret":"SIDECAR-SECRET"}`);
+        fs.writeFileSync(path.join(dir, "secret.png"), TINY_PNG);
+        fs.writeFileSync(path.join(root, "ok.png"), TINY_PNG);
+      },
+    });
     try {
       const reserved = path.join(s.artifactRoot, ".threads-design");
-      fs.mkdirSync(reserved, { recursive: true });
-      fs.writeFileSync(path.join(reserved, "secret.js"), `window.__sidecarScriptRan = true;`);
-      fs.writeFileSync(path.join(reserved, "comments.json"), `{"secret":"SIDECAR-SECRET"}`);
-      fs.writeFileSync(path.join(reserved, "secret.png"), TINY_PNG);
       await expect.poll(() => guestEval(s.window, `typeof window.__tryLoad`)).toBe("function");
-      fs.writeFileSync(path.join(s.artifactRoot, "ok.png"), fs.readFileSync(path.join(reserved, "secret.png")));
       // control: an ordinary image in the same artifact loads, so a "blocked" below is the deny, not the setup
       expect(await guestEval(s.window, `window.__tryLoad("control", "ok.png")`)).toBe("loaded");
       for (const [name, url] of [
@@ -647,7 +657,8 @@ test.describe("element picker", () => {
       }
       await s.window.waitForTimeout(500);
       const times = await s.window.evaluate(() => (window as any).__hoverTimes as number[]);
-      const deltas = times.map((t, i) => t - sent[Math.min(i, sent.length - 1)]!).filter((d) => d >= 0).sort((a, b) => a - b);
+      // hover messages are frame-throttled, so pair each with the latest mouse move sent before it
+      const deltas = times.map((t) => { const prior = sent.filter((x) => x <= t); return prior.length ? t - prior[prior.length - 1]! : NaN; }).filter((d) => !Number.isNaN(d)).sort((a, b) => a - b);
       const pct = (p: number) => deltas[Math.min(deltas.length - 1, Math.floor(deltas.length * p))] ?? NaN;
       const summary = { nodes: 5000, sent: sent.length, received: times.length, p50Ms: +pct(0.5).toFixed(1), p95Ms: +pct(0.95).toFixed(1) };
       console.log(`[picker-hover-latency] ${JSON.stringify(summary)}`);

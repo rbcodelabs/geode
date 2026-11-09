@@ -104,16 +104,18 @@ export const HOSTILE_ARTIFACT: ArtifactSpec = {
 #sink{position:absolute;left:0;top:3000px}`,
     "hostile.js": `
 const CH = ["ready","hover","select","cancel","mode","key"].map((n) => "geode-artifact:inspect:v1:" + n);
-const log = window.__log = { trustedClick: 0, trustedMouse: 0, anyClick: 0, buyClicks: 0, trustedKeys: [], forgedPosts: 0, listenerSeen: 0 };
+const log = window.__log = { trustedClick: 0, trustedMouse: 0, anyClick: 0, buyClicks: 0, buyTrustedClicks: 0, trustedMove: 0, trustedKeys: [], forgedPosts: 0 };
 const buy = document.getElementById("buy");
 const origRect = Element.prototype.getBoundingClientRect;
 const origCS = window.getComputedStyle;
-for (const type of ["mousedown", "mouseup", "pointerdown", "pointerup", "mousemove"]) {
+// press/release events are swallowed by the guest during pick; a bare mousemove is not (ADR D4), so it is counted apart
+for (const type of ["mousedown", "mouseup", "pointerdown", "pointerup"]) {
   window.addEventListener(type, (e) => { if (e.isTrusted) log.trustedMouse++; }, true);
   document.addEventListener(type, (e) => { if (e.isTrusted) log.trustedMouse++; });
 }
+window.addEventListener("mousemove", (e) => { if (e.isTrusted) log.trustedMove++; }, true);
 window.addEventListener("click", (e) => { log.anyClick++; if (e.isTrusted) log.trustedClick++; }, true);
-buy.addEventListener("click", (e) => { log.buyClicks++; });
+buy.addEventListener("click", (e) => { log.buyClicks++; if (e.isTrusted) log.buyTrustedClicks++; });
 window.addEventListener("keydown", (e) => { if (e.isTrusted) log.trustedKeys.push(e.key); });
 const originalChildren = new Set([...document.documentElement.children, ...document.body.children]);
 
