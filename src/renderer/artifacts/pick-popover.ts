@@ -1,4 +1,5 @@
 import type { Rect } from "../../artifacts/feedback-contract";
+import { setIcon } from "../api/icons";
 import { INSPECTOR_SCREENSHOT } from "../../artifacts/inspector-protocol";
 import type { PickState } from "./pick-controller";
 import type { SelectionSnapshot } from "../views/artifact-inspector-bridge";
@@ -11,6 +12,13 @@ import type { SelectionSnapshot } from "../views/artifact-inspector-bridge";
 
 const COMMENT_MAX_UNITS = 4000;
 const STALE_NOTE = "The page reloaded; this selection may be out of date.";
+const STATUS_ICONS: Record<string, string | null> = {
+  idle: null,
+  pending: "loader-circle",
+  accepted: "circle-check",
+  rejected: "circle-alert",
+  gone: "circle-alert",
+};
 const GAP = 8;
 const MARGIN = 8;
 let nextId = 0;
@@ -34,11 +42,14 @@ export function popoverPosition(
 ): { left: number; top: number; placement: "below" | "above" | "overlay" } {
   const maxLeft = bounds.width - MARGIN - size.width;
   const left = Math.max(MARGIN, Math.min(anchor.x, maxLeft));
+  const maxTop = Math.max(MARGIN, bounds.height - MARGIN - size.height);
   const below = anchor.y + anchor.height + GAP;
   if (below + size.height <= bounds.height - MARGIN) return { left, top: Math.max(MARGIN, below), placement: "below" };
   const above = anchor.y - GAP - size.height;
-  if (above >= MARGIN) return { left, top: above, placement: "above" };
-  return { left, top: Math.max(MARGIN, bounds.height - MARGIN - size.height), placement: "overlay" };
+  // The flipped position must itself be inside the stage: an element scrolled far below would otherwise put the
+  // popover (and its focused textarea) out of the visible area.
+  if (above >= MARGIN && above + size.height <= bounds.height - MARGIN) return { left, top: above, placement: "above" };
+  return { left, top: maxTop, placement: "overlay" };
 }
 
 /** The status line: what is happening, and whether it needs the assertive `alert` role. */
@@ -102,6 +113,8 @@ export class PickPopover {
   private readonly area: HTMLTextAreaElement;
   private readonly disclosure: HTMLPreElement;
   private readonly status: HTMLElement;
+  private readonly statusIcon: HTMLElement;
+  private readonly statusLine: HTMLElement;
   private readonly send: HTMLButtonElement;
   private readonly cancel: HTMLButtonElement;
   private readonly done: HTMLButtonElement;
@@ -134,7 +147,11 @@ export class PickPopover {
     details.append(summary, this.disclosure);
 
     this.status = make("div", "pick-popover-status");
-    this.status.setAttribute("aria-live", "polite");
+    // The icon sits beside the live region, not inside it, so a screen reader announces the text only.
+    this.statusLine = make("div", "pick-popover-statusline");
+    this.statusIcon = make("span", "pick-popover-status-icon");
+    this.statusIcon.setAttribute("aria-hidden", "true");
+    this.statusLine.append(this.statusIcon, this.status);
 
     const actions = make("div", "pick-popover-actions");
     this.cancel = make("button", "pick-popover-cancel");
@@ -148,7 +165,7 @@ export class PickPopover {
     // DOM order is tab order (primary first); CSS lays the row out reversed.
     actions.append(this.send, this.cancel, this.done);
 
-    this.el.append(this.heading, this.target, this.area, details, this.status, actions);
+    this.el.append(this.heading, this.target, this.area, details, this.statusLine, actions);
 
     this.area.addEventListener("input", () => {
       this.renderedComment = this.area.value;
@@ -163,6 +180,8 @@ export class PickPopover {
     // Esc anywhere in the popover is the user's, not the page's.
     this.el.addEventListener("keydown", (event) => {
       if (event.key !== "Escape") return;
+      // Esc while an IME composition is open dismisses the candidate window, not the comment.
+      if (event.isComposing || event.keyCode === 229) return;
       event.preventDefault();
       event.stopPropagation();
       this.callbacks.onEscape();
@@ -190,7 +209,21 @@ export class PickPopover {
 
     const status = popoverStatus(state, displayName);
     this.status.textContent = status.text;
+    // One politeness: an alert is assertive by role; everything else is a polite status. Never both.
     this.status.setAttribute("role", status.alert ? "alert" : "status");
+    if (status.alert) this.status.removeAttribute("aria-live");
+    else this.status.setAttribute("aria-live", "polite");
+    const kind = status.alert ? "rejected" : state.submit === "pending" ? "pending" : state.submit === "accepted" ? "accepted" : state.handlerGone ? "gone" : "idle";
+    this.status.dataset.state = kind;
+    this.status.classList.toggle("is-error", status.alert);
+    this.statusLine.classList.toggle("is-error", status.alert);
+    this.statusLine.dataset.state = kind;
+    const icon = STATUS_ICONS[kind];
+    if (this.statusIcon.dataset.icon !== (icon ?? "")) {
+      this.statusIcon.dataset.icon = icon ?? "";
+      if (icon) setIcon(this.statusIcon, icon);
+      else this.statusIcon.replaceChildren();
+    }
 
     this.send.hidden = accepted;
     this.cancel.hidden = accepted;

@@ -5787,7 +5787,21 @@ body.is-mobile .empty-state-action-hint {
 .artifact-view-diagnostic.is-warning { color: var(--text-warning); }
 
 /* Element picker (ADR 0006 D8): toggle, hover readout, and the non-modal comment popover. */
-.artifact-view { position: relative; }
+.artifact-view { position: relative; container: artifact-view / inline-size; }
+/* The stage and the picker overlay share one relative box, so the overlay is exactly the stage. */
+.artifact-view-body { position: relative; display: flex; flex: 1 1 auto; min-width: 0; min-height: 0; }
+/* Fixed toolbar items never wrap or shrink; the status text, hover chip and sent chip give way instead. */
+.artifact-view-toolbar { overflow: hidden; }
+.artifact-view-toolbar > * { flex-shrink: 0; }
+.artifact-view-diagnostics-btn { white-space: nowrap; }
+.artifact-view-toolbar > .artifact-view-status { flex: 1 1 0; min-width: 0; }
+.artifact-view-toolbar > .artifact-view-hover { flex: 0 1 auto; min-width: 0; max-width: 40%; }
+.artifact-view-toolbar > .artifact-view-sent { flex: 0 1 auto; min-width: 0; max-width: 45%; }
+@container artifact-view (max-width: 700px) {
+  /* The hint would be clipped here: hide it while picking so the hover chip has the room. */
+  .artifact-view.is-picking .artifact-view-toolbar > .artifact-view-status { display: none; }
+  .artifact-view-toolbar > .artifact-view-hover { flex: 1 1 0; max-width: none; }
+}
 .artifact-view-pick-btn[hidden] { display: none; }
 .artifact-view-pick-btn[aria-pressed="true"] {
   color: var(--text-on-accent);
@@ -5877,8 +5891,55 @@ body.is-mobile .empty-state-action-hint {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-.pick-popover-status { min-height: 1.2em; color: var(--text-muted); font-size: var(--font-ui-smaller); }
-.pick-popover-status[role="alert"] { color: var(--text-error); }
+/* Contrast-checked pairs (>= 4.5:1 on the popover background) so error and success never rely on the theme's
+   fallback red: light #b3261e / #1b6e3c on white, dark #ff8a80 / #7fd49a on #1e1e1e. */
+.pick-popover { --pick-error: #b3261e; --pick-success: #1b6e3c; }
+.theme-dark .pick-popover { --pick-error: #ff8a80; --pick-success: #7fd49a; }
+.pick-popover-statusline {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  min-height: 1.2em;
+  padding-left: 6px;
+  border-left: 3px solid transparent;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+.pick-popover-statusline[data-state="accepted"] { color: var(--pick-success); border-left-color: var(--pick-success); }
+.pick-popover-statusline.is-error { color: var(--pick-error); border-left-color: var(--pick-error); }
+.pick-popover-status { min-width: 0; color: inherit; overflow-wrap: anywhere; }
+.pick-popover-status-icon { display: inline-flex; flex: 0 0 auto; }
+.pick-popover-status-icon:empty { display: none; }
+.pick-popover-status-icon svg { width: 14px; height: 14px; }
+.pick-popover-statusline[data-state="pending"] .pick-popover-status-icon svg { animation: pick-popover-spin 1s linear infinite; }
+@keyframes pick-popover-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .pick-popover-statusline[data-state="pending"] .pick-popover-status-icon svg { animation: none; } }
+/* Marks the selected element while the popover is open; the page itself cannot be clicked through it. */
+.artifact-view-selection-box {
+  position: absolute;
+  box-sizing: border-box;
+  border: 2px solid var(--interactive-accent);
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--interactive-accent) 12%, transparent);
+  pointer-events: none;
+}
+.artifact-view-selection-box[hidden] { display: none; }
+.artifact-view-sent {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  overflow: hidden;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--background-secondary);
+  color: var(--text-normal);
+  font-size: var(--font-ui-smaller);
+  white-space: nowrap;
+}
+.artifact-view-sent[hidden] { display: none; }
+.artifact-view-sent > span:last-child { overflow: hidden; text-overflow: ellipsis; }
+.artifact-view-sent-icon { display: inline-flex; color: var(--color-green); }
+.artifact-view-sent-icon svg { width: 14px; height: 14px; }
 .pick-popover-actions { display: flex; flex-direction: row-reverse; justify-content: flex-start; gap: 8px; }
 .pick-popover-actions button[hidden] { display: none; }
 

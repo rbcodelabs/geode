@@ -63,6 +63,10 @@ export class ArtifactView implements View, ReloadableView {
   private readonly pickButton = document.createElement("button");
   private readonly hoverEl = document.createElement("span");
   private readonly overlayEl = document.createElement("div");
+  private readonly bodyEl = document.createElement("div");
+  private readonly selectionBoxEl = document.createElement("div");
+  private readonly sentChipEl = document.createElement("span");
+  private lastPickPhase: PickState["phase"] = "off";
   private bridge: ArtifactInspectorBridge | null = null;
   private pick: PickController | null = null;
   private popover: PickPopover | null = null;
@@ -131,12 +135,20 @@ export class ArtifactView implements View, ReloadableView {
     this.vaultBadgeEl.hidden = true;
     this.hoverEl.className = "artifact-view-hover";
     this.hoverEl.hidden = true;
-    toolbar.append(this.vaultBadgeEl, this.statusEl, this.hoverEl);
+    this.sentChipEl.className = "artifact-view-sent";
+    this.sentChipEl.hidden = true;
+    toolbar.append(this.vaultBadgeEl, this.statusEl, this.hoverEl, this.sentChipEl);
     this.stageEl.className = "artifact-view-stage";
     this.diagnosticsEl.className = "artifact-view-diagnostics";
     this.diagnosticsEl.hidden = true;
+    // The overlay covers exactly the stage (it is a sibling inside the same relative body), so the popover and the
+    // selection box are stage-relative and clipped to it.
+    this.bodyEl.className = "artifact-view-body";
     this.overlayEl.className = "artifact-view-overlay";
-    this.containerEl.append(toolbar, this.stageEl, this.diagnosticsEl, this.overlayEl);
+    this.selectionBoxEl.className = "artifact-view-selection-box";
+    this.selectionBoxEl.hidden = true;
+    this.bodyEl.append(this.stageEl, this.overlayEl);
+    this.containerEl.append(toolbar, this.bodyEl, this.diagnosticsEl);
     this.containerEl.addEventListener("keydown", (event) => this.onContainerKeydown(event));
   }
 
@@ -308,7 +320,7 @@ export class ArtifactView implements View, ReloadableView {
 
   private attachInspector(frame: ArtifactWebview, registration: ArtifactRegistration): void {
     const target = artifactFeedbackTarget(registration, this.root);
-    const registry = this.app.artifactFeedback;
+    const registry = this.app.artifactFeedbackService;
     this.pickTarget = target;
     this.guestLoaded = false;
     this.guestLoadFailed = false;
@@ -339,7 +351,7 @@ export class ArtifactView implements View, ReloadableView {
       onEscape: () => { controller.escape(); },
     });
     popover.el.hidden = true;
-    this.overlayEl.replaceChildren(popover.el);
+    this.overlayEl.replaceChildren(this.selectionBoxEl, popover.el);
     this.bridge = bridge;
     this.pick = controller;
     this.popover = popover;
@@ -361,6 +373,9 @@ export class ArtifactView implements View, ReloadableView {
     this.guestLoaded = false;
     this.guestLoadFailed = false;
     this.overlayEl.replaceChildren();
+    this.selectionBoxEl.hidden = true;
+    this.sentChipEl.hidden = true;
+    this.lastPickPhase = "off";
     this.pickButton.hidden = true;
     this.pickButton.setAttribute("aria-pressed", "false");
     this.pickButton.classList.remove("is-active");
@@ -372,8 +387,8 @@ export class ArtifactView implements View, ReloadableView {
   private updatePickAvailability(): void {
     const target = this.pickTarget;
     const available = !!target && !!this.webview && this.guestLoaded && !this.guestLoadFailed
-      && isPickAvailable(this.registration, this.app.artifactFeedback, target);
-    if (target) this.handlerName = this.app.artifactFeedback.describeHandler(target) ?? this.handlerName;
+      && isPickAvailable(this.registration, this.app.artifactFeedbackService, target);
+    if (target) this.handlerName = this.app.artifactFeedbackService.describeHandler(target) ?? this.handlerName;
     this.pickButton.hidden = !available;
     this.pick?.setAvailable(available);
   }
@@ -400,13 +415,36 @@ export class ArtifactView implements View, ReloadableView {
     if (state.phase === "pick") this.statusEl.textContent = PICK_STATUS;
     else if (state.phase === "off" && this.statusEl.textContent === PICK_STATUS) this.statusEl.textContent = this.viewportStatus();
     if (state.phase !== "pick") { this.hoverEl.hidden = true; this.hoverEl.textContent = ""; }
+    // A comment that was taken leaves a short, persistent confirmation until the next pick (no pins in Phase 1).
+    if (state.phase === "pick" && this.lastPickPhase === "off") this.sentChipEl.hidden = true;
+    if (state.phase === "off" && this.lastPickPhase === "popover" && this.lastSubmit === "accepted") this.showSentChip();
+    this.lastPickPhase = state.phase;
+    this.lastSubmit = state.submit;
+    if (state.submit === "accepted") this.lastOutcomeMessage = state.outcome?.message;
     const popover = this.popover;
     if (!popover) return;
     popover.el.hidden = state.phase !== "popover";
+    this.selectionBoxEl.hidden = state.phase !== "popover";
     if (state.phase === "popover") {
       popover.render(state, this.handlerName);
       this.positionPopover(state);
     }
+  }
+
+  private lastSubmit: PickState["submit"] = "idle";
+  private lastOutcomeMessage: string | undefined;
+
+  private showSentChip(): void {
+    const chip = this.sentChipEl;
+    chip.title = `Comment sent to ${this.handlerName}`;
+    const icon = document.createElement("span");
+    icon.className = "artifact-view-sent-icon";
+    icon.setAttribute("aria-hidden", "true");
+    setIcon(icon, "circle-check");
+    const text = document.createElement("span");
+    text.textContent = this.lastOutcomeMessage || "Sent";
+    chip.replaceChildren(icon, text);
+    chip.hidden = false;
   }
 
   /** Below the selected element, flipped above or clamped to the stage; it does not follow scrolling. */
@@ -414,17 +452,23 @@ export class ArtifactView implements View, ReloadableView {
     const popover = this.popover;
     const snapshot = state.snapshot;
     if (!popover || !snapshot || !this.webview) return;
-    const container = this.containerEl.getBoundingClientRect();
     const stage = this.stageEl.getBoundingClientRect();
     const frame = this.webview.getBoundingClientRect();
     const box = snapshot.selection.boundingBox.viewport;
+    const anchor = { x: frame.left - stage.left + box.x, y: frame.top - stage.top + box.y, width: box.width, height: box.height };
+    // The selected element stays visibly marked while the popover is open (the guest's own highlight is hidden
+    // so it cannot appear in the screenshot). Non-interactive, clipped to the stage by the overlay.
+    this.selectionBoxEl.style.left = `${Math.round(anchor.x)}px`;
+    this.selectionBoxEl.style.top = `${Math.round(anchor.y)}px`;
+    this.selectionBoxEl.style.width = `${Math.max(2, Math.round(anchor.width))}px`;
+    this.selectionBoxEl.style.height = `${Math.max(2, Math.round(anchor.height))}px`;
     const placed = popoverPosition(
-      { x: frame.left - stage.left + box.x, y: frame.top - stage.top + box.y, width: box.width, height: box.height },
+      anchor,
       { width: popover.el.offsetWidth, height: popover.el.offsetHeight },
       { width: stage.width, height: stage.height },
     );
-    popover.el.style.left = `${Math.round(stage.left - container.left + placed.left)}px`;
-    popover.el.style.top = `${Math.round(stage.top - container.top + placed.top)}px`;
+    popover.el.style.left = `${Math.round(placed.left)}px`;
+    popover.el.style.top = `${Math.round(placed.top)}px`;
   }
 
   /** Esc and the [ ] walk keys while focus is in the embedder chrome (toolbar, popover). */

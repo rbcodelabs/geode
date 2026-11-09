@@ -67,6 +67,18 @@ describe("popoverPosition", () => {
     const p = popoverPosition({ x: 100, y: -300, width: 80, height: 30 }, size, bounds);
     expect(p.top).toBeGreaterThanOrEqual(8);
   });
+  it("keeps the whole popover inside the stage for an element far below, far above, or off to the left (review A8)", () => {
+    const inside = (p: { left: number; top: number }) => {
+      expect(p.left).toBeGreaterThanOrEqual(8);
+      expect(p.left + size.width).toBeLessThanOrEqual(bounds.width - 8);
+      expect(p.top).toBeGreaterThanOrEqual(8);
+      expect(p.top + size.height).toBeLessThanOrEqual(bounds.height - 8);
+    };
+    inside(popoverPosition({ x: 100, y: 5000, width: 80, height: 30 }, size, bounds));
+    inside(popoverPosition({ x: 100, y: -5000, width: 80, height: 30 }, size, bounds));
+    inside(popoverPosition({ x: -4000, y: 300, width: 80, height: 30 }, size, bounds));
+    inside(popoverPosition({ x: 9000, y: 9000, width: 80, height: 30 }, size, bounds));
+  });
   it("works in a narrow stage that is smaller than the popover", () => {
     const p = popoverPosition({ x: 20, y: 20, width: 40, height: 20 }, size, { width: 300, height: 600 });
     expect(p.left).toBe(8);
@@ -227,6 +239,48 @@ describe("PickPopover states", () => {
     area.value = "abcdef"; // typed, controller not yet told
     render({ comment: "abc" });
     expect(area.value).toBe("abcdef");
+  });
+});
+
+describe("PickPopover input hygiene and status semantics (review A9)", () => {
+  it("ignores Esc while an IME composition is active, so a typed comment is not discarded", () => {
+    const { q, render, callbacks, dom } = mount();
+    render({ comment: "hi" });
+    const area = q<HTMLTextAreaElement>("textarea");
+    area.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Escape", isComposing: true, bubbles: true, cancelable: true }));
+    area.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Escape", keyCode: 229, bubbles: true, cancelable: true }));
+    expect(callbacks.onEscape).not.toHaveBeenCalled();
+    area.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+    expect(callbacks.onEscape).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses one politeness: role=status with aria-live polite normally, role=alert WITHOUT a competing aria-live for a rejection", () => {
+    const { q, render } = mount();
+    render();
+    expect(q(".pick-popover-status").getAttribute("role")).toBe("status");
+    expect(q(".pick-popover-status").getAttribute("aria-live")).toBe("polite");
+    render({ submit: "rejected", comment: "x", outcome: rejected("No.") });
+    expect(q(".pick-popover-status").getAttribute("role")).toBe("alert");
+    expect(q(".pick-popover-status").hasAttribute("aria-live")).toBe(false);
+    render({ submit: "pending", comment: "x" });
+    expect(q(".pick-popover-status").getAttribute("role")).toBe("status");
+    expect(q(".pick-popover-status").getAttribute("aria-live")).toBe("polite");
+  });
+
+  it("makes a rejection look different from pending and accepted: an error class and an icon next to the text", () => {
+    const { q, render, popover } = mount();
+    render({ submit: "pending", comment: "x" });
+    expect(q(".pick-popover-status").classList.contains("is-error")).toBe(false);
+    expect(q(".pick-popover-status").dataset.state).toBe("pending");
+    render({ submit: "rejected", comment: "x", outcome: rejected("The agent is busy.") });
+    expect(q(".pick-popover-status").classList.contains("is-error")).toBe(true);
+    expect(q(".pick-popover-status").dataset.state).toBe("rejected");
+    expect(q(".pick-popover-statusline .pick-popover-status-icon svg")).not.toBeNull();
+    expect(q(".pick-popover-status").textContent).toBe("The agent is busy.");
+    render({ submit: "accepted", comment: "x", outcome: { status: "accepted", source: "handler" } });
+    expect(q(".pick-popover-status").classList.contains("is-error")).toBe(false);
+    expect(q(".pick-popover-status").dataset.state).toBe("accepted");
+    expect(popover.el.querySelector(".pick-popover-status-icon svg")).not.toBeNull();
   });
 });
 

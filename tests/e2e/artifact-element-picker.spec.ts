@@ -96,6 +96,17 @@ const statusOf = (window: Page): Locator => window.locator(".pick-popover-status
 const activeIs = (window: Page, selector: string) =>
   window.evaluate((s) => document.activeElement?.matches(s) === true, selector);
 
+/** WCAG contrast of an element's text colour against the popover's own (opaque) background. */
+const contrastOf = (window: Page, selector: string): Promise<number> => window.evaluate((sel) => {
+  const rgb = (css: string) => { const m = css.match(/[\d.]+/g)!.map(Number); return [m[0]!, m[1]!, m[2]!]; };
+  const lin = (c: number) => { const v = c / 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; };
+  const lum = ([r, g, b]: number[]) => 0.2126 * lin(r!) + 0.7152 * lin(g!) + 0.0722 * lin(b!);
+  const fg = rgb(getComputedStyle(document.querySelector(sel)!).color);
+  const bg = rgb(getComputedStyle(document.querySelector(".pick-popover")!).backgroundColor);
+  const [hi, lo] = [lum(fg), lum(bg)].sort((a, b) => b - a);
+  return (hi! + 0.05) / (lo! + 0.05);
+}, selector);
+
 /** Highlight-sensitive region around #buy (padding so the outline is inside). */
 const BUY_REGION = { x: BUY.x - 12, y: BUY.y - 12, width: BUY.width + 24, height: BUY.height + 24 };
 
@@ -154,6 +165,8 @@ test.describe("element picker", () => {
     try {
       await expect(frameOf(s.window)).toBeVisible();
       await expect(toggleOf(s.window)).toBeHidden(); // no handler registered
+      // plugins see a read-only view: no register or submit through app.artifactFeedback (review A7)
+      expect(await s.window.evaluate(() => Object.keys((window as any).app.artifactFeedback).sort())).toEqual(["contractVersions", "has", "onDidChange"]);
       expect(await probe.register(s.window)).toBe("registered");
       await expect(toggleOf(s.window)).toBeVisible();
       await expect(toggleOf(s.window)).toHaveAttribute("aria-label", "Pick element to comment");
@@ -209,6 +222,14 @@ test.describe("element picker", () => {
       expect(requests).toHaveLength(1);
       const [r] = requests;
       expect(r.comment).toBe("Make this button larger and use our brand green.");
+      // the selected element stays visibly marked while the popover is open (non-interactive embedder overlay)
+      const marker = await s.window.locator(".artifact-view-selection-box").boundingBox();
+      const frameBox = (await frameOf(s.window).boundingBox())!;
+      expect(marker).not.toBeNull();
+      expect(Math.abs(marker!.x - (frameBox.x + BUY.x))).toBeLessThanOrEqual(2);
+      expect(Math.abs(marker!.y - (frameBox.y + BUY.y))).toBeLessThanOrEqual(2);
+      expect(Math.abs(marker!.width - BUY.width)).toBeLessThanOrEqual(2);
+      await expect(s.window.locator(".artifact-view-selection-box")).toHaveCSS("pointer-events", "none");
       expect(r.stale).toBe(false);
       expect(r.frozen).toBe(true);
       expect(r.artifact).toEqual({ root: s.artifactRoot, artifactId: "picker-basic", title: "Pricing page", runtime: "static", vaultRead: false });
@@ -236,6 +257,38 @@ test.describe("element picker", () => {
       await popoverOf(s.window).getByRole("button", { name: "Done" }).click();
       await expect(popoverOf(s.window)).toBeHidden();
       await expect(toggleOf(s.window)).toHaveAttribute("aria-pressed", "false");
+      await expect(s.window.locator(".artifact-view-selection-box")).toBeHidden();
+      // a taken comment leaves a persistent confirmation in the toolbar until the next pick
+      const chip = s.window.locator(".artifact-view-sent");
+      await expect(chip).toBeVisible();
+      await expect(chip).toHaveText("Queued for the agent.");
+      await s.window.waitForTimeout(800);
+      await expect(chip).toBeVisible();
+      await toggleOf(s.window).click();
+      await expect(chip).toBeHidden();
+    } finally { await s.cleanup(); }
+  });
+
+  test("(b2) a hover sweep followed at once by a click still selects (a dropped select must not strand the guest)", async () => {
+    const s = await basicSession();
+    try {
+      await toggleOf(s.window).click();
+      await expect(toggleOf(s.window)).toHaveAttribute("aria-pressed", "true");
+      await s.window.evaluate(() => {
+        const frame = (window as any).app.workspace.getLeavesOfType("geode-artifact")[0].view.containerEl.querySelector("webview");
+        (window as any).__hoverCount = 0;
+        frame.addEventListener("ipc-message", (e: any) => { if (e.channel.endsWith(":hover")) (window as any).__hoverCount++; });
+      });
+      // alternate between three elements every ~12 ms for about 900 ms: more than 30 hover messages in a second
+      const points: Array<[number, number]> = [[150, 224], [150, 130], [150, 30]];
+      for (let i = 0; i < 75; i++) {
+        await moveTo(s.app, ...points[i % 3]!);
+        await s.window.waitForTimeout(12);
+      }
+      expect(await s.window.evaluate(() => (window as any).__hoverCount as number)).toBeGreaterThan(30);
+      await clickAt(s.app, BUY_CENTER.x, BUY_CENTER.y);
+      await expect(popoverOf(s.window)).toBeVisible({ timeout: 5_000 });
+      await expect(popoverOf(s.window).getByRole("heading")).toHaveText("Comment on <button>");
     } finally { await s.cleanup(); }
   });
 
@@ -265,7 +318,7 @@ test.describe("element picker", () => {
     try {
       await probe.setMode(s.window, "never");
       // shorten the timeout through the service instance (a plain TS-private field); the 15 s default is unit tested
-      await s.window.evaluate(() => { (window as any).app.artifactFeedback.timeoutMs = 1000; });
+      await s.window.evaluate(() => { (window as any).app.artifactFeedbackService.timeoutMs = 1000; });
       await pickAndSelect(s);
       await popoverOf(s.window).getByRole("textbox").fill("Is anyone there?");
       await popoverOf(s.window).getByRole("button", { name: "Send" }).click();
@@ -679,7 +732,7 @@ test.describe("element picker visual states", () => {
       try {
         await s.window.evaluate(() => {
           const app = (window as any).app;
-          app.artifactFeedback.timeoutMs = 1000;
+          app.artifactFeedbackService.timeoutMs = 1000;
           for (const sidebar of [app.workspace.leftSidebar, app.workspace.rightSidebar]) if (!sidebar.collapsed) sidebar.toggle();
         });
         const view = s.window.locator(".artifact-view");
@@ -706,6 +759,15 @@ test.describe("element picker visual states", () => {
           await shot("toggle-on");
           await moveTo(s.app, 150, BUY_CENTER.y);
           await expect(s.window.locator(".artifact-view-hover")).toContainText("<button>");
+          {
+            const toolbarBox = (await s.window.locator(".artifact-view-toolbar").boundingBox())!;
+            const chip = (await s.window.locator(".artifact-view-hover").boundingBox())!;
+            expect(chip.width).toBeGreaterThan(40);
+            expect(chip.x + chip.width).toBeLessThanOrEqual(toolbarBox.x + toolbarBox.width + 1);
+            const hint = s.window.locator(".artifact-view-toolbar > .artifact-view-status");
+            if (dims[0] < 700) await expect(hint).toBeHidden(); // no clipped hint under ~700 px
+            else expect(await hint.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true); // fits in full above it
+          }
           await shot("highlight");
           await clickAt(s.app, 150, BUY_CENTER.y);
           await expect(popoverOf(s.window)).toBeVisible();
@@ -716,16 +778,30 @@ test.describe("element picker visual states", () => {
           await shot("popover-pending");
           await expect(statusOf(s.window)).toContainText("No response from Design Probe", { timeout: 8_000 });
           await shot("popover-timeout");
+          expect(await contrastOf(s.window, ".pick-popover-status")).toBeGreaterThanOrEqual(4.5);
+          await expect(s.window.locator(".pick-popover-statusline")).toHaveAttribute("data-state", "rejected");
+          await expect(s.window.locator(".pick-popover-statusline .pick-popover-status-icon svg")).toBeVisible();
           await probe.setMode(s.window, "reject");
           await popoverOf(s.window).getByRole("button", { name: "Retry" }).click();
           await expect(statusOf(s.window)).toContainText("still working on an earlier comment");
           await shot("popover-rejected");
+          expect(await contrastOf(s.window, ".pick-popover-status")).toBeGreaterThanOrEqual(4.5);
           await probe.setMode(s.window, "accept");
           await popoverOf(s.window).getByRole("button", { name: "Retry" }).click();
           await expect(statusOf(s.window)).toHaveText("Queued for the agent.");
           await shot("popover-accepted");
+          expect(await contrastOf(s.window, ".pick-popover-status")).toBeGreaterThanOrEqual(4.5);
+          await expect(s.window.locator(".pick-popover-statusline")).toHaveAttribute("data-state", "accepted");
           await popoverOf(s.window).getByRole("button", { name: "Done" }).click();
           await expect(popoverOf(s.window)).toBeHidden();
+          await shot("sent-chip");
+          // toolbar fit: nothing wraps and nothing is cut off, at every width including Geode's 640 px minimum
+          const toolbarBox = (await s.window.locator(".artifact-view-toolbar").boundingBox())!;
+          const diagnostics = (await s.window.locator(".artifact-view-diagnostics-btn").boundingBox())!;
+          expect(diagnostics.height).toBeLessThan(40);
+          expect(diagnostics.x + diagnostics.width).toBeLessThanOrEqual(toolbarBox.x + toolbarBox.width);
+          const sent = (await s.window.locator(".artifact-view-sent").boundingBox())!;
+          expect(sent.x + sent.width).toBeLessThanOrEqual(toolbarBox.x + toolbarBox.width + 1);
         }
         if (size === "desktop") {
           // a fixed viewport preset: the popover is clamped to the stage, not the page
