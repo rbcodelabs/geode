@@ -54,6 +54,9 @@ const ATTRIBUTE_LIMIT = 24;
 const SIBLING_SCAN_LIMIT = 2000;
 const TEXT_NODE_BUDGET = 200;
 const TEXT_CHAR_BUDGET = 400;
+/** Raw page strings are cut to a small multiple of what is kept BEFORE any regex or copy runs (bounded work, review A1). */
+const RAW_ATTRIBUTE_UNITS = INSPECTOR_CAPS.attributeValueUnits * 2;
+const RAW_TEXT_UNITS = 16_384;
 const HIGHLIGHT_COLOR = "#7c3aed";
 
 const IMPLICIT_ROLES: Record<string, string> = {
@@ -149,7 +152,7 @@ export function startInspector(env: InspectorGuestEnv): InspectorGuest | null {
     while (node && visited < TEXT_NODE_BUDGET && out.length < TEXT_CHAR_BUDGET) {
       visited++;
       if (node.nodeType === 3) {
-        out += `${(node as Text).data} `;
+        out += `${(node as Text).data.slice(0, TEXT_CHAR_BUDGET)} `;
       } else if (isElement(node) && !SKIP_TEXT_PARENTS.has(node.localName) && node.firstChild) {
         stack.push(node);
         node = node.firstChild;
@@ -329,7 +332,7 @@ export function startInspector(env: InspectorGuestEnv): InspectorGuest | null {
         const attr = attrs[i]!;
         const name = attr.name.toLowerCase();
         if (!/^[a-z_:][-a-z0-9_:.]*$/.test(name)) continue;
-        let value = attr.value;
+        let value = attr.value.length > RAW_ATTRIBUTE_UNITS ? attr.value.slice(0, RAW_ATTRIBUTE_UNITS) : attr.value;
         if (redact) {
           value = keep.has(name) ? value : "...";
         } else if (name.startsWith("on") || name === "srcdoc") {
@@ -362,7 +365,7 @@ export function startInspector(env: InspectorGuestEnv): InspectorGuest | null {
           }
           if (!emit(closeOf(cur))) break;
         } else if (cur.nodeType === 3 && !redact) {
-          const text = escapeHtml((cur as Text).data.replace(/\s+/g, " "));
+          const text = escapeHtml((cur as Text).data.slice(0, RAW_TEXT_UNITS).replace(/\s+/g, " "));
           if (text.trim() !== "") {
             const room = limit - length;
             if (text.length > room) { if (room > 0) out.push(text.slice(0, room)); length = limit; truncated = true; break; }
@@ -565,7 +568,9 @@ export function startInspector(env: InspectorGuestEnv): InspectorGuest | null {
     event.stopImmediatePropagation();
     if (type === "click" && mode === "pick" && (event as MouseEvent).button === 0) {
       const m = event as MouseEvent;
-      const hit = nativeElementFromPoint ? nativeElementFromPoint(m.clientX, m.clientY) : null;
+      // A keyboard-activated click (Space/Enter on a focused control) has detail 0 and meaningless coordinates:
+      // use its own target instead of whatever sits at (0, 0).
+      const hit = m.detail !== 0 && nativeElementFromPoint ? nativeElementFromPoint(m.clientX, m.clientY) : null;
       const target = hit && isElement(hit) && !isOwnHost(hit) ? hit : isElement(event.target) ? event.target : null;
       beginSelect(target);
     }

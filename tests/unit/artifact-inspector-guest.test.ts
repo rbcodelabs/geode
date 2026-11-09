@@ -635,3 +635,42 @@ describe("natives", () => {
     void trusted;
   });
 });
+
+describe("bounded work and click provenance (review A1, A2)", () => {
+  it("selects an element whose style attribute is 720k characters of unterminated url(data: in milliseconds", () => {
+    const hostile = "url(data:".repeat(80_000); // 720k characters, no closing parenthesis: quadratic for an unbounded regex
+    const h = pick(`<body><div id="v" style="${hostile}">x</div></body>`);
+    const started = Date.now();
+    const payload = selectOn(h, $(h, "#v")) as { outerHTML: { html: string } };
+    expect(Date.now() - started).toBeLessThan(500);
+    expect(payload.outerHTML.html.length).toBeLessThanOrEqual(INSPECTOR_CAPS.outerHtmlUnits);
+  }, 5000);
+
+  it("selects an element holding one huge text node (and collects its text anchor) in milliseconds", () => {
+    const h = pick(`<body><p id="t"></p></body>`);
+    $(h, "#t").appendChild(h.doc.createTextNode(`${"lorem ipsum   ".repeat(500_000)}end`));
+    const started = Date.now();
+    const payload = selectOn(h, $(h, "#t")) as { textAnchor: { text: string }; outerHTML: { html: string } };
+    expect(Date.now() - started).toBeLessThan(500);
+    expect(payload.textAnchor.text.length).toBeLessThanOrEqual(INSPECTOR_CAPS.textAnchorUnits);
+    expect(payload.outerHTML.html.length).toBeLessThanOrEqual(INSPECTOR_CAPS.outerHtmlUnits);
+  }, 5000);
+
+  it("a keyboard-activated click (detail 0, coordinates 0,0) selects its target, not whatever sits at (0,0)", () => {
+    const h = pick();
+    const topLeft = $(h, "h2");
+    const button = $(h, "button");
+    h.pointAt(topLeft); // what elementFromPoint(0, 0) would find
+    h.fire("click", { clientX: 0, clientY: 0, button: 0, detail: 0 }, button);
+    h.flush(3);
+    expect((h.last(INSPECT_CHANNEL.select)?.payload as { tag: string }).tag).toBe("button");
+  });
+
+  it("a real mouse click (detail 1) still selects what is under the pointer", () => {
+    const h = pick();
+    h.pointAt($(h, "h2"));
+    h.fire("click", { clientX: 5, clientY: 5, button: 0, detail: 1 }, $(h, "button"));
+    h.flush(3);
+    expect((h.last(INSPECT_CHANNEL.select)?.payload as { tag: string }).tag).toBe("h2");
+  });
+});
