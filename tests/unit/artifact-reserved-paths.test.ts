@@ -4,7 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ArtifactPathError, resolveArtifactEntry, resolveArtifactFile } from "../../src/main/artifact-paths";
-import { isReservedArtifactPath, isReservedOnDisk } from "../../src/artifacts/reserved-paths";
+import { isReservedArtifactPath } from "../../src/artifacts/reserved-paths";
+import { isReservedOnDisk } from "../../src/main/artifact-reserved-dir";
 
 describe("isReservedArtifactPath (layer 1, lexical)", () => {
   const denied: [string, string][] = [

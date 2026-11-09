@@ -1,5 +1,7 @@
 import path from "node:path";
 import { promises as fs } from "node:fs";
+import { isReservedArtifactPath } from "../artifacts/reserved-paths";
+import { isReservedOnDisk } from "./artifact-reserved-dir";
 
 export type ArtifactPathErrorCode = "invalid_root" | "outside_root" | "reserved_path" | "missing_entry" | "entry_not_file";
 
@@ -38,9 +40,18 @@ export async function resolveArtifactFile(
     throw new ArtifactPathError("invalid_root", "Artifact root does not exist or is not a directory.");
   }
 
+  // Reserved host-owned directory (ADR 0006 D7). Callers turn this into the same 404 as a missing file.
+  if (isReservedArtifactPath(relativePath)) {
+    throw new ArtifactPathError("reserved_path", "Artifact path is reserved.");
+  }
+
   const lexicalEntry = path.resolve(realRoot, relativePath);
   if (!isPathInside(realRoot, lexicalEntry)) {
     throw new ArtifactPathError("outside_root", "Artifact entry resolves outside its root.");
+  }
+
+  if (await isReservedOnDisk(realRoot, lexicalEntry)) {
+    throw new ArtifactPathError("reserved_path", "Artifact path is reserved.");
   }
 
   let realEntry: string;
