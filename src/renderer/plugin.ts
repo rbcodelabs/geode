@@ -260,7 +260,8 @@ export abstract class Plugin extends Component {
    */
   registerArtifactFeedbackHandler(handler: ArtifactFeedbackHandler): ArtifactFeedbackRegistration {
     this.assertHostGeneration();
-    const registry = this.app.artifactFeedback;
+    // The full service is a separate internal reference; `app.artifactFeedback` is the read-only view.
+    const registry = this.app.artifactFeedbackService;
     if (!registry || typeof registry.register !== "function") {
       return { status: "unavailable", message: "This host does not support artifact feedback.", dispose() {} };
     }

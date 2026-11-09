@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ArtifactFeedbackHandler, ArtifactFeedbackRequest, ArtifactFeedbackTarget } from "../../src/artifacts/feedback-contract";
-import { ArtifactFeedbackService } from "../../src/renderer/artifacts/feedback-registry";
+import { ArtifactFeedbackService, createReadOnlyFeedbackView } from "../../src/renderer/artifacts/feedback-registry";
 import { Plugin } from "../../src/renderer/plugin";
 
 const target: ArtifactFeedbackTarget = { root: "/a", artifactId: "art", title: "Art", runtime: "static", vaultRead: false };
@@ -8,8 +8,9 @@ const request = { contractVersion: 1, artifact: target, comment: "c" } as unknow
 
 class TestPlugin extends Plugin { onload() {} }
 const manifest = (id: string, name: string) => ({ id, name, version: "1", minAppVersion: "0" }) as never;
-const makePlugin = (artifactFeedback: unknown, id = "design", name = "Design") =>
-  new TestPlugin({ artifactFeedback } as never, manifest(id, name));
+/** Mirrors App: the service on an internal reference, plugins see only the read-only view. */
+const makePlugin = (service: ArtifactFeedbackService | undefined, id = "design", name = "Design") =>
+  new TestPlugin({ artifactFeedback: service ? createReadOnlyFeedbackView(service) : undefined, artifactFeedbackService: service } as never, manifest(id, name));
 
 let warn: ReturnType<typeof vi.spyOn>;
 beforeEach(() => { warn = vi.spyOn(console, "warn").mockImplementation(() => {}); });
@@ -64,5 +65,17 @@ describe("Plugin.registerArtifactFeedbackHandler", () => {
   it("feature detection: the registry exposes contractVersions including 1", () => {
     expect(new ArtifactFeedbackService().contractVersions).toContain(1);
     expect(typeof Plugin.prototype.registerArtifactFeedbackHandler).toBe("function");
+  });
+});
+
+describe("what a plugin can reach through app.artifactFeedback (review A7)", () => {
+  it("cannot register under another identity or submit through the public view", () => {
+    const svc = new ArtifactFeedbackService();
+    const plugin = makePlugin(svc);
+    const view = (plugin.app as unknown as { artifactFeedback: Record<string, unknown> }).artifactFeedback;
+    expect(view.register).toBeUndefined();
+    expect(view.submit).toBeUndefined();
+    expect(typeof view.has).toBe("function");
+    expect(svc.has(target)).toBe(false);
   });
 });

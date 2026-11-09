@@ -7,7 +7,7 @@ import {
   type ArtifactFeedbackResult,
   type ArtifactFeedbackTarget,
 } from "../../src/artifacts/feedback-contract";
-import { ArtifactFeedbackService } from "../../src/renderer/artifacts/feedback-registry";
+import { ArtifactFeedbackService, createReadOnlyFeedbackView } from "../../src/renderer/artifacts/feedback-registry";
 
 const target: ArtifactFeedbackTarget = { root: "/a", artifactId: "art", title: "Art", runtime: "static", vaultRead: false };
 const request = (extra: Partial<ArtifactFeedbackRequest> = {}): ArtifactFeedbackRequest => ({
@@ -244,5 +244,42 @@ describe("describeHandler (popover copy)", () => {
     expect(svc.describeHandler(target)).toBeNull();
     svc.register(ownerB, handler());
     expect(svc.describeHandler(target)).toBe("Plugin B");
+  });
+});
+
+describe("a handler whose canHandle is a throwing getter (review A6)", () => {
+  it("counts as not handling: has, describeHandler and submit never throw", async () => {
+    const svc = new ArtifactFeedbackService();
+    const evil = handler();
+    Object.defineProperty(evil, "canHandle", { get() { throw new Error("getter"); } });
+    svc.register(ownerA, evil);
+    expect(() => svc.has(target)).not.toThrow();
+    expect(svc.has(target)).toBe(false);
+    expect(svc.describeHandler(target)).toBeNull();
+    await expect(svc.submit(target, request())).resolves.toMatchObject({ status: "rejected", source: "no-handler" });
+    // and a later well-behaved handler still receives the submission
+    svc.register(ownerB, handler());
+    expect(svc.has(target)).toBe(true);
+  });
+});
+
+describe("the plugin-facing view (review A7)", () => {
+  it("exposes has, onDidChange and contractVersions only, frozen, and tracks the service", () => {
+    const svc = new ArtifactFeedbackService();
+    const view = createReadOnlyFeedbackView(svc) as unknown as Record<string, unknown>;
+    expect(Object.keys(view).sort()).toEqual(["contractVersions", "has", "onDidChange"]);
+    expect(Object.isFrozen(view)).toBe(true);
+    expect(view.register).toBeUndefined();
+    expect(view.submit).toBeUndefined();
+    expect(view.describeHandler).toBeUndefined();
+    expect([...(view.contractVersions as number[])]).toEqual([1]);
+    const changes = vi.fn();
+    (view.onDidChange as (l: () => void) => void)(changes);
+    expect((view.has as (t: unknown) => boolean)(target)).toBe(false);
+    svc.register(ownerA, handler());
+    expect((view.has as (t: unknown) => boolean)(target)).toBe(true);
+    expect(changes).toHaveBeenCalledTimes(1);
+    // mutating the version list cannot widen what the service accepts
+    expect(() => { (view.contractVersions as number[]).push(2); }).toThrow();
   });
 });

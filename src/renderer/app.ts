@@ -133,7 +133,8 @@ import { createDismissibleNotice } from "./notice";
 import { Scope } from "./api/suggest";
 import { Keymap } from "./api/keymap";
 import { setIcon } from "./api/icons";
-import { ArtifactFeedbackService } from "./artifacts/feedback-registry";
+import { ArtifactFeedbackService, createReadOnlyFeedbackView } from "./artifacts/feedback-registry";
+import type { ArtifactFeedbackRegistry } from "../artifacts/feedback-contract";
 import { collectQuickSwitcherItems, type QuickSwitcherPluginItem, type QuickSwitcherProvider } from "./quick-switcher-providers";
 import { FileManager } from "./file-manager";
 import { measureOperation } from "./perf-instrumentation";
@@ -2870,11 +2871,12 @@ export class App {
   /** Quick switcher row providers registered by plugins; see `registerQuickSwitcherProvider`. */
   quickSwitcherProviders = new Set<QuickSwitcherProvider>();
   /**
-   * Plugin-facing registry for artifact element feedback (ADR 0006). Plugins reach
-   * it through `Plugin.registerArtifactFeedbackHandler` and read it as the
-   * `ArtifactFeedbackRegistry` interface; `register`/`submit` are internal.
+   * Plugin-facing and read-only (has, onDidChange, contractVersions) view of artifact element feedback (ADR 0006).
+   * Registration goes through `Plugin.registerArtifactFeedbackHandler`.
    */
-  readonly artifactFeedback: ArtifactFeedbackService;
+  readonly artifactFeedback: ArtifactFeedbackRegistry;
+  /** Internal: the full service (register, submit, describeHandler). Plugins are typed against `artifactFeedback` only. */
+  readonly artifactFeedbackService: ArtifactFeedbackService;
   workspace!: Workspace;
   statusBar!: StatusBar;
   private ribbonActionsEl!: HTMLElement;
@@ -2970,7 +2972,8 @@ export class App {
   constructor(host: HostServices = getHostServices()) {
     this.host = host;
     // Tolerant of minimal test hosts without a capabilities table; real hosts always declare `artifacts`.
-    this.artifactFeedback = new ArtifactFeedbackService({ enabled: host.capabilities?.artifacts !== false });
+    this.artifactFeedbackService = new ArtifactFeedbackService({ enabled: host.capabilities?.artifacts !== false });
+    this.artifactFeedback = createReadOnlyFeedbackView(this.artifactFeedbackService);
     this.propertyTypes.onError(() => this.notify("Could not save property types. Check the assignment and try again."));
     this.dailyNotes = new DailyNotesService(host.config);
     this.templates = new TemplatesService(host.config);

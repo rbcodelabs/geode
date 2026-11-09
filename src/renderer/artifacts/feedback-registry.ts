@@ -172,9 +172,10 @@ export class ArtifactFeedbackService implements ArtifactFeedbackRegistry {
 
   private resolve(target: ArtifactFeedbackTarget): Entry | null {
     for (const entry of this.entries) {
-      const canHandle = entry.handler.canHandle;
-      if (canHandle === undefined) return entry;
       try {
+        // The property read is inside the try: a throwing getter counts as "does not handle" too.
+        const canHandle = entry.handler.canHandle;
+        if (canHandle === undefined) return entry;
         if (canHandle.call(entry.handler, target) === true) return entry;
       } catch {
         // Counts as false; a visibility check runs often, so it must not log.
@@ -205,4 +206,21 @@ export class ArtifactFeedbackService implements ArtifactFeedbackRegistry {
       try { listener(); } catch (error) { console.warn("[artifact-feedback] onDidChange listener threw", error); }
     }
   }
+}
+
+/**
+ * What plugins see as `app.artifactFeedback`: presence, change notification and the supported versions, nothing
+ * else. `register` and `submit` stay on the service, which Geode keeps on a separate internal reference, so a plugin
+ * can only register through `Plugin.registerArtifactFeedbackHandler` (owner identity from its manifest).
+ *
+ * Routing note (ADR 0006 D1): the first registered handler whose `canHandle` passes receives the submission, with no
+ * fall-through on a rejection, so an early plugin with no `canHandle` takes every static artifact. That is a
+ * deliberate trade for exactly-one-recipient; plugins should set `canHandle`.
+ */
+export function createReadOnlyFeedbackView(service: ArtifactFeedbackService): ArtifactFeedbackRegistry {
+  return Object.freeze({
+    contractVersions: Object.freeze([...service.contractVersions]) as readonly number[],
+    has: (target: ArtifactFeedbackTarget) => service.has(target),
+    onDidChange: (listener: () => void) => service.onDidChange(listener),
+  });
 }
