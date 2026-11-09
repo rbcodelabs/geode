@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import type { Session, WebContents, WebPreferences } from "electron";
@@ -157,6 +158,8 @@ export class ArtifactRuntime {
     private readonly guestPreloadPath: string = path.join(__dirname, "artifact-guest-preload.js"),
     /** Injectable like `guestPreloadPath` so tests can use a fake. */
     private readonly inspectorPreloadPath: string = path.join(__dirname, "artifact-inspector-preload.js"),
+    /** Injectable so tests can fake the file system. */
+    private readonly fileExists: (filePath: string) => boolean = existsSync,
   ) {}
 
   private readonly registrations = new Map<string, ActiveArtifact>();
@@ -252,6 +255,13 @@ export class ArtifactRuntime {
    * `webPreferences.preload` may carry. A failure only loses the picker.
    */
   private registerInspectorPreload(active: ActiveArtifact): void {
+    // Electron accepts a preload path without checking it. A missing file (packaging, asar path) would leave the Pick
+    // button visible with nothing ever answering it, so verify first; Pick stays hidden when it is absent.
+    if (!this.fileExists(this.inspectorPreloadPath)) {
+      active.inspectorPreloadId = undefined;
+      console.warn(`[artifact] inspector preload file is missing (${this.inspectorPreloadPath}); the picker is unavailable for "${active.artifactId}"`);
+      return;
+    }
     try {
       active.inspectorPreloadId = active.artifactSession.registerPreloadScript({
         type: "frame",

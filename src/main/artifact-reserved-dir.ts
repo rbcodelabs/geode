@@ -7,9 +7,19 @@ function isInside(root: string, candidate: string): boolean {
   return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative));
 }
 
-async function statIds(target: string): Promise<{ dev: bigint; ino: bigint } | null> {
+/** The two fs calls the layers need; injectable so tests can fake unreliable inodes. */
+export interface ReservedDirFs {
+  stat(target: string): Promise<{ dev: bigint; ino: bigint }>;
+  realpath(target: string): Promise<string>;
+}
+const defaultFs: ReservedDirFs = {
+  stat: (target) => fs.stat(target, { bigint: true }),
+  realpath: (target) => fs.realpath(target),
+};
+
+async function statIds(api: ReservedDirFs, target: string): Promise<{ dev: bigint; ino: bigint } | null> {
   try {
-    const { dev, ino } = await fs.stat(target, { bigint: true });
+    const { dev, ino } = await api.stat(target);
     return { dev, ino };
   } catch {
     return null;
@@ -17,10 +27,10 @@ async function statIds(target: string): Promise<{ dev: bigint; ino: bigint } | n
 }
 
 /** Layer 3: does `start` or any ancestor of it below `realRoot` have the reserved directory's identity? */
-async function ancestorHasIdentity(realRoot: string, start: string, reserved: { dev: bigint; ino: bigint }): Promise<boolean> {
+async function ancestorHasIdentity(api: ReservedDirFs, realRoot: string, start: string, reserved: { dev: bigint; ino: bigint }): Promise<boolean> {
   let current = start;
   while (current !== realRoot && isInside(realRoot, current)) {
-    const ids = await statIds(current);
+    const ids = await statIds(api, current);
     if (ids && ids.dev === reserved.dev && ids.ino === reserved.ino) return true;
     const parent = path.dirname(current);
     if (parent === current) break;
@@ -40,27 +50,30 @@ async function ancestorHasIdentity(realRoot: string, start: string, reserved: { 
  * Residual, accepted for P1: a hard link to a file inside the directory placed elsewhere in the artifact has
  * a different path and ancestry, so neither layer sees it.
  */
-export async function isReservedOnDisk(realRoot: string, target: string): Promise<boolean> {
+export async function isReservedOnDisk(realRoot: string, target: string, api: ReservedDirFs = defaultFs): Promise<boolean> {
   const reservedPath = path.join(realRoot, RESERVED_ARTIFACT_DIRNAME);
-  const reservedIds = await statIds(reservedPath);
+  const reservedIds = await statIds(api, reservedPath);
   if (!reservedIds) return false; // nothing to protect (yet); layer 1 still applies
 
   let reservedReal = reservedPath;
   try {
-    reservedReal = await fs.realpath(reservedPath);
+    reservedReal = await api.realpath(reservedPath);
   } catch {
     // keep the typed path
   }
 
   let realTarget: string | null = null;
   try {
-    realTarget = await fs.realpath(target);
+    realTarget = await api.realpath(target);
   } catch {
     // target missing: the lexical ancestor walk below still applies
   }
   if (realTarget && isInside(reservedReal, realTarget)) return true;
 
-  if (await ancestorHasIdentity(realRoot, target, reservedIds)) return true;
-  if (realTarget && (await ancestorHasIdentity(realRoot, realTarget, reservedIds))) return true;
+  // Some filesystems (FAT/exFAT, SMB, some FUSE mounts) report inode 0 or a constant: every path would then
+  // "match" and the whole artifact would 404. Without a trustworthy identity the realpath layer above must do.
+  if (reservedIds.ino === 0n) return false;
+  if (await ancestorHasIdentity(api, realRoot, target, reservedIds)) return true;
+  if (realTarget && (await ancestorHasIdentity(api, realRoot, realTarget, reservedIds))) return true;
   return false;
 }

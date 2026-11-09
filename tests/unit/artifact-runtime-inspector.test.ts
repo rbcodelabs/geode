@@ -102,7 +102,7 @@ beforeEach(async () => {
 });
 afterEach(async () => { warn.mockRestore(); await rm(dir, { recursive: true, force: true }); });
 
-const runtime = () => new ArtifactRuntime("/dist/vault-preload.js", "/dist/inspector-preload.js");
+const runtime = (fileExists: (p: string) => boolean = () => true) => new ArtifactRuntime("/dist/vault-preload.js", "/dist/inspector-preload.js", fileExists);
 
 describe("ArtifactRuntime inspector preload", () => {
   it("registers the inspector once per static artifact session as a frame preload and flags the registration", async () => {
@@ -184,5 +184,16 @@ describe("ArtifactRuntime inspector preload", () => {
     const prefs2: Record<string, unknown> = { preload: "stale" };
     rt.secureWebviewAttachment(owner, prefs2 as never, { partition: plain.partition });
     expect(prefs2.preload).toBeUndefined();
+  });
+});
+
+describe("a missing inspector preload file (review A10)", () => {
+  it("does not register, does not flag the registration, and warns, so Pick stays hidden", async () => {
+    const root = await writeArtifact(staticManifest);
+    const rt = runtime((p) => p !== "/dist/inspector-preload.js");
+    const reg = await rt.register(owner, root);
+    expect(reg.inspector).toBeUndefined();
+    expect(sessions.at(-1)!.session.registerPreloadScript).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("inspector preload"));
   });
 });
