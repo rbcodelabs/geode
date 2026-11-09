@@ -133,6 +133,8 @@ import { createDismissibleNotice } from "./notice";
 import { Scope } from "./api/suggest";
 import { Keymap } from "./api/keymap";
 import { setIcon } from "./api/icons";
+import { ArtifactFeedbackService, createReadOnlyFeedbackView } from "./artifacts/feedback-registry";
+import type { ArtifactFeedbackRegistry } from "../artifacts/feedback-contract";
 import { collectQuickSwitcherItems, type QuickSwitcherPluginItem, type QuickSwitcherProvider } from "./quick-switcher-providers";
 import { FileManager } from "./file-manager";
 import { measureOperation } from "./perf-instrumentation";
@@ -496,6 +498,8 @@ export interface AppActionContext {
   webView?: WebView | null;
   /** Present on any view that can reload itself in place (Web Viewer, Artifact). */
   reloadable?: ReloadableView | null;
+  /** Present on an Artifact tab. Gates the element-picker toggle. */
+  artifact?: ArtifactView | null;
 }
 
 /**
@@ -2866,6 +2870,13 @@ export class App {
   basesViews = new Map<string, BasesViewRegistration>();
   /** Quick switcher row providers registered by plugins; see `registerQuickSwitcherProvider`. */
   quickSwitcherProviders = new Set<QuickSwitcherProvider>();
+  /**
+   * Plugin-facing and read-only (has, onDidChange, contractVersions) view of artifact element feedback (ADR 0006).
+   * Registration goes through `Plugin.registerArtifactFeedbackHandler`.
+   */
+  readonly artifactFeedback: ArtifactFeedbackRegistry;
+  /** Internal: the full service (register, submit, describeHandler). Plugins are typed against `artifactFeedback` only. */
+  readonly artifactFeedbackService: ArtifactFeedbackService;
   workspace!: Workspace;
   statusBar!: StatusBar;
   private ribbonActionsEl!: HTMLElement;
@@ -2960,6 +2971,9 @@ export class App {
 
   constructor(host: HostServices = getHostServices()) {
     this.host = host;
+    // Tolerant of minimal test hosts without a capabilities table; real hosts always declare `artifacts`.
+    this.artifactFeedbackService = new ArtifactFeedbackService({ enabled: host.capabilities?.artifacts !== false });
+    this.artifactFeedback = createReadOnlyFeedbackView(this.artifactFeedbackService);
     this.propertyTypes.onError(() => this.notify("Could not save property types. Check the assignment and try again."));
     this.dailyNotes = new DailyNotesService(host.config);
     this.templates = new TemplatesService(host.config);
@@ -4882,13 +4896,14 @@ export class App {
    * than a DeferredView placeholder. That would stop being true if Web Viewer
    * ever moved behind a core-plugin registry.
    */
-  private viewActionContext(view: View | null | undefined): Pick<AppActionContext, "view" | "webView" | "reloadable"> {
+  private viewActionContext(view: View | null | undefined): Pick<AppActionContext, "view" | "webView" | "reloadable" | "artifact"> {
     const reloadable: ReloadableView | null =
       view instanceof WebView || view instanceof ArtifactView ? view : null;
     return {
       view: view instanceof MarkdownView ? view : null,
       webView: view instanceof WebView ? view : null,
       reloadable,
+      artifact: view instanceof ArtifactView ? view : null,
     };
   }
 
@@ -5090,6 +5105,14 @@ export class App {
       run: (context) => context.reloadable!.reload(),
     });
     this.actions.register({
+      id: "artifact.toggle-pick",
+      label: "Toggle element picker",
+      icon: "mouse-pointer-click",
+      // Offered only while the Pick button is: a static artifact, an attached inspector and a handler.
+      isAvailable: (context) => context.artifact?.canTogglePick() === true,
+      run: (context) => context.artifact!.togglePick("keyboard"),
+    });
+    this.actions.register({
       id: "web.bookmark-page",
       label: "Bookmark this page",
       icon: "bookmark",
@@ -5169,6 +5192,8 @@ export class App {
     // that have no reload path: there it becomes a silent no-op, which is
     // strictly better than the whole-app reload it used to trigger.
     this.commands.add(createActionCommand(this.actions, "web.reload", "Reload page", () => this.activeActionContext(), "Mod+R"));
+    // No default hotkey (ADR 0006 D8): users can assign one in Settings > Hotkeys.
+    this.commands.add(createActionCommand(this.actions, "artifact.toggle-pick", "Toggle element picker", () => this.activeActionContext()));
     c("split-right", "Split right", undefined, () => {
       const group = this.workspace.addGroup(this.workspace.activeGroup);
       this.openEmptyTab(group);
