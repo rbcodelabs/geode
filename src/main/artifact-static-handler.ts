@@ -40,20 +40,6 @@ function artifactPathname(rawUrl: string): string | null {
   }
 }
 
-function response(status: number, body: string, headers?: Record<string, string>): Response {
-  return new Response(body, { status, headers: { "content-type": "text/plain; charset=utf-8", ...headers } });
-}
-
-function artifactPathname(rawUrl: string): string | null {
-  try {
-    const pathname = new URL(rawUrl).pathname;
-    const decoded = decodeURIComponent(pathname).replace(/^\/+/, "");
-    return decoded || null;
-  } catch {
-    return null;
-  }
-}
-
 export interface StaticArtifactRequest {
   url: string;
   method: string;
