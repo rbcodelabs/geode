@@ -461,6 +461,14 @@ artifact plus a prior read of the sidecar, the page has no network (`connect-src
 HFS+/APFS ignorable-code-point and Windows 8.3 short-name aliasing are covered by
 the realpath and inode layers, not by layer 1.
 
+Implementation (P1 deny). Layer 1 is `src/artifacts/reserved-paths.ts` (pure; additionally percent-decodes up to
+4 rounds and checks every form, resolves `..`, treats `\\` as a separator, strips default-ignorable code points
+anywhere in the name, and checks any segment that ever sits directly under the root, even if a later `..` removes
+it). Layers 2 and 3 are `src/main/artifact-reserved-dir.ts` (`isReservedOnDisk`). Both run inside
+`resolveArtifactFile`, so the protocol handler (`src/main/artifact-static-handler.ts`) and the manifest `entry`
+check (`reserved_path`, surfaced as `entry_invalid`) share one gate and one 404. The watcher is
+`src/main/artifact-watcher.ts`. The hard-link residual below is unchanged and untested by design.
+
 Export is plugin-side. Any static copy or zip of an artifact root must exclude
 `.threads-design/` and `captures/`; the plugin owns that rule when it exports.
 
