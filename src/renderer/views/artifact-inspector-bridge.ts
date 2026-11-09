@@ -88,6 +88,8 @@ export interface ArtifactInspectorBridgeOptions {
 const COMMENT_MAX_UNITS = 4000;
 const RATE_WINDOW_MS = 1000;
 const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+const READY_PER_SECOND = 10;
+const CANCEL_PER_SECOND = 10;
 const GUEST_CHANNELS: ReadonlySet<string> = new Set(INSPECT_GUEST_TO_EMBEDDER_CHANNELS);
 
 /** The data-only description of an artifact that routing and the visibility check use. */
@@ -95,7 +97,8 @@ export function artifactFeedbackTarget(
   registration: Pick<ArtifactRegistration, "artifactId" | "title" | "vault">,
   root: string,
 ): ArtifactFeedbackTarget {
-  return { root, artifactId: registration.artifactId, title: registration.title, runtime: "static", vaultRead: registration.vault !== undefined };
+  // Frozen: the same object is handed to every handler's canHandle and spread into each request.
+  return Object.freeze({ root, artifactId: registration.artifactId, title: registration.title, runtime: "static" as const, vaultRead: registration.vault !== undefined });
 }
 
 /** Pick button visibility, minus view-local conditions (attached webview, no load error). */
@@ -119,8 +122,8 @@ export class ArtifactInspectorBridge {
   private token = 0;
   /** Bumped on every guest `ready`, i.e. every document start; a selection from an older document is stale. */
   private documentGeneration = 0;
-  private recent: number[] = [];
-  private recentSelects: number[] = [];
+  // Separate sliding-window budgets (ADR: hover 30/s, select 4/s) so a pointer sweep can never starve the click.
+  private readonly budgets: Record<"hover" | "ready" | "cancel" | "select", number[]> = { hover: [], ready: [], cancel: [], select: [] };
   private readonly generationOf = new WeakMap<SelectionSnapshot, number>();
   private readonly listener = (event: InspectorIpcEvent): void => this.onIpc(event);
 
@@ -167,7 +170,8 @@ export class ArtifactInspectorBridge {
       artifact: { ...this.options.target },
       comment: trimmed,
       selection: snapshot.selection,
-      screenshot: snapshot.screenshot,
+      // A copy per attempt: a handler that transfers or zero-fills the bytes cannot corrupt a retry.
+      screenshot: snapshot.screenshot ? { ...snapshot.screenshot, bytes: snapshot.screenshot.bytes.slice() } : null,
       screenshotOmitted: snapshot.screenshotOmitted,
       stale,
       submittedAt: new Date(this.now()).toISOString(),
@@ -191,10 +195,21 @@ export class ArtifactInspectorBridge {
 
   private onIpc(event: InspectorIpcEvent): void {
     if (this.disposed || !GUEST_CHANNELS.has(event.channel)) return;
-    // Only this view's own webview, only its top frame, exactly one argument.
+    // Only this view's own webview, only its top frame.
     if (event.target !== this.webview || event.isMainFrame === false) return;
+
+    // A select this bridge cannot use must never leave the guest in its local hold (it entered hold when it sent
+    // the select). While the user is in pick mode, any dropped select re-sends the mode so clicking works again.
+    if (event.channel === INSPECT_CHANNEL.select) {
+      if (this.currentMode !== "pick") return;
+      if (!this.acceptSelect(event)) this.sendMode();
+      return;
+    }
+
     if (!Array.isArray(event.args) || event.args.length !== 1) return;
-    if (!this.withinRate(this.recent, INSPECTOR_CAPS.messagesPerSecond)) return;
+    const kind = event.channel === INSPECT_CHANNEL.hover ? "hover" : event.channel === INSPECT_CHANNEL.ready ? "ready" : "cancel";
+    const limit = kind === "hover" ? INSPECTOR_CAPS.messagesPerSecond : kind === "ready" ? READY_PER_SECOND : CANCEL_PER_SECOND;
+    if (!this.withinRate(this.budgets[kind], limit)) return;
     const payload = event.args[0];
     if (!messageWithinCap(payload)) return;
 
@@ -220,16 +235,22 @@ export class ArtifactInspectorBridge {
         }
         return;
       }
-      case INSPECT_CHANNEL.select:
-        if (this.currentMode === "pick") void this.onSelect(payload);
-        return;
     }
   }
 
-  private async onSelect(payload: unknown): Promise<void> {
-    if (!this.withinRate(this.recentSelects, INSPECTOR_CAPS.selectsPerSecond)) return;
+  /** Validates and starts handling a select. Returns false when it was dropped for any reason. */
+  private acceptSelect(event: InspectorIpcEvent): boolean {
+    if (!Array.isArray(event.args) || event.args.length !== 1) return false;
+    if (!this.withinRate(this.budgets.select, INSPECTOR_CAPS.selectsPerSecond)) return false;
+    const payload = event.args[0];
+    if (!messageWithinCap(payload)) return false;
     const guest = validateGuestSelect(payload, { redacted: this.redacted });
-    if (!guest) return;
+    if (!guest) return false;
+    void this.onSelect(guest);
+    return true;
+  }
+
+  private async onSelect(guest: GuestSelectMessage): Promise<void> {
     // One selection at a time: from here the guest and the embedder are in hold until the UI says otherwise.
     this.currentMode = "hold";
     const token = ++this.token;

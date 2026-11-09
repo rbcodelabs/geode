@@ -183,7 +183,7 @@ describe("limits", () => {
     expect(bridge.mode).toBe("pick"); // a bad message does not change state
   });
 
-  it("rate limits all inspector messages to 30 per second over a sliding window", () => {
+  it("rate limits hover to 30 per second over a sliding window", () => {
     const { bridge, webview, hovers } = setup();
     bridge.setMode("pick");
     const hover = { tag: "div", rect: { x: 1, y: 1, width: 1, height: 1 }, via: "pointer" };
@@ -192,6 +192,71 @@ describe("limits", () => {
     clock += 1001;
     webview.emit(INSPECT_CHANNEL.hover, hover);
     expect(hovers).toHaveLength(31);
+  });
+
+  it("a hover sweep never starves the click: 100 hovers, then a select in the same second is still accepted", async () => {
+    const { bridge, webview, hovers, selections } = setup();
+    bridge.setMode("pick");
+    const hover = { tag: "div", rect: { x: 1, y: 1, width: 1, height: 1 }, via: "pointer" };
+    for (let i = 0; i < 100; i++) webview.emit(INSPECT_CHANNEL.hover, hover);
+    expect(hovers).toHaveLength(30);
+    webview.emit(INSPECT_CHANNEL.select, guestSelect());
+    await settle();
+    expect(selections).toHaveLength(1);
+  });
+
+  it("ready and cancel have their own budgets: a hover flood does not swallow them", () => {
+    const { bridge, webview, cancels } = setup();
+    bridge.setMode("pick");
+    const hover = { tag: "div", rect: { x: 1, y: 1, width: 1, height: 1 }, via: "pointer" };
+    for (let i = 0; i < 100; i++) webview.emit(INSPECT_CHANNEL.hover, hover);
+    const before = webview.modes().length;
+    webview.emit(INSPECT_CHANNEL.ready, { protocol: 1 });
+    expect(webview.modes().length).toBe(before + 1);
+    webview.emit(INSPECT_CHANNEL.cancel, { reason: "escape" });
+    expect(cancels()).toBe(1);
+  });
+
+  describe("a select that is dropped never strands the guest in hold", () => {
+    const lastMode = (webview: { modes(): unknown[] }) => webview.modes().at(-1);
+
+    it("re-sends pick when the select fails validation, is oversized, has the wrong arity, or is rate limited", async () => {
+      const { bridge, webview, selections } = setup();
+      bridge.setMode("pick");
+      const resent = () => webview.modes().length;
+      let n = resent();
+      webview.emit(INSPECT_CHANNEL.select, { ...guestSelect(), tag: "BAD" });
+      expect(resent()).toBe(n + 1);
+      n = resent();
+      webview.emit(INSPECT_CHANNEL.select, guestSelect({ outerHTML: { html: "x".repeat(70_000), truncated: false } }));
+      expect(resent()).toBe(n + 1);
+      n = resent();
+      for (const f of (webview as never as { listeners: Set<(e: InspectorIpcEvent) => void> }).listeners) f({ channel: INSPECT_CHANNEL.select, args: [guestSelect(), guestSelect()], target: webview });
+      expect(resent()).toBe(n + 1);
+      expect(lastMode(webview)).toEqual({ mode: "pick", redactText: false });
+      expect(selections).toEqual([]);
+      // rate limit: four accepted per second, the fifth is dropped and re-arms the guest
+      clock += 1001; // the invalid attempts above already used part of this second's budget
+      for (let i = 0; i < 4; i++) { bridge.setMode("pick"); webview.emit(INSPECT_CHANNEL.select, guestSelect()); await settle(); }
+      expect(selections).toHaveLength(4);
+      bridge.setMode("pick");
+      n = resent();
+      webview.emit(INSPECT_CHANNEL.select, guestSelect());
+      await settle();
+      expect(selections).toHaveLength(4);
+      expect(resent()).toBe(n + 1);
+      expect(bridge.mode).toBe("pick");
+    });
+
+    it("does not re-send anything for a select that arrives in hold or off (nothing is stranded)", () => {
+      const { bridge, webview } = setup();
+      for (const mode of ["hold", "off"] as const) {
+        bridge.setMode(mode);
+        const n = webview.modes().length;
+        webview.emit(INSPECT_CHANNEL.select, { ...guestSelect(), tag: "BAD" });
+        expect(webview.modes().length).toBe(n);
+      }
+    });
   });
 
   it("accepts at most 4 selects per second", async () => {
@@ -412,8 +477,24 @@ describe("submit", () => {
       submittedAt: new Date(clock).toISOString(), screenshotOmitted: null,
     });
     expect(req.selection).toBe(snapshot.selection);
-    expect(req.screenshot).toBe(snapshot.screenshot);
+    expect(req.screenshot).toEqual(snapshot.screenshot); // equal content, but a copy per attempt (see the retry test)
     expect(Object.keys(req).sort()).toEqual(["artifact", "comment", "contractVersion", "screenshot", "screenshotOmitted", "selection", "stale", "submittedAt"]);
+  });
+
+  it("hands every attempt its own copy of the screenshot bytes, so a handler that zero-fills them cannot corrupt a retry", async () => {
+    const { bridge, webview, registry, submitted, selections } = setup();
+    bridge.setMode("pick");
+    webview.emit(INSPECT_CHANNEL.select, guestSelect());
+    await settle();
+    const snap = selections[0]!;
+    expect(snap.screenshot).not.toBeNull();
+    const original = Array.from(snap.screenshot!.bytes.slice(0, 8));
+    registry.submit.mockImplementationOnce(async (_t, request) => { submitted.push(request); request.screenshot!.bytes.fill(0); return { status: "rejected" as const, reason: "failed" as const, message: "x", source: "handler" as const }; });
+    await bridge.submit(snap, "first");
+    await bridge.submit(snap, "second");
+    expect(Array.from(submitted[1]!.screenshot!.bytes.slice(0, 8))).toEqual(original);
+    expect(submitted[1]!.screenshot!.bytes).not.toBe(snap.screenshot!.bytes);
+    expect(Array.from(snap.screenshot!.bytes.slice(0, 8))).toEqual(original);
   });
 
   it("retry reuses the same selectionId (same snapshot, new request object)", async () => {
@@ -468,6 +549,12 @@ describe("submit", () => {
 });
 
 describe("helpers", () => {
+  it("artifactFeedbackTarget returns a frozen object a handler cannot mutate", () => {
+    const t = artifactFeedbackTarget({ artifactId: "a", title: "T", vault: undefined }, "/r");
+    expect(Object.isFrozen(t)).toBe(true);
+    expect(() => { (t as { vaultRead: boolean }).vaultRead = true; }).toThrow();
+  });
+
   it("artifactFeedbackTarget maps a registration and root to data only", () => {
     expect(artifactFeedbackTarget({ artifactId: "a", title: "T", runtime: "static", vault: { access: "read", allowlist: ["x"] } } as never, "/r"))
       .toEqual({ root: "/r", artifactId: "a", title: "T", runtime: "static", vaultRead: true });
