@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { INSPECTOR_CAPS, INSPECTOR_STYLE_ALLOWLIST, OUTER_HTML_TRUNCATION_MARKER, type GuestSelectMessage } from "../../src/artifacts/inspector-protocol";
-import { messageWithinCap, redactHtml, validateGuestSelect, validateHoverMessage } from "../../src/renderer/artifacts/selection-validator";
+import { messageWithinCap, redactHtml, validateGuestSelect, validateHoverMessage, validateRectMessage } from "../../src/renderer/artifacts/selection-validator";
 
 const valid = (): GuestSelectMessage => ({
   route: "/index.html#pricing",
@@ -214,5 +214,34 @@ describe("messageWithinCap", () => {
     cyclic.self = cyclic;
     expect(messageWithinCap(cyclic)).toBe(false);
     expect(messageWithinCap(undefined)).toBe(false);
+  });
+});
+
+describe("validateRectMessage (Phase 2a: live rect of the hovered or selected element)", () => {
+  const rect = { x: 1, y: 2, width: 30, height: 40 };
+  it("accepts a connected hover or selected rect and rebuilds it", () => {
+    const input = { target: "selected", connected: true, rect: { ...rect }, extra: 1 };
+    const out = validateRectMessage(input)!;
+    expect(out).toEqual({ target: "selected", connected: true, rect });
+    expect(out).not.toBe(input);
+    expect(out.rect).not.toBe(input.rect);
+    expect(validateRectMessage({ target: "hover", connected: true, rect })).toEqual({ target: "hover", connected: true, rect });
+  });
+  it("accepts a disconnected report only with a null rect", () => {
+    expect(validateRectMessage({ target: "selected", connected: false, rect: null })).toEqual({ target: "selected", connected: false, rect: null });
+    expect(validateRectMessage({ target: "selected", connected: false, rect })).toBeNull();
+    expect(validateRectMessage({ target: "selected", connected: true, rect: null })).toBeNull();
+  });
+  it("rejects unknown targets, non-boolean flags, bad rects and non-objects", () => {
+    for (const bad of [
+      null, undefined, "x", 1, [], { target: "other", connected: true, rect }, { target: "hover", connected: "yes", rect },
+      { target: "hover", connected: true, rect: { ...rect, width: -1 } }, { target: "hover", connected: true, rect: { ...rect, x: Number.NaN } },
+      { target: "hover", connected: true, rect: { ...rect, y: 1e9 } }, { target: "hover", connected: true, rect: [1, 2, 3, 4] },
+      { target: "hover", connected: true },
+    ]) expect(validateRectMessage(bad), JSON.stringify(bad)).toBeNull();
+  });
+  it("rejects a hostile own key at any level", () => {
+    expect(validateRectMessage(withProto('{"target":"hover","connected":true,"rect":{"x":1,"y":2,"width":3,"height":4},"__proto__":{"a":1}}'))).toBeNull();
+    expect(validateRectMessage(withProto('{"target":"hover","connected":true,"rect":{"x":1,"y":2,"width":3,"height":4,"constructor":1}}'))).toBeNull();
   });
 });

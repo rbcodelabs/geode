@@ -17,10 +17,11 @@ import {
   type InspectHoverMessage,
   type InspectKey,
   type InspectMode,
+  type InspectRectMessage,
 } from "../../artifacts/inspector-protocol";
 import type { ArtifactRegistration } from "../../main/artifact-runtime";
 import { freezePlain, type ArtifactFeedbackOutcome } from "../artifacts/feedback-registry";
-import { messageWithinCap, validateGuestSelect, validateHoverMessage } from "../artifacts/selection-validator";
+import { messageWithinCap, validateGuestSelect, validateHoverMessage, validateRectMessage } from "../artifacts/selection-validator";
 
 /**
  * Renderer-side bridge between one artifact `<webview>` and the plugin feedback
@@ -79,6 +80,8 @@ export interface ArtifactInspectorBridgeOptions {
     onHover(hover: InspectorHover): void;
     onSelect(snapshot: SelectionSnapshot): void;
     onCancel(): void;
+    /** Phase 2a: the live rect of the hovered element (pick) or the selected one (hold); `connected: false` means it left the page. */
+    onRect?(rect: InspectRectMessage): void;
   };
   /** Epoch milliseconds; injectable for tests. */
   now?: () => number;
@@ -123,7 +126,7 @@ export class ArtifactInspectorBridge {
   /** Bumped on every guest `ready`, i.e. every document start; a selection from an older document is stale. */
   private documentGeneration = 0;
   // Separate sliding-window budgets (ADR: hover 30/s, select 4/s) so a pointer sweep can never starve the click.
-  private readonly budgets: Record<"hover" | "ready" | "cancel" | "select", number[]> = { hover: [], ready: [], cancel: [], select: [] };
+  private readonly budgets: Record<"hover" | "ready" | "cancel" | "select" | "rect", number[]> = { hover: [], ready: [], cancel: [], select: [], rect: [] };
   private readonly generationOf = new WeakMap<SelectionSnapshot, number>();
   private readonly listener = (event: InspectorIpcEvent): void => this.onIpc(event);
 
@@ -207,8 +210,14 @@ export class ArtifactInspectorBridge {
     }
 
     if (!Array.isArray(event.args) || event.args.length !== 1) return;
-    const kind = event.channel === INSPECT_CHANNEL.hover ? "hover" : event.channel === INSPECT_CHANNEL.ready ? "ready" : "cancel";
-    const limit = kind === "hover" ? INSPECTOR_CAPS.messagesPerSecond : kind === "ready" ? READY_PER_SECOND : CANCEL_PER_SECOND;
+    const kind = event.channel === INSPECT_CHANNEL.hover ? "hover"
+      : event.channel === INSPECT_CHANNEL.ready ? "ready"
+      : event.channel === INSPECT_CHANNEL.rect ? "rect"
+      : "cancel";
+    const limit = kind === "hover" ? INSPECTOR_CAPS.messagesPerSecond
+      : kind === "ready" ? READY_PER_SECOND
+      : kind === "rect" ? INSPECTOR_CAPS.rectsPerSecond
+      : CANCEL_PER_SECOND;
     if (!this.withinRate(this.budgets[kind], limit)) return;
     const payload = event.args[0];
     if (!messageWithinCap(payload)) return;
@@ -226,6 +235,14 @@ export class ArtifactInspectorBridge {
         if (this.currentMode !== "pick") return;
         const hover = validateHoverMessage(payload);
         if (hover) this.options.callbacks.onHover(hover);
+        return;
+      }
+      case INSPECT_CHANNEL.rect: {
+        // A hover rect only matters while picking, a selected rect only while the popover holds a selection.
+        const report = validateRectMessage(payload);
+        if (!report) return;
+        if ((report.target === "hover" && this.currentMode !== "pick") || (report.target === "selected" && this.currentMode !== "hold")) return;
+        this.options.callbacks.onRect?.(report);
         return;
       }
       case INSPECT_CHANNEL.cancel: {
