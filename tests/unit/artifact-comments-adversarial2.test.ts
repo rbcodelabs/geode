@@ -122,6 +122,7 @@ describe("A3 refresh interval", () => {
     a.fake.emit(change(100)); await a.runFrame();
     a.fake.emit(change(101)); await a.runFrame();
     a.client.dispose();
+    expect(vi.getTimerCount()).toBe(0);
     await vi.advanceTimersByTimeAsync(1000); await a.runFrame();
     expect(a.fake.list).toHaveBeenCalledTimes(1);
     const b = setup({}, { commentsMinRefreshMs: 250 });
@@ -129,6 +130,7 @@ describe("A3 refresh interval", () => {
     b.fake.emit(change(100)); await b.runFrame();
     b.fake.emit(change(101)); await b.runFrame();
     off();
+    expect(vi.getTimerCount()).toBe(0);
     await vi.advanceTimersByTimeAsync(1000); await b.runFrame();
     expect(b.fake.list).toHaveBeenCalledTimes(1);
     expect(vi.getTimerCount()).toBe(0);
@@ -184,16 +186,18 @@ describe("A8 malformed events as resync hints", () => {
   });
 
   it("a malformed event whose revision is not newer than the cache is ignored", async () => {
-    const { client, fake, runFrame } = setup({ list: vi.fn(async () => ok(makeSnapshot(50))) });
+    const list = vi.fn(async () => ok(makeSnapshot(50)));
+    const { client, fake, runFrame } = setup({ list });
     client.onDidChange(() => {});
     await client.list();
+    expect(list).toHaveBeenCalledTimes(1);
     fake.emit({ revision: 50, junk: true });
     fake.emit({ revision: 3, junk: true });
     await runFrame();
-    expect(fake.list).toHaveBeenCalledTimes(0);
+    expect(list).toHaveBeenCalledTimes(1);
     fake.emit({ revision: 51, junk: true });
     await runFrame();
-    expect(fake.list).toHaveBeenCalledTimes(0); // fake.list is the default spy; the override above is the one called
+    expect(list).toHaveBeenCalledTimes(2);
   });
 
   it("OBSERVATION: malformed events with a huge but safe revision keep one refresh per interval going for as long as they arrive", async () => {
@@ -259,6 +263,53 @@ describe("F7 events inside subscribe()", () => {
     expect(dispose).toHaveBeenCalled();
     for (let i = 0; i < 8; i += 1) svc.commentsFor(target)!.onDidChange(() => {});
     expect((fake.provider.subscribe as any).mock.calls.length).toBe(9);
+  });
+});
+
+describe("F7b subscription state after a failed subscribe", () => {
+  it("after subscribe throws, a late event from the retained listener does nothing and a new listener retries the subscribe", async () => {
+    const frames: (() => void)[] = [];
+    const svc = new ArtifactFeedbackService({ commentsMinRefreshMs: 0, scheduleFrame: (cb) => { frames.push(cb); return () => { const i = frames.indexOf(cb); if (i >= 0) frames.splice(i, 1); }; } });
+    let retained: ((c: unknown) => void) | null = null;
+    let attempts = 0;
+    const fake = fakeProvider({ subscribe: vi.fn((_t: unknown, l: (c: unknown) => void) => { attempts += 1; retained = l; if (attempts === 1) throw new Error("no"); return { dispose() {} }; }) });
+    svc.register(owner, v2(fake.provider));
+    const client = svc.commentsFor(target)!;
+    client.onDidChange(() => {});
+    retained!(change(5));
+    expect(frames).toHaveLength(0);
+    client.onDidChange(() => {});
+    expect(attempts).toBe(2);
+  });
+});
+
+describe("B1 more capture and guard probes", () => {
+  it("a comments getter that is valid at register and junk afterwards still yields a working client from the captured provider", async () => {
+    let reads = 0;
+    const good = fakeProvider();
+    const handler: any = { contractVersion: 2, submit: async () => ({ status: "accepted" }) };
+    Object.defineProperty(handler, "comments", { get() { reads += 1; return reads === 1 ? good.provider : {}; } });
+    const svc = new ArtifactFeedbackService({ scheduleFrame: () => () => {} });
+    expect(svc.register(owner, handler).status).toBe("registered");
+    const client = svc.commentsFor(target);
+    expect(client).not.toBeNull();
+    expect(await client!.list()).toMatchObject({ status: "ok" });
+    expect(good.list).toHaveBeenCalledTimes(1);
+  });
+
+  it("a target whose property getter throws yields no client and no throw", () => {
+    const svc = new ArtifactFeedbackService({ scheduleFrame: () => () => {} });
+    svc.register(owner, v2(fakeProvider().provider));
+    const hostile: any = { ...target };
+    Object.defineProperty(hostile, "root", { get() { throw new Error("root"); } });
+    expect(() => svc.commentsFor(hostile)).not.toThrow();
+    expect(svc.commentsFor(hostile)).toBeNull();
+  });
+
+  it("detail redaction must agree in both directions", () => {
+    const sel = clone(load("selection.json")); sel.selectionId = `sel_${hex32(1)}`;
+    expect(rebuildDetail({ comment: makeComment(0), selection: { ...redactedSelection(), selectionId: sel.selectionId } }, target)).toBeNull();
+    expect(rebuildDetail({ comment: redactedComment(), selection: sel }, target)).toBeNull();
   });
 });
 
