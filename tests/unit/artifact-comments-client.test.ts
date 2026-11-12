@@ -202,7 +202,7 @@ describe("fault isolation, timeouts, abort", () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(await listed).toMatchObject({ status: "rejected", reason: "failed" });
     expect((fake.provider.list as any).mock.calls[0][1].signal.aborted).toBe(true);
-    await vi.advanceTimersByTimeAsync(4_998);
+    await vi.advanceTimersByTimeAsync(4_999);
     expect(sendDone).toBe(false);
     await vi.advanceTimersByTimeAsync(1);
     expect(await sent).toMatchObject({ status: "rejected", reason: "failed" });
