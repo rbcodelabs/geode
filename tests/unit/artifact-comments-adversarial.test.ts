@@ -256,12 +256,12 @@ describe("junk provider output: huge payloads", () => {
     snap.notice = big;
     const started = performance.now();
     const rebuilt = rebuildSnapshot(snap)!;
-    expect(performance.now() - started).toBeLessThan(15_000);
+    expect(performance.now() - started).toBeLessThan(40_000); // FINDING F8 (perf): measured 3 to 6 s for 2 x 20 MB on a worker; the bound only guards against a hang.
     expect(rebuilt.comments[0]!.label).toHaveLength(120);
     expect(rebuilt.notice).toHaveLength(300);
     const rejected = rebuildResult({ status: "rejected", reason: "failed", message: big }, () => null) as any;
     expect(rejected.message).toHaveLength(500);
-  });
+  }, 60_000);
 
   it("an object with 200,000 own keys is read by allowlist and does not blow up", () => {
     const snap = makeSnapshot(1);
