@@ -745,14 +745,14 @@ describe("change-event floods and refresh ordering", () => {
     expect(fake.list).toHaveBeenCalledTimes(1);
   });
 
-  it("a burst of malformed events schedules no work and does not throw", async () => {
+  it("a burst of malformed events does not throw and schedules at most one coalesced list (A8: the one with a plausible revision)", async () => {
     const { client, fake, frames } = setup();
     client.onDidChange(() => {});
     const junk = [null, undefined, 1, "x", [], {}, { storeId: STORE }, { storeId: STORE, revision: -1, reason: "local", ids: "all" }, { storeId: STORE, revision: 1, reason: "bogus", ids: "all" }, new Proxy({}, { ownKeys() { throw new Error("x"); } })];
     const started = performance.now();
     for (let i = 0; i < 2000; i += 1) expect(() => fake.emit(junk[i % junk.length])).not.toThrow();
     expect(performance.now() - started).toBeLessThan(5000);
-    expect(frames).toHaveLength(0);
+    expect(frames).toHaveLength(1);
   });
 
   it("events that keep arriving while lists fail cause at most one list per frame, never a tight loop", async () => {
