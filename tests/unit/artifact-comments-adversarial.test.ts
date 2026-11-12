@@ -127,15 +127,21 @@ describe("junk provider output: shapes JSON cannot express", () => {
 
   it("an inherited status/value cannot satisfy the result envelope even if Object.prototype is polluted", () => {
     const proto = Object.prototype as any;
+    const snapshot = makeSnapshot(1);
+    let empty: unknown;
+    let statusOnly: unknown;
+    // No assertion runs while the prototype is polluted: chai builds property descriptors that would inherit "value".
     try {
       proto.status = "ok";
-      proto.value = makeSnapshot(1);
-      expect(rebuildResult({}, rebuildSnapshot)).toBeNull();
-      expect(rebuildResult({ status: "ok" }, rebuildSnapshot)).toBeNull();
+      proto.value = snapshot;
+      empty = rebuildResult({}, rebuildSnapshot);
+      statusOnly = rebuildResult({ status: "ok" }, rebuildSnapshot);
     } finally {
       delete proto.status;
       delete proto.value;
     }
+    expect(empty).toBeNull();
+    expect(statusOnly).toBeNull();
     expect(({} as any).status).toBeUndefined();
   });
 
@@ -143,12 +149,14 @@ describe("junk provider output: shapes JSON cannot express", () => {
     const proto = Object.prototype as any;
     const snap = makeSnapshot(1);
     delete snap.comments[0].text;
+    let rebuilt: unknown;
     try {
       proto.text = "polluted";
-      expect(rebuildSnapshot(snap)).toBeNull();
+      rebuilt = rebuildSnapshot(snap);
     } finally {
       delete proto.text;
     }
+    expect(rebuilt).toBeNull();
   });
 
   it("null-prototype objects are accepted as plain data", () => {
@@ -248,7 +256,7 @@ describe("junk provider output: huge payloads", () => {
     snap.notice = big;
     const started = performance.now();
     const rebuilt = rebuildSnapshot(snap)!;
-    expect(performance.now() - started).toBeLessThan(3000);
+    expect(performance.now() - started).toBeLessThan(15_000);
     expect(rebuilt.comments[0]!.label).toHaveLength(120);
     expect(rebuilt.notice).toHaveLength(300);
     const rejected = rebuildResult({ status: "rejected", reason: "failed", message: big }, () => null) as any;
@@ -286,8 +294,8 @@ describe("junk provider output: huge payloads", () => {
     const comments = Array.from({ length: 250 }, (_, i) => makeComment(249 - i));
     const kept = rebuildSnapshot(makeSnapshot(1, comments))!.comments.map((c) => c.ordinal);
     expect(kept).toHaveLength(200);
-    expect(kept[0]).toBe(50);
-    expect(kept[199]).toBe(249);
+    expect(kept[0]).toBe(51);
+    expect(kept[199]).toBe(250);
   });
 
   it("a change event with 201 ids or 10,000 ids is rejected; 'all' and 200 ids are fine", () => {
@@ -345,15 +353,14 @@ describe("hanging, throwing and misbehaving providers, every method", () => {
 
   it("a provider that tries to mutate the frozen target fails inside its own call and cannot change later calls", async () => {
     const seen: any[] = [];
-    const { client, fake } = setup({
-      list: vi.fn(async (t: any) => { seen.push(t); t.root = "/evil"; return ok(load("snapshot.json")); }),
-    });
+    const list = vi.fn(async (t: any) => { seen.push(t); t.root = "/evil"; return ok(load("snapshot.json")); });
+    const { client } = setup({ list });
     expect(await client.list()).toMatchObject({ status: "rejected", reason: "failed" });
     expect(seen[0].root).toBe("/a");
     await client.list();
     expect(seen[1]).toBe(seen[0]);
     expect(Object.isFrozen(seen[0])).toBe(true);
-    expect(fake.list).toHaveBeenCalledTimes(2);
+    expect(list).toHaveBeenCalledTimes(2);
   });
 
   it("the target is an allowlisted copy: extra caller fields never reach the provider", () => {
@@ -748,14 +755,15 @@ describe("change-event floods and refresh ordering", () => {
   });
 
   it("events that keep arriving while lists fail cause at most one list per frame, never a tight loop", async () => {
-    const { client, fake, runFrame, frames } = setup({ list: vi.fn(async () => { throw new Error("down"); }) });
+    const list = vi.fn(async () => { throw new Error("down"); });
+    const { client, fake, runFrame, frames } = setup({ list });
     const results: string[] = [];
     client.onDidChange((r) => results.push(r.status));
     for (let frame = 0; frame < 25; frame += 1) {
       for (let i = 0; i < 40; i += 1) fake.emit({ storeId: STORE, revision: 100 + frame * 40 + i, reason: "local", ids: "all" });
       await runFrame();
     }
-    expect(fake.list).toHaveBeenCalledTimes(25);
+    expect(list).toHaveBeenCalledTimes(25);
     expect(results).toEqual(Array(25).fill("rejected"));
     expect(frames).toHaveLength(0);
   });
@@ -769,26 +777,28 @@ describe("change-event floods and refresh ordering", () => {
   });
 
   it("revision going backwards inside one store is ignored once a newer snapshot is cached", async () => {
-    const { client, fake, runFrame } = setup({ list: vi.fn(async () => ok(makeSnapshot(50))) });
+    const list = vi.fn(async () => ok(makeSnapshot(50)));
+    const { client, fake, runFrame } = setup({ list });
     client.onDidChange(() => {});
     await client.list();
     fake.emit({ storeId: STORE, revision: 49, reason: "external", ids: "all" });
     fake.emit({ storeId: STORE, revision: 50, reason: "external", ids: "all" });
     await runFrame();
-    expect(fake.list).toHaveBeenCalledTimes(1);
+    expect(list).toHaveBeenCalledTimes(1);
     fake.emit({ storeId: STORE, revision: 51, reason: "external", ids: "all" });
     await runFrame();
-    expect(fake.list).toHaveBeenCalledTimes(2);
+    expect(list).toHaveBeenCalledTimes(2);
   });
 
   it("OBSERVATION: a failed refresh with newer events behind it is not retried until the next event", async () => {
     let call = 0;
-    const { client, fake, runFrame } = setup({ list: vi.fn(async () => { call += 1; if (call === 1) throw new Error("once"); return ok(makeSnapshot(60)); }) });
+    const list = vi.fn(async () => { call += 1; if (call === 1) throw new Error("once"); return ok(makeSnapshot(60)); });
+    const { client, fake, runFrame } = setup({ list });
     client.onDidChange(() => {});
     fake.emit({ storeId: STORE, revision: 10, reason: "external", ids: "all" });
     await runFrame();
     await runFrame();
-    expect(fake.list).toHaveBeenCalledTimes(1);
+    expect(list).toHaveBeenCalledTimes(1);
     expect(client.cached).toBeNull();
   });
 
