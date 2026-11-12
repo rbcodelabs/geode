@@ -1,7 +1,5 @@
 import {
-  ARTIFACT_FEEDBACK_CONTRACT_VERSIONS,
   ARTIFACT_FEEDBACK_SUBMIT_TIMEOUT_MS,
-  type ArtifactFeedbackHandler,
   type ArtifactFeedbackOwner,
   type ArtifactFeedbackRegistration,
   type ArtifactFeedbackRegistry,
@@ -10,6 +8,16 @@ import {
   type ArtifactFeedbackResult,
   type ArtifactFeedbackTarget,
 } from "../../artifacts/feedback-contract";
+import {
+  ARTIFACT_COMMENTS_CALL_TIMEOUT_MS,
+  ARTIFACT_COMMENTS_CAPS,
+  ARTIFACT_COMMENTS_SEND_TIMEOUT_MS,
+  ARTIFACT_FEEDBACK_SUPPORTED_VERSIONS,
+  type AnyArtifactFeedbackHandler,
+  type ArtifactCommentsProvider,
+} from "../../artifacts/feedback-contract-v2";
+import { createCommentsClient, type ArtifactCommentsClient } from "./comments-client";
+import { freezePlain } from "./freeze-plain";
 
 /**
  * Where an outcome came from. `handler` means the plugin answered; every other
@@ -27,9 +35,37 @@ const REJECT_REASONS: ReadonlySet<string> = new Set<ArtifactFeedbackRejectReason
 interface InFlight { settle(outcome: ArtifactFeedbackOutcome): void; controller: AbortController }
 interface Entry {
   readonly owner: ArtifactFeedbackOwner;
-  readonly handler: ArtifactFeedbackHandler;
+  readonly handler: AnyArtifactFeedbackHandler;
   readonly inFlight: Set<InFlight>;
+  /** Comments clients created by `commentsFor`; closed (in-flight calls settled as unavailable) when the handler is disposed. */
+  readonly clients: Set<ReturnType<typeof createCommentsClient>>;
   live: boolean;
+}
+
+const PROVIDER_METHODS = ["list", "get", "save", "update", "remove", "adopt", "subscribe", "sendBatch"] as const;
+
+/** A v2 handler must carry a complete provider; a half-built one is refused at registration instead of failing at first use. */
+function isUsableProvider(value: unknown): value is ArtifactCommentsProvider {
+  try {
+    if (value === null || typeof value !== "object") return false;
+    const provider = value as Record<string, unknown>;
+    const capabilities = provider.capabilities as Record<string, unknown> | null | undefined;
+    if (capabilities === null || typeof capabilities !== "object") return false;
+    if (capabilities.pins !== true || capabilities.batchSend !== true || typeof capabilities.textEdit !== "boolean") return false;
+    return PROVIDER_METHODS.every((method) => typeof provider[method] === "function");
+  } catch {
+    return false;
+  }
+}
+
+/** Next animation frame in a window; a 16 ms timer elsewhere (unit tests, headless). */
+function defaultScheduleFrame(callback: () => void): () => void {
+  if (typeof requestAnimationFrame === "function" && typeof cancelAnimationFrame === "function") {
+    const handle = requestAnimationFrame(() => callback());
+    return () => cancelAnimationFrame(handle);
+  }
+  const handle = setTimeout(callback, 16);
+  return () => clearTimeout(handle);
 }
 
 /** Strips control characters (newlines and tabs become spaces) and caps the length. Untrusted text, render with textContent only. */
@@ -40,12 +76,7 @@ export function cleanFeedbackMessage(value: unknown): string | undefined {
   return cleaned.slice(0, MESSAGE_MAX_UNITS);
 }
 
-/** Freezes plain objects and arrays recursively; typed arrays (the screenshot bytes) cannot be frozen and are left alone. */
-export function freezePlain<T>(value: T): T {
-  if (value === null || typeof value !== "object" || ArrayBuffer.isView(value) || Object.isFrozen(value)) return value;
-  for (const key of Object.keys(value)) freezePlain((value as Record<string, unknown>)[key]);
-  return Object.freeze(value);
-}
+export { freezePlain };
 
 /**
  * Geode's side of the artifact feedback contract (ADR 0006 D1). One instance per
@@ -58,18 +89,33 @@ export function freezePlain<T>(value: T): T {
  * and a console.warn, so it can never reach a plugin error boundary.
  */
 export class ArtifactFeedbackService implements ArtifactFeedbackRegistry {
-  readonly contractVersions: readonly number[] = ARTIFACT_FEEDBACK_CONTRACT_VERSIONS;
+  readonly contractVersions: readonly number[] = ARTIFACT_FEEDBACK_SUPPORTED_VERSIONS;
   private readonly entries: Entry[] = [];
   private readonly listeners = new Set<() => void>();
   private readonly timeoutMs: number;
   private readonly enabled: boolean;
+  private readonly commentsCallTimeoutMs: number;
+  private readonly commentsSendTimeoutMs: number;
+  private readonly scheduleFrame: (callback: () => void) => () => void;
+  /** Live provider subscriptions per artifact root (ARTIFACT_COMMENTS_CAPS.maxSubscribersPerRoot). */
+  private readonly subscriberCounts = new Map<string, number>();
 
-  constructor(options: { timeoutMs?: number; enabled?: boolean } = {}) {
+  constructor(options: {
+    timeoutMs?: number;
+    enabled?: boolean;
+    commentsCallTimeoutMs?: number;
+    commentsSendTimeoutMs?: number;
+    /** Test seam: runs the callback on the next frame and returns a cancel function. */
+    scheduleFrame?: (callback: () => void) => () => void;
+  } = {}) {
     this.timeoutMs = options.timeoutMs ?? ARTIFACT_FEEDBACK_SUBMIT_TIMEOUT_MS;
     this.enabled = options.enabled ?? true;
+    this.commentsCallTimeoutMs = options.commentsCallTimeoutMs ?? ARTIFACT_COMMENTS_CALL_TIMEOUT_MS;
+    this.commentsSendTimeoutMs = options.commentsSendTimeoutMs ?? ARTIFACT_COMMENTS_SEND_TIMEOUT_MS;
+    this.scheduleFrame = options.scheduleFrame ?? defaultScheduleFrame;
   }
 
-  register(owner: ArtifactFeedbackOwner, handler: ArtifactFeedbackHandler): ArtifactFeedbackRegistration {
+  register(owner: ArtifactFeedbackOwner, handler: AnyArtifactFeedbackHandler): ArtifactFeedbackRegistration {
     const failure = (status: "unsupported-version" | "conflict" | "invalid" | "unavailable", message: string): ArtifactFeedbackRegistration =>
       ({ status, message, dispose() {} });
     if (!this.enabled) return failure("unavailable", "Artifact feedback is not available on this host.");
@@ -79,10 +125,13 @@ export class ArtifactFeedbackService implements ArtifactFeedbackRegistry {
     if (!this.contractVersions.includes(handler.contractVersion)) {
       return failure("unsupported-version", `Contract version ${String(handler.contractVersion)} is not supported (supported: ${this.contractVersions.join(", ")}).`);
     }
+    if (handler.contractVersion === 2 && !isUsableProvider(handler.comments)) {
+      return failure("invalid", "A contract v2 handler must provide a complete comments provider.");
+    }
     if (this.entries.some((entry) => entry.owner.pluginId === owner.pluginId)) {
       return failure("conflict", `"${owner.pluginId}" already has a live feedback handler; dispose it first.`);
     }
-    const entry: Entry = { owner: { pluginId: owner.pluginId, displayName: owner.displayName }, handler, inFlight: new Set(), live: true };
+    const entry: Entry = { owner: { pluginId: owner.pluginId, displayName: owner.displayName }, handler, inFlight: new Set(), clients: new Set(), live: true };
     this.entries.push(entry);
     this.notify();
     return {
@@ -91,6 +140,7 @@ export class ArtifactFeedbackService implements ArtifactFeedbackRegistry {
         if (!entry.live) return;
         entry.live = false;
         this.entries.splice(this.entries.indexOf(entry), 1);
+        for (const client of [...entry.clients]) client.handlerGone();
         for (const flight of [...entry.inFlight]) {
           flight.settle({
             status: "rejected",
@@ -113,6 +163,53 @@ export class ArtifactFeedbackService implements ArtifactFeedbackRegistry {
   /** Display name of the plugin that would receive a submission for this target (popover copy), or null. */
   describeHandler(target: ArtifactFeedbackTarget): string | null {
     return this.resolve(target)?.owner.displayName ?? null;
+  }
+
+  /**
+   * Which plugin would receive a submission for this target and under which contract version (the rail and the Pin
+   * button need the version; the popover copy keeps using `describeHandler`). Null when nothing handles the target.
+   */
+  describeRoute(target: ArtifactFeedbackTarget): { readonly displayName: string; readonly contractVersion: 1 | 2 } | null {
+    const entry = this.resolve(target);
+    return entry ? { displayName: entry.owner.displayName, contractVersion: entry.handler.contractVersion } : null;
+  }
+
+  /**
+   * A comments client for the handler that would receive a submission for this target, or null when that handler is
+   * not v2 (ADR 0006 Addendum 1, A2.2: Pin is offered only when the routed handler is v2; there is no fall-through to
+   * a later v2 handler). One client per open view; the caller disposes it. The client belongs to the routed handler
+   * and keeps working with it even if `canHandle` later changes; it ends when the handler is unregistered.
+   */
+  commentsFor(target: ArtifactFeedbackTarget): ArtifactCommentsClient | null {
+    const entry = this.resolve(target);
+    if (!entry || entry.handler.contractVersion !== 2) return null;
+    const provider = entry.handler.comments;
+    const root = target.root;
+    const frozenTarget = freezePlain<ArtifactFeedbackTarget>({
+      root: target.root, artifactId: target.artifactId, title: target.title, runtime: "static", vaultRead: target.vaultRead,
+    });
+    const client = createCommentsClient({
+      owner: entry.owner,
+      provider,
+      target: frozenTarget,
+      isLive: () => entry.live,
+      callTimeoutMs: this.commentsCallTimeoutMs,
+      sendTimeoutMs: this.commentsSendTimeoutMs,
+      scheduleFrame: this.scheduleFrame,
+      acquireSubscriberSlot: () => {
+        const count = this.subscriberCounts.get(root) ?? 0;
+        if (count >= ARTIFACT_COMMENTS_CAPS.maxSubscribersPerRoot) return false;
+        this.subscriberCounts.set(root, count + 1);
+        return true;
+      },
+      releaseSubscriberSlot: () => {
+        const count = (this.subscriberCounts.get(root) ?? 1) - 1;
+        if (count <= 0) this.subscriberCounts.delete(root); else this.subscriberCounts.set(root, count);
+      },
+      onClosed: () => { entry.clients.delete(client); },
+    });
+    entry.clients.add(client);
+    return client;
   }
 
   onDidChange(listener: () => void): () => void {

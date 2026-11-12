@@ -120,7 +120,8 @@ describe("calls: round trip, data-only, frozen", () => {
     expect(await client.update({ id: ID, expectedVersion: 3, change: { text: "new text" } })).toMatchObject({ status: "ok" });
     expect(await client.remove({ id: ID, expectedVersion: 3 })).toEqual({ status: "ok", value: { id: ID } });
     expect(await client.adopt({ ids: [ID] })).toEqual({ status: "ok", value: { adopted: [ID] } });
-    expect(await client.sendBatch({ requestId: REQ, ids: [ID], resend: false, anchorStates: { [ID]: "exact" } })).toMatchObject({ status: "ok", value: { outcome: "partial" } });
+    const batchIds = [ID, "cmt_fedcba9876543210fedcba9876543210", "cmt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"];
+    expect(await client.sendBatch({ requestId: REQ, ids: batchIds, resend: false, anchorStates: { [ID]: "exact" } })).toMatchObject({ status: "ok", value: { outcome: "partial" } });
     expect(await client.reportAnchors([{ id: ID, state: "moved", healed: { selector: "a > b", selectorAlternates: [], textAnchor: { tag: "b", text: "x" }, landmark: null, lastRect: null } }])).toEqual({ status: "ok", value: { applied: 1 } });
   });
 
