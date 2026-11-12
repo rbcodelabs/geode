@@ -201,7 +201,7 @@ describe("fault isolation, timeouts, abort", () => {
     expect(listDone).toBe(false);
     await vi.advanceTimersByTimeAsync(1);
     expect(await listed).toMatchObject({ status: "rejected", reason: "failed" });
-    expect(fake.list.mock.calls[0]![1].signal.aborted).toBe(true);
+    expect((fake.provider.list as any).mock.calls[0][1].signal.aborted).toBe(true);
     await vi.advanceTimersByTimeAsync(4_998);
     expect(sendDone).toBe(false);
     await vi.advanceTimersByTimeAsync(1);
@@ -226,7 +226,7 @@ describe("fault isolation, timeouts, abort", () => {
     const pending = client.list();
     reg.dispose();
     expect(await pending).toMatchObject({ status: "rejected", reason: "unavailable" });
-    expect(fake.list.mock.calls[0]![1].signal.aborted).toBe(true);
+    expect((fake.provider.list as any).mock.calls[0][1].signal.aborted).toBe(true);
     expect(await client.get(ID)).toMatchObject({ status: "rejected", reason: "unavailable" });
     expect((fake.provider.get as any).mock.calls).toHaveLength(0);
   });
@@ -236,7 +236,7 @@ describe("fault isolation, timeouts, abort", () => {
     const pending = client.list();
     client.dispose();
     expect(await pending).toMatchObject({ status: "rejected", reason: "unavailable" });
-    expect(fake.list.mock.calls[0]![1].signal.aborted).toBe(true);
+    expect((fake.provider.list as any).mock.calls[0][1].signal.aborted).toBe(true);
     expect(await client.list()).toMatchObject({ status: "rejected", reason: "unavailable" });
     client.dispose(); // idempotent
   });

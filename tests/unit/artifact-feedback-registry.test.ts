@@ -272,7 +272,7 @@ describe("the plugin-facing view (review A7)", () => {
     expect(view.register).toBeUndefined();
     expect(view.submit).toBeUndefined();
     expect(view.describeHandler).toBeUndefined();
-    expect([...(view.contractVersions as number[])]).toEqual([1]);
+    expect([...(view.contractVersions as number[])]).toEqual([1, 2]);
     const changes = vi.fn();
     (view.onDidChange as (l: () => void) => void)(changes);
     expect((view.has as (t: unknown) => boolean)(target)).toBe(false);
