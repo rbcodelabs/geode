@@ -55,6 +55,7 @@ beforeEach(() => { warn = vi.spyOn(console, "warn").mockImplementation(() => {})
 afterEach(() => { warn.mockRestore(); vi.useRealTimers(); });
 
 function setup(over: Record<string, unknown> = {}, options: ConstructorParameters<typeof ArtifactFeedbackService>[0] = {}) {
+  options = { commentsMinRefreshMs: 0, ...options };
   const frames: (() => void)[] = [];
   const svc = new ArtifactFeedbackService({ scheduleFrame: (cb) => { frames.push(cb); return () => { const i = frames.indexOf(cb); if (i >= 0) frames.splice(i, 1); }; }, ...options });
   const fake = fakeProvider(over);
@@ -298,12 +299,10 @@ describe("change events: validated, coalesced, deduplicated by revision", () => 
     expect(seen).toHaveBeenCalledTimes(1);
   });
 
-  it("drops malformed events with a warning and never schedules work for them", () => {
+  it("drops events that carry no usable revision; ones with a plausible revision still cause a list (fixpass A8)", () => {
     const { client, fake, frames } = setup();
     client.onDidChange(() => {});
     fake.emit({ storeId: "str_89abcdef0123456789abcdef01234567", revision: "9", reason: "local", ids: [] });
-    fake.emit({ storeId: "str_89abcdef0123456789abcdef01234567", revision: 9, reason: "weather", ids: [] });
-    fake.emit({ storeId: "str_89abcdef0123456789abcdef01234567", revision: 9, reason: "local", ids: ["../x"] });
     fake.emit(null);
     fake.emit("boom");
     expect(frames).toHaveLength(0);
@@ -334,7 +333,7 @@ describe("change events: validated, coalesced, deduplicated by revision", () => 
     const { client, fake } = setup();
     fake.list.mockResolvedValueOnce(ok({ ...load("snapshot.json"), revision: 9 })).mockResolvedValueOnce(ok({ ...load("snapshot.json"), revision: 8 }));
     await client.list();
-    expect(await client.list()).toMatchObject({ status: "ok", value: { revision: 8 } }); // the caller still gets what it asked for
+    expect(await client.list()).toMatchObject({ status: "ok", value: { revision: 9 } }); // never an older snapshot than the cache holds
     expect(client.cached!.revision).toBe(9);
   });
 

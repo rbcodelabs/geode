@@ -77,6 +77,7 @@ function setup(over: Record<string, unknown> = {}, options: ConstructorParameter
   const frames: (() => void)[] = [];
   const svc = new ArtifactFeedbackService({
     scheduleFrame: (cb) => { frames.push(cb); return () => { const i = frames.indexOf(cb); if (i >= 0) frames.splice(i, 1); }; },
+    commentsMinRefreshMs: 0,
     ...options,
   });
   const fake = fakeProvider(over);
@@ -393,7 +394,7 @@ describe("hanging, throwing and misbehaving providers, every method", () => {
     expect(performance.now() - started).toBeLessThan(2000);
   });
 
-  it.fails("FINDING F1: a v2 handler whose `comments` getter throws is refused as invalid instead of making register throw", () => {
+  it("FINDING F1: a v2 handler whose `comments` getter throws is refused as invalid instead of making register throw", () => {
     const handler: any = { contractVersion: 2, submit: async () => ({ status: "accepted" }) };
     Object.defineProperty(handler, "comments", { get() { throw new Error("getter"); } });
     const svc = new ArtifactFeedbackService();
@@ -402,7 +403,7 @@ describe("hanging, throwing and misbehaving providers, every method", () => {
     expect(result.status).toBe("invalid");
   });
 
-  it.fails("FINDING F2: a `comments` getter that returns a valid provider at register and junk afterwards does not make commentsFor throw", () => {
+  it("FINDING F2: a `comments` getter that returns a valid provider at register and junk afterwards does not make commentsFor throw", () => {
     let reads = 0;
     const good = fakeProvider().provider;
     const handler: any = { contractVersion: 2, submit: async () => ({ status: "accepted" }) };
@@ -412,7 +413,7 @@ describe("hanging, throwing and misbehaving providers, every method", () => {
     expect(() => svc.commentsFor(target)).not.toThrow();
   });
 
-  it.fails("FINDING F3: a provider whose capabilities.textEdit getter throws on the second read does not make commentsFor throw", () => {
+  it("FINDING F3: a provider whose capabilities.textEdit getter throws on the second read does not make commentsFor throw", () => {
     let reads = 0;
     const fake = fakeProvider();
     const capabilities: any = { pins: true, batchSend: true };
@@ -583,7 +584,7 @@ describe("input validation: what the embedder sends cannot be altered or abused 
     expect(Object.isFrozen(request.selection)).toBe(true);
   });
 
-  it.fails("FINDING F4: save with a self-referencing or very deeply nested request resolves as rejected instead of throwing out of the client", async () => {
+  it("FINDING F4: save with a self-referencing or very deeply nested request resolves as rejected instead of throwing out of the client", async () => {
     const { client } = setup();
     const request: any = { selection: { selectionId: `sel_${hex32(1)}` } };
     request.self = request;
@@ -802,7 +803,7 @@ describe("change-event floods and refresh ordering", () => {
     expect(client.cached).toBeNull();
   });
 
-  it.fails("FINDING F5: concurrent lists that finish out of order never hand a caller an older snapshot than the cache holds", async () => {
+  it("FINDING F5: concurrent lists that finish out of order never hand a caller an older snapshot than the cache holds", async () => {
     const resolvers: ((v: unknown) => void)[] = [];
     const { client } = setup({ list: vi.fn(() => new Promise((r) => { resolvers.push(r); })) });
     const first = client.list();
@@ -815,7 +816,7 @@ describe("change-event floods and refresh ordering", () => {
     expect(late.status === "ok" ? late.value.revision : 9).toBe(9);
   });
 
-  it.fails("FINDING F6: a refresh that returns an older revision of the same store does not notify listeners with that older snapshot", async () => {
+  it("FINDING F6: a refresh that returns an older revision of the same store does not notify listeners with that older snapshot", async () => {
     let call = 0;
     const { client, fake, runFrame } = setup({ list: vi.fn(async () => ok(makeSnapshot(++call === 1 ? 20 : 12))) });
     const received: number[] = [];
@@ -835,7 +836,7 @@ describe("change-event floods and refresh ordering", () => {
     expect(client.cached).toMatchObject({ storeId: "str_new", revision: 2 });
   });
 
-  it.fails("FINDING F7: a provider that emits a change synchronously inside subscribe() still gets a refresh", async () => {
+  it("FINDING F7: a provider that emits a change synchronously inside subscribe() still gets a refresh", async () => {
     const frames: (() => void)[] = [];
     const svc = new ArtifactFeedbackService({ scheduleFrame: (cb) => { frames.push(cb); return () => {}; } });
     const fake = fakeProvider({
