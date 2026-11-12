@@ -247,7 +247,7 @@ describe("F7 events inside subscribe()", () => {
     expect((fake.provider.subscribe as any).mock.calls).toHaveLength(1);
   });
 
-  it("a provider whose subscribe disposes the client inside the call leaves no subscription behind", () => {
+  it.fails("FINDING G4: a provider whose subscribe disposes the client inside the call gets its returned subscription disposed (no leak)", () => {
     const svc = new ArtifactFeedbackService({ scheduleFrame: () => () => {} });
     let client: any;
     const dispose = vi.fn();
@@ -335,7 +335,7 @@ describe("A4/A5 save against the routed target", () => {
     expect(fake.provider.save).not.toHaveBeenCalled();
   });
 
-  it("an accessor on the selection (id read twice) cannot swap the identity between the check and the call", async () => {
+  it.fails("FINDING G5: save sends the identity it checked: an accessor on the selection cannot swap it between the check and the call (request is passed by reference, not copied)", async () => {
     const { client, fake } = setup();
     let reads = 0;
     const selection = { ...load("selection.json") };
