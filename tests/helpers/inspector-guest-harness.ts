@@ -17,13 +17,19 @@ export interface GuestHarness {
   sheets: string[];
   /** Pending animation-frame callbacks; `flush(n)` runs n rounds. */
   flush(rounds?: number): void;
+  /** Runs every registered interval callback once (the guest's 1 s re-assertion, the anchor tracker's). */
   tick(): void;
+  /** Advances the fake clock and runs the timers (setTimeout) that became due, in order. */
+  advance(ms: number): void;
+  /** Number of timers (setTimeout) still pending. */
+  pendingTimers(): number;
   deliver(channel: string, payload: unknown): void;
   setRect(el: Element, rect: { x: number; y: number; width: number; height: number }): void;
   setStyle(el: Element, props: Record<string, string>): void;
   /** Make elementFromPoint return `el`. */
   pointAt(el: Element | null): void;
   setNow(value: number): void;
+  now(): number;
   last(channel: string): Sent | undefined;
   all(channel: string): Sent[];
   trusted<T extends Event>(event: T): T;
@@ -43,7 +49,9 @@ export function boot(html: string, options: { url?: string; start?: boolean; env
   const sent: Sent[] = [];
   const handlers = new Map<string, (payload: unknown) => void>();
   let frames: Array<() => void> = [];
-  let intervalFn: (() => void) | null = null;
+  const intervals = new Map<number, () => void>();
+  let nextTimerId = 1;
+  let timers: Array<{ id: number; due: number; cb: () => void }> = [];
   let now = 1000;
   const rects = new WeakMap<Element, { x: number; y: number; width: number; height: number }>();
   const styles = new WeakMap<Element, Record<string, string>>();
@@ -90,12 +98,25 @@ export function boot(html: string, options: { url?: string; start?: boolean; env
     flush(rounds = 1) {
       for (let i = 0; i < rounds; i++) { const run = frames; frames = []; for (const cb of run) cb(); }
     },
-    tick() { intervalFn?.(); },
+    tick() { for (const fn of [...intervals.values()]) fn(); },
+    advance(ms) {
+      const target = now + ms;
+      for (;;) {
+        const due = timers.filter((t) => t.due <= target).sort((a, b) => a.due - b.due || a.id - b.id)[0];
+        if (!due) break;
+        timers = timers.filter((t) => t !== due);
+        now = Math.max(now, due.due);
+        due.cb();
+      }
+      now = target;
+    },
+    pendingTimers() { return timers.length; },
     deliver(channel, payload) { handlers.get(channel)?.(payload); },
     setRect(el, rect) { rects.set(el, rect); },
     setStyle(el, props) { styles.set(el, props); },
     pointAt(el) { pointed = el; },
     setNow(value) { now = value; },
+    now() { return now; },
     last(channel) { return [...sent].reverse().find((m) => m.channel === channel); },
     all(channel) { return sent.filter((m) => m.channel === channel); },
     trusted,
@@ -116,8 +137,10 @@ export function boot(html: string, options: { url?: string; start?: boolean; env
       },
       now: () => now,
       requestFrame: (cb) => { frames.push(cb); return frames.length; },
-      setInterval: (cb) => { intervalFn = cb; return 1; },
-      clearInterval: () => { intervalFn = null; },
+      setInterval: (cb) => { const id = nextTimerId++; intervals.set(id, cb); return id; },
+      clearInterval: (handle) => { intervals.delete(handle); },
+      setTimeout: (cb, ms) => { const id = nextTimerId++; timers.push({ id, due: now + ms, cb }); return id; },
+      clearTimeout: (handle) => { timers = timers.filter((t) => t.id !== handle); },
       ...options.env,
     });
     return harness.guest;
