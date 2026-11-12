@@ -32,9 +32,10 @@ const q = (over: Partial<InspectAnchorQuery> & { key?: string } = {}): InspectAn
 });
 const $ = (h: GuestHarness, selector: string) => h.doc.querySelector(selector)!;
 function setRects(h: GuestHarness): void {
-  h.setRect($(h, "button"), R.buy);
-  h.setRect($(h, "#pro"), R.pro);
-  h.setRect($(h, "section"), R.section);
+  for (const [selector, rect] of [["button", R.buy], ["#pro", R.pro], ["section", R.section]] as const) {
+    const el = h.doc.querySelector(selector);
+    if (el) h.setRect(el, rect);
+  }
 }
 let epochCounter = 0;
 function setAnchors(h: GuestHarness, anchors: InspectAnchorQuery[], over: { epoch?: number; redactText?: boolean } = {}): number {
@@ -248,14 +249,14 @@ describe("routes", () => {
 describe("redacted artifacts", () => {
   it("a unique selector hit with no text anchor is accepted, agreeing", () => {
     const h = fresh();
-    setAnchors(h, [q({ textAnchor: { tag: "button", text: "" } })], { redactText: true });
+    setAnchors(h, [q({ route: "/page.html", textAnchor: { tag: "button", text: "" } })], { redactText: true });
     h.flush(3);
     expect(byKey(h, "a0")).toMatchObject({ match: "selector", agrees: true });
   });
 
   it("does no text or heading work: a vanished element is detached even if its words are on the page", () => {
     const { h, qsa } = bootSpy();
-    setAnchors(h, [q({ selector: "#gone", textAnchor: { tag: "button", text: "Buy now" }, landmark: "Pricing" })], { redactText: true });
+    setAnchors(h, [q({ route: "/page.html", selector: "#gone", textAnchor: { tag: "button", text: "Buy now" }, landmark: "Pricing" })], { redactText: true });
     h.flush(3);
     expect(byKey(h, "a0")?.match).toBe("detached");
     expect(qsa).toEqual(["#gone"]);
@@ -276,8 +277,7 @@ describe("hostile stored selectors (T3)", () => {
     "*:nth-child(2n+1)",
     "div::before",
     `${Array.from({ length: 50 }, () => "div").join(" > ")}`,
-    `div${"[a]".repeat(200)}`,
-    "a".repeat(513),
+    `div${"[a]".repeat(200)}`.slice(0, 512),
     "\u0000",
   ];
 

@@ -11,6 +11,7 @@ import {
   type InspectMode,
   type InspectRectMessage,
 } from "../artifacts/inspector-protocol";
+import { createAnchorTracker } from "./artifact-inspector-anchors";
 
 /**
  * Guest side of the artifact element inspector (ADR 0006 D4). Pure logic over a
@@ -35,6 +36,8 @@ export interface InspectorGuestEnv {
   requestFrame?: (callback: () => void) => number;
   setInterval?: (callback: () => void, ms: number) => number;
   clearInterval?: (handle: number) => void;
+  setTimeout?: (callback: () => void, ms: number) => number;
+  clearTimeout?: (handle: number) => void;
 }
 
 export interface InspectorGuest {
@@ -109,6 +112,8 @@ export function startInspector(env: InspectorGuestEnv): InspectorGuest | null {
   const requestFrame = env.requestFrame ?? ((cb) => win.requestAnimationFrame(cb));
   const setTimer = env.setInterval ?? ((cb, ms) => win.setInterval(cb, ms));
   const clearTimer = env.clearInterval ?? ((handle) => win.clearInterval(handle));
+  const setDelay = env.setTimeout ?? ((cb, ms) => win.setTimeout(cb, ms));
+  const clearDelay = env.clearTimeout ?? ((handle) => win.clearTimeout(handle));
   const send = (channel: string, payload: unknown): void => { try { env.ipc.send(channel, payload); } catch { /* embedder gone */ } };
 
   // Captured at document start. In the isolated world the page cannot reach these anyway; this is belt and braces.
@@ -116,6 +121,7 @@ export function startInspector(env: InspectorGuestEnv): InspectorGuest | null {
   const nativeGCS = win.getComputedStyle.bind(win);
   const nativeAttachShadow = win.Element.prototype.attachShadow;
   const nativeQSA = win.Document.prototype.querySelectorAll;
+  const nativeGetElementsByTagName = win.Document.prototype.getElementsByTagName;
   const nativeElementFromPoint = typeof doc.elementFromPoint === "function" ? doc.elementFromPoint.bind(doc) : null;
   const addListener = win.addEventListener.bind(win);
   const removeListener = win.removeEventListener.bind(win);
@@ -709,16 +715,42 @@ export function startInspector(env: InspectorGuestEnv): InspectorGuest | null {
     if (key === "parent" || key === "child" || key === "select") handleKey(key);
   }
 
+  // ---- pinned-comment anchors (Phase 2b-i, ADR 0006 addendum 2): passive, works in every mode ----
+  const anchors = createAnchorTracker({
+    win, doc,
+    send,
+    now,
+    requestFrame,
+    setInterval: setTimer,
+    clearInterval: clearTimer,
+    setTimeout: setDelay,
+    clearTimeout: clearDelay,
+    addListener: (type, listener, options) => addListener(type, listener, options),
+    removeListener: (type, listener, options) => removeListener(type, listener, options),
+    queryAll: querySelectorAllSafe,
+    elementsByTag: (tag) => { try { return nativeGetElementsByTagName.call(doc, tag) as unknown as ArrayLike<Element>; } catch { return null; } },
+    rectOf,
+    textOf: (el, limit) => collectText(el).slice(0, limit),
+    tagOf: safeTag,
+    isElement,
+    isGuestHost: (node) => host !== null && node === host,
+    attachShadow: (el, init) => nativeAttachShadow.call(el, init) as ShadowRoot,
+    scrollIntoView: nativeScrollIntoView,
+  });
+
   // Registered at document start, in the capture phase, before any page script can run.
   attachListeners();
   env.ipc.on(INSPECT_CHANNEL.mode, onModeMessage);
   env.ipc.on(INSPECT_CHANNEL.key, onKeyMessage);
+  env.ipc.on(INSPECT_CHANNEL.anchors, anchors.onAnchors);
+  env.ipc.on(INSPECT_CHANNEL.anchorFocus, anchors.onFocus);
   send(INSPECT_CHANNEL.ready, { protocol: INSPECT_PROTOCOL_VERSION });
 
   return {
     get mode() { return mode; },
     dispose() {
       disposed = true;
+      anchors.dispose();
       detachListeners();
       observer?.disconnect();
       selectedObserver?.disconnect();
