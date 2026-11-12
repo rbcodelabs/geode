@@ -35,10 +35,10 @@ beforeEach(() => { warn = vi.spyOn(console, "warn").mockImplementation(() => {})
 afterEach(() => { warn.mockRestore(); vi.useRealTimers(); });
 
 describe("contract constants", () => {
-  it("advertises version 1 and a 15 s timeout", () => {
+  it("the v1 file still defines version 1 and a 15 s timeout; the service accepts [1, 2] since Addendum 1", () => {
     expect([...ARTIFACT_FEEDBACK_CONTRACT_VERSIONS]).toEqual([1]);
     expect(ARTIFACT_FEEDBACK_SUBMIT_TIMEOUT_MS).toBe(15_000);
-    expect([...new ArtifactFeedbackService().contractVersions]).toEqual([1]);
+    expect([...new ArtifactFeedbackService().contractVersions]).toEqual([1, 2]);
   });
 });
 
@@ -61,7 +61,7 @@ describe("registration", () => {
 
   it("returns structured results instead of throwing", () => {
     const svc = new ArtifactFeedbackService();
-    expect(svc.register(ownerA, { contractVersion: 2, submit: async () => accepted } as never).status).toBe("unsupported-version");
+    expect(svc.register(ownerA, { contractVersion: 3, submit: async () => accepted } as never).status).toBe("unsupported-version");
     expect(svc.register(ownerA, {} as never).status).toBe("invalid");
     expect(svc.register(ownerA, null as never).status).toBe("invalid");
     expect(new ArtifactFeedbackService({ enabled: false }).register(ownerA, handler()).status).toBe("unavailable");
