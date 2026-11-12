@@ -8,6 +8,7 @@ import {
   ARTIFACT_VAULT_RESPONSE_CHANNEL,
 } from "../../artifacts/guest-protocol";
 import { ArtifactVaultBridge } from "../artifacts/vault-bridge";
+import { createAnchorProbe, type AnchorProbe } from "../artifacts/anchor-probe";
 import { ArtifactInspectorBridge, artifactFeedbackTarget, isPickAvailable, type InspectorHover, type InspectorWebview } from "./artifact-inspector-bridge";
 import type { ArtifactFeedbackTarget } from "../../artifacts/feedback-contract";
 import { PickController, type FocusTarget, type PickState } from "../artifacts/pick-controller";
@@ -90,6 +91,8 @@ export class ArtifactView implements View, ReloadableView {
   private layoutObserver: ResizeObserver | undefined;
   private readonly onWindowResize = (): void => this.repositionPick("layout");
   private bridge: ArtifactInspectorBridge | null = null;
+  /** Phase 2b-i test hook for the guest anchors until the pin UI exists (G3); null while no inspector is attached. */
+  anchorProbe: AnchorProbe | null = null;
   private pick: PickController | null = null;
   private popover: PickPopover | null = null;
   private pickTarget: ArtifactFeedbackTarget | null = null;
@@ -346,6 +349,7 @@ export class ArtifactView implements View, ReloadableView {
     this.pickTarget = target;
     this.guestLoaded = false;
     this.guestLoadFailed = false;
+    let anchorSink: ReturnType<typeof createAnchorProbe> | null = null;
     const bridge = new ArtifactInspectorBridge({
       webview: frame as unknown as InspectorWebview,
       registration,
@@ -358,8 +362,12 @@ export class ArtifactView implements View, ReloadableView {
         onSelect: (snapshot) => this.pick?.selected(snapshot, document.activeElement === frame ? "guest" : "toggle"),
         onCancel: () => { this.pick?.cancelFromGuest(); },
         onRect: (report) => this.onGuestRect(report),
+        onAnchorResults: (message) => anchorSink?.onResults(message),
+        onAnchorRects: (message) => anchorSink?.onRects(message),
       },
     });
+    anchorSink = createAnchorProbe(bridge);
+    this.anchorProbe = anchorSink.probe;
     const controller = new PickController({
       setGuestMode: (mode) => bridge.setMode(mode),
       submit: (snapshot, comment) => bridge.submit(snapshot, comment),
@@ -424,6 +432,7 @@ export class ArtifactView implements View, ReloadableView {
     this.lastHover = null;
     this.pick = null;
     this.bridge = null;
+    this.anchorProbe = null;
     this.popover = null;
     this.pickTarget = null;
     this.guestLoaded = false;

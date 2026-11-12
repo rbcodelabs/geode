@@ -283,3 +283,123 @@ export const CHART_ARTIFACT: ArtifactSpec = {
     "style.css": `body{margin:0;font:16px system-ui,sans-serif}main{padding:0}figure{margin:0;position:absolute;left:20px;top:20px}svg{display:block}`,
   },
 };
+
+/**
+ * Phase 2b-i G2 (pinned-comment anchors): a page for the anchor tracker with the attacks T1 (forged anchor messages),
+ * T2 (patched prototypes, decoys) and T3 (pathological selectors on a heavy DOM) available on demand through
+ * window.__anchorHostile. Positions are absolute so rectangles are exact at any pane size:
+ *   #buy {100,200,160x48}  #note {100,280}  h2#plans-h {100,100}  section#plans {80,150,700x200}
+ */
+export const ANCHORS_ARTIFACT: ArtifactSpec = {
+  id: "picker-anchors",
+  title: "Anchors page",
+  html: `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Anchors</title>
+<link rel="stylesheet" href="style.css"></head><body>
+<main id="stage"><h2 id="plans-h">Plans</h2>
+<section class="plans" data-variation="B" id="plans"><button id="buy" class="cta" type="button" data-testid="buy">Buy now</button>
+<p id="note">Annual billing saves 20 percent</p></section>
+<div id="sink"></div></main>
+<script src="anchors.js"></script></body></html>`,
+  files: {
+    "style.css": `body{margin:0;font:16px system-ui,sans-serif;background:#fff;color:#111}
+h2{position:absolute;left:100px;top:100px;margin:0}
+#plans{position:absolute;left:80px;top:150px;width:700px;height:200px}
+#buy{position:absolute;left:100px;top:200px;width:160px;height:48px;margin:0;padding:0;border:0;background:#2a6;color:#fff}
+#note{position:absolute;left:100px;top:280px;margin:0}
+#sink{position:absolute;left:0;top:3000px}`,
+    "anchors.js": `
+const CH = ["anchors", "anchor-focus", "anchor-results", "anchor-rects"].map((n) => "geode-artifact:inspect:v1:" + n);
+const origRect = Element.prototype.getBoundingClientRect;
+const origQSA = Document.prototype.querySelectorAll;
+let churn = 0;
+window.__marker = "loaded-" + Math.random().toString(36).slice(2);
+window.__forged = 0;
+window.__anchorHostile = {
+  trueRect(selector) { const r = origRect.call(origQSA.call(document, selector)[0]); return { x: r.x, y: r.y, width: r.width, height: r.height }; },
+  /** Patch every prototype the guest might read; the guest runs in its own world and must not notice. */
+  patch() {
+    Element.prototype.getBoundingClientRect = function () { return { x: 5, y: 5, width: 1, height: 1, top: 5, left: 5, right: 6, bottom: 6, toJSON() { return this; } }; };
+    Document.prototype.querySelectorAll = () => [];
+    Document.prototype.querySelector = () => null;
+    Document.prototype.getElementsByTagName = () => [];
+    Element.prototype.querySelectorAll = () => [];
+    Element.prototype.scrollIntoView = function () { window.__hostileScroll = (window.__hostileScroll || 0) + 1; };
+    window.getComputedStyle = () => new Proxy({}, { get: () => "FORGED" });
+  },
+  /** A decoy with the same text, earlier in the document, somewhere else on the page. */
+  addDecoy() {
+    const d = document.createElement("button");
+    d.id = "decoy";
+    d.type = "button";
+    d.textContent = "Buy now";
+    d.style.cssText = "position:absolute;left:600px;top:500px;width:160px;height:48px;margin:0;padding:0;border:0";
+    document.getElementById("stage").insertBefore(d, document.getElementById("plans-h"));
+  },
+  removeBuy() { window.__removed = document.getElementById("buy"); window.__removed.remove(); },
+  restoreBuy() { if (window.__removed) document.getElementById("plans").appendChild(window.__removed); },
+  /** Everything a page can do to impersonate the guest on the anchor channels (and a few more). */
+  forge(epoch, keys) {
+    const rect = { x: 1, y: 1, width: 5, height: 5 };
+    const results = { epoch, results: keys.map((key) => ({ key, match: "selector", agrees: true, rect, visible: true })) };
+    const rects = { epoch, rects: keys.map((key) => ({ key, rect, visible: true })) };
+    for (const channel of CH) {
+      const payload = channel.endsWith("results") ? results : channel.endsWith("rects") ? rects : { epoch, redactText: false, anchors: [], key: keys[0], behavior: "flash" };
+      window.postMessage({ channel, args: [payload] }, "*");
+      window.postMessage(JSON.parse(JSON.stringify({ channel, payload })), "*");
+      window.dispatchEvent(new MessageEvent("message", { data: { channel, args: [payload] } }));
+      window.dispatchEvent(new CustomEvent(channel, { detail: payload }));
+      document.dispatchEvent(new CustomEvent(channel, { detail: payload }));
+      window.__forged++;
+    }
+  },
+  build(n) {
+    const host = document.getElementById("sink");
+    const f = document.createDocumentFragment();
+    for (let i = 0; i < n; i++) { const s = document.createElement("span"); s.textContent = i % 97 === 0 ? "Buy now" : "x" + i; f.appendChild(s); }
+    host.appendChild(f);
+  },
+  /** Mutate the page ~hz times a second (a ticking counter, a live chart). */
+  startChurn(hz) { churn = setInterval(() => { document.getElementById("note").textContent = "Annual billing saves " + Math.floor(Math.random() * 90) + " percent"; }, 1000 / hz); },
+  stopChurn() { clearInterval(churn); },
+};
+window.__perf = {
+  deltas: [], running: false,
+  start() { this.deltas = []; this.running = true; let last = performance.now(); const tick = (t) => { if (!this.running) return; this.deltas.push(t - last); last = t; requestAnimationFrame(tick); }; requestAnimationFrame(tick); },
+  stop() { this.running = false; return this.deltas.slice(); },
+};`,
+  },
+};
+
+/**
+ * Spike S1: a heavy page. n rows in sections of 50, each row a div#r<i> holding span.item "Item <i>" (unique text),
+ * under main#big, with an h3 per section. Built by script so the artifact stays tiny on disk.
+ */
+export function anchorPerfArtifact(n: number): ArtifactSpec {
+  return {
+    id: `picker-perf-${n}`,
+    title: `Perf ${n}`,
+    html: `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Perf</title><link rel="stylesheet" href="style.css"></head><body><main id="big"></main><script src="app.js"></script></body></html>`,
+    files: {
+      "style.css": `body{margin:0;font:12px system-ui}.row{height:16px}h3{margin:0;height:20px}`,
+      "app.js": `const big = document.getElementById("big");
+let section = null;
+const f = document.createDocumentFragment();
+for (let i = 0; i < ${n}; i++) {
+  if (i % 50 === 0) { section = document.createElement("section"); const h = document.createElement("h3"); h.textContent = "Group " + (i / 50); section.appendChild(h); f.appendChild(section); }
+  const row = document.createElement("div"); row.className = "row"; row.id = "r" + i;
+  const span = document.createElement("span"); span.className = "item"; span.textContent = "Item " + i;
+  row.appendChild(span); section.appendChild(row);
+}
+big.appendChild(f);
+window.__marker = "loaded-" + Math.random().toString(36).slice(2);
+window.__churn = 0;
+window.__startChurn = (hz) => { window.__churn = setInterval(() => { document.getElementById("r1").firstChild.textContent = "Item 1 " + Math.random(); }, 1000 / hz); };
+window.__stopChurn = () => clearInterval(window.__churn);
+window.__perf = {
+  deltas: [], running: false,
+  start() { this.deltas = []; this.running = true; let last = performance.now(); const tick = (t) => { if (!this.running) return; this.deltas.push(t - last); last = t; requestAnimationFrame(tick); }; requestAnimationFrame(tick); },
+  stop() { this.running = false; return this.deltas.slice(); },
+};`,
+    },
+  };
+}
