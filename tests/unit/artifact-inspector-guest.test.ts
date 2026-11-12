@@ -760,6 +760,26 @@ describe("SVG (Phase 2a R4): selectors keep the tag case of non-HTML elements", 
     expect(html2).toContain("</foreignObject>");
   });
 
+  it("keeps the case of SVG attribute names (viewBox, gradientUnits) but lower-cases HTML attribute names (QA finding)", () => {
+    const h = pick(`<body><DIV CLASS="c" ID="d"><svg id="chart" viewBox="0 0 400 200" preserveAspectRatio="none"><linearGradient gradientUnits="userSpaceOnUse"/></svg></DIV></body>`);
+    const svg = h.doc.querySelector("svg")!;
+    const html = (selectOn(h, svg) as { outerHTML: { html: string } }).outerHTML.html;
+    expect(html).toContain('viewBox="0 0 400 200"');
+    expect(html).toContain('preserveAspectRatio="none"');
+    expect(html).toContain('<linearGradient gradientUnits="userSpaceOnUse">');
+    expect(html).not.toContain("viewbox=");
+    const h2 = pick(`<body><DIV CLASS="c" ID="d">x</DIV></body>`);
+    const div = (selectOn(h2, h2.doc.querySelector("div")!) as { outerHTML: { html: string } }).outerHTML.html;
+    expect(div).toBe('<div class="c" id="d">x</div>');
+  });
+
+  it("still elides handlers and data URIs on SVG elements regardless of attribute case", () => {
+    const h = pick(`<body><svg><image href="data:image/png;base64,AAAA" onLoad="evil()" /></svg></body>`);
+    const html = (selectOn(h, h.doc.querySelector("svg")!) as { outerHTML: { html: string } }).outerHTML.html;
+    expect(html).not.toContain("evil");
+    expect(html).not.toContain("base64");
+  });
+
   it("bounds the walk over a large SVG (nodes and time) like any other subtree", () => {
     const h = boot(`<body><svg id="big" viewBox="0 0 10 10"></svg></body>`, { start: false });
     const svg = $(h, "#big");

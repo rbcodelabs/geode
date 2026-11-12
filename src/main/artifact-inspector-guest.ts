@@ -353,8 +353,10 @@ export function startInspector(env: InspectorGuestEnv): InspectorGuest | null {
       const attrs = el.attributes;
       for (let i = 0; i < attrs.length && i < ATTRIBUTE_LIMIT; i++) {
         const attr = attrs[i]!;
-        const name = attr.name.toLowerCase();
+        const name = attr.name.toLowerCase(); // used for every policy check (on*, srcdoc, the redaction keep list)
         if (!/^[a-z_:][-a-z0-9_:.]*$/.test(name)) continue;
+        // SVG attribute names are case-sensitive (viewBox, gradientUnits); HTML ones are written lower-case.
+        const written = isHtml(el) ? name : attr.name.replace(/[^A-Za-z0-9_:.-]/g, "-");
         let value = attr.value.length > RAW_ATTRIBUTE_UNITS ? attr.value.slice(0, RAW_ATTRIBUTE_UNITS) : attr.value;
         if (redact) {
           value = keep.has(name) ? value : "...";
@@ -366,7 +368,7 @@ export function startInspector(env: InspectorGuestEnv): InspectorGuest | null {
           value = elideDataUrls(value);
         }
         if (value.length > INSPECTOR_CAPS.attributeValueUnits) value = `${value.slice(0, INSPECTOR_CAPS.attributeValueUnits)}...`;
-        text += ` ${name}="${escapeAttr(value)}"`;
+        text += ` ${written}="${escapeAttr(value)}"`;
       }
       return text;
     };
