@@ -862,7 +862,7 @@ describe("live rect reports (Phase 2a R1)", () => {
     resize(h);
     expect(rectsSent(h)).toEqual([]); // nothing until the frame
     h.flush();
-    expect(rectsSent(h)).toEqual([{ target: "hover", connected: true, rect: { x: 100, y: 120, width: 160, height: 48 } }]);
+    expect(rectsSent(h)).toEqual([{ target: "hover", connected: true, tag: "button", rect: { x: 100, y: 120, width: 160, height: 48 } }]);
     expect(h.sheets.at(-1)).toMatch(/top:\s*120px/);
   });
 
@@ -874,24 +874,62 @@ describe("live rect reports (Phase 2a R1)", () => {
     expect(rectsSent(h).at(-1)).toEqual({ target: "selected", connected: true, rect: { x: 90, y: 20, width: 160, height: 48 } });
   });
 
-  it("does not repeat an unchanged rect", async () => {
+  it("does not repeat an unchanged rect on scroll, but re-sends the current state on each 1 s tick (self-healing, B1)", async () => {
     const { h, btn } = await selectedButton();
     h.setRect(btn, { x: 1, y: 2, width: 3, height: 4 });
     scroll(h); h.flush();
     scroll(h); h.flush();
-    h.tick(); h.flush();
     expect(rectsSent(h).filter((r) => r.target === "selected")).toHaveLength(1);
+    h.tick(); h.flush();
+    expect(rectsSent(h).filter((r) => r.target === "selected")).toHaveLength(2); // the tick re-sends, at most once per tick
+    scroll(h); h.flush();
+    expect(rectsSent(h).filter((r) => r.target === "selected")).toHaveLength(2);
+    h.tick(); h.flush();
+    expect(rectsSent(h).filter((r) => r.target === "selected")).toHaveLength(3);
   });
 
-  it("says the selected element is gone (once) when the page removes it, found by the next scroll, tick or mutation", async () => {
+  it("says the selected element is gone when the page removes it (mutation), once per event, and again on each tick until the state changes (B1)", async () => {
     const { h, btn } = await selectedButton();
     btn.remove();
     await Promise.resolve(); // MutationObserver microtask
     h.flush();
-    expect(rectsSent(h).filter((r) => r.target === "selected")).toEqual([{ target: "selected", connected: false, rect: null }]);
-    scroll(h); h.flush();
-    h.tick(); h.flush();
+    const gone = { target: "selected", connected: false, rect: null };
+    expect(rectsSent(h).filter((r) => r.target === "selected")).toEqual([gone]);
+    scroll(h); h.flush(); // a scroll alone does not repeat it
     expect(rectsSent(h).filter((r) => r.target === "selected")).toHaveLength(1);
+    h.tick(); h.flush(); // the tick does: a dropped or lost report is recovered within a second
+    expect(rectsSent(h).filter((r) => r.target === "selected")).toEqual([gone, gone]);
+  });
+
+  it("recovers a gone report the embedder never received: the next tick sends it again", async () => {
+    const { h, btn } = await selectedButton();
+    btn.remove();
+    await Promise.resolve();
+    h.flush();
+    h.sent.length = 0; // the message was lost in transit (dropped by a budget or never handled)
+    h.tick(); h.flush();
+    expect(rectsSent(h)).toEqual([{ target: "selected", connected: false, rect: null }]);
+  });
+
+  it("recovers a moved rect that was lost: the tick re-sends the current rect", async () => {
+    const { h, btn } = await selectedButton();
+    h.setRect(btn, { x: 5, y: 6, width: 7, height: 8 });
+    scroll(h); h.flush();
+    h.sent.length = 0; // lost
+    h.tick(); h.flush();
+    expect(rectsSent(h)).toEqual([{ target: "selected", connected: true, rect: { x: 5, y: 6, width: 7, height: 8 } }]);
+  });
+
+  it("reports a connected rect again when the same node is re-attached after a gone report (A10)", async () => {
+    const { h, btn } = await selectedButton();
+    const parent = btn.parentElement!;
+    btn.remove();
+    await Promise.resolve();
+    h.flush();
+    parent.appendChild(btn);
+    h.setRect(btn, { x: 9, y: 9, width: 9, height: 9 });
+    scroll(h); h.flush();
+    expect(rectsSent(h).at(-1)).toEqual({ target: "selected", connected: true, rect: { x: 9, y: 9, width: 9, height: 9 } });
   });
 
   it("a removal with no observer callback is still found by the periodic tick", async () => {
@@ -909,6 +947,13 @@ describe("live rect reports (Phase 2a R1)", () => {
     h.flush();
     expect(rectsSent(h).at(-1)).toEqual({ target: "hover", connected: false, rect: null });
     expect(h.sheets.at(-1)).toContain("display:none");
+  });
+
+  it("a hover rect names its element, so the embedder never shows one element's tag with another's size (A9)", () => {
+    const { h, btn } = hoveredButton();
+    h.setRect(btn, { x: 1, y: 2, width: 30, height: 40 });
+    scroll(h); h.flush();
+    expect(rectsSent(h).at(-1)).toMatchObject({ target: "hover", tag: "button" });
   });
 
   it("sends nothing in off mode and nothing for a selection the embedder has already left (mode message)", async () => {
@@ -929,5 +974,26 @@ describe("live rect reports (Phase 2a R1)", () => {
     scroll(h);
     h.flush();
     expect(rectsSent(h)).toHaveLength(1);
+  });
+});
+
+describe("data: URI elision survives leading control characters and zero-width (review A7)", () => {
+  it("elides data: values that start with C0 controls, whitespace or zero-width characters, in HTML and SVG", () => {
+    const values = ["\u0001data:text/html,zzz", "\u0000\u001f data:image/png;base64,AAAA", "\u200bdata:text/plain,x", "\ufeffdata:text/plain,x", "  DATA:text/plain,x"];
+    for (const value of values) {
+      const h = pick(`<body><div id="x"><a id="a">y</a><svg><image id="i"/></svg></div></body>`);
+      h.doc.querySelector("#a")!.setAttribute("href", value);
+      h.doc.querySelector("#i")!.setAttribute("href", value);
+      const html = (selectOn(h, h.doc.querySelector("#x")!) as { outerHTML: { html: string } }).outerHTML.html;
+      expect(html, JSON.stringify(value)).not.toMatch(/zzz|AAAA|text\/plain/);
+      expect(html).toContain("data:...elided");
+    }
+  });
+
+  it("elides url(data:...) inside <style> text", () => {
+    const h = pick(`<body><div id="x"><style>.a{background:url(data:image/png;base64,QUJDREVGRw==)}</style></div></body>`);
+    const html = (selectOn(h, h.doc.querySelector("#x")!) as { outerHTML: { html: string } }).outerHTML.html;
+    expect(html).not.toContain("QUJDREVGRw");
+    expect(html).toContain("url(data:...elided)");
   });
 });

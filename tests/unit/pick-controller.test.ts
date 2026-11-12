@@ -439,3 +439,54 @@ describe("PickController: the selected element changed or left (Phase 2a R1)", (
     expect(controller.state.comment).toBe("");
   });
 });
+
+describe("PickController: gone or returned before the popover exists (review B1, A10)", () => {
+  it("remembers a gone report that arrives while still in pick (after a select, before the screenshot lands) and applies it when the popover opens", () => {
+    const { controller } = setup();
+    controller.enter("pointer");
+    controller.elementChanged(); // the bridge is already in hold; the popover does not exist yet
+    controller.selected(snapshot(), "toggle");
+    expect(controller.state.phase).toBe("popover");
+    expect(controller.state.elementGone).toBe(true);
+    expect(controller.canSend()).toBe(false);
+  });
+
+  it("a remembered gone report does not leak into the following selection or survive leaving pick mode", () => {
+    const { controller } = setup();
+    controller.enter("pointer");
+    controller.elementChanged();
+    controller.selected(snapshot("sel_1"), "toggle");
+    controller.cancel();
+    controller.selected(snapshot("sel_2"), "toggle");
+    expect(controller.state.elementGone).toBe(false);
+    const other = setup();
+    other.controller.enter("pointer");
+    other.controller.elementChanged();
+    other.controller.escape(); // leaves pick mode
+    other.controller.enter("pointer");
+    other.controller.selected(snapshot(), "toggle");
+    expect(other.controller.state.elementGone).toBe(false);
+  });
+
+  it("elementReturned clears the gone state when the page re-attaches the same node (A10), and does nothing otherwise", () => {
+    const { controller } = selected("kept");
+    controller.elementChanged();
+    expect(controller.canSend()).toBe(false);
+    controller.elementReturned();
+    expect(controller.state.elementGone).toBe(false);
+    expect(controller.state.comment).toBe("kept");
+    expect(controller.canSend()).toBe(true);
+    const idle = setup();
+    idle.controller.elementReturned();
+    expect(idle.controller.state.elementGone).toBe(false);
+  });
+
+  it("a remembered gone report is cleared by a returned report before the popover opens", () => {
+    const { controller } = setup();
+    controller.enter("pointer");
+    controller.elementChanged();
+    controller.elementReturned();
+    controller.selected(snapshot(), "toggle");
+    expect(controller.state.elementGone).toBe(false);
+  });
+});

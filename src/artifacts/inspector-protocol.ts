@@ -58,6 +58,8 @@ export interface InspectRectMessage {
   readonly connected: boolean;
   /** Guest viewport CSS px; null exactly when `connected` is false. */
   readonly rect: Rect | null;
+  /** Only on a connected `hover` report: the lower-case tag of the element the rect belongs to (keeps the chip atomic). */
+  readonly tag?: string;
 }
 
 /** The origin-G half of `ElementSelection` as the page's DOM supplies it. Untrusted. */
@@ -122,7 +124,8 @@ export const INSPECTOR_CAPS = {
   messagesPerSecond: 30,
   selectsPerSecond: 4,
   /** Embedder: `rect` reports, a budget of their own so scroll traffic can never starve select or cancel (and vice versa). */
-  rectsPerSecond: 120,
+  // 360: comfortably above 144 Hz displays (one report per animation frame at most, so 240 Hz still fits with jitter).
+  rectsPerSecond: 360,
   /** Guest: highlight host re-attachments per second before it marks itself degraded. */
   reattachPerSecond: 20,
   /** Guest outerHTML walker budgets. */

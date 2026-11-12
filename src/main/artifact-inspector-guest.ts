@@ -59,6 +59,8 @@ const TEXT_CHAR_BUDGET = 400;
 const RAW_ATTRIBUTE_UNITS = INSPECTOR_CAPS.attributeValueUnits * 2;
 const RAW_TEXT_UNITS = 16_384;
 const HIGHLIGHT_COLOR = "#7c3aed";
+/** A data: URL as the URL parser sees it: leading C0 controls, spaces and zero-width characters are ignored. */
+const DATA_URI_START = /^[\u0000-\u0020\u200b-\u200d\u2060\ufeff]*data:/i;
 const HTML_NAMESPACE = "http://www.w3.org/1999/xhtml";
 /** Same pointer-sized budget the embedder applies to hover: one report per frame at most, and only when something changed. */
 const SCROLL_OPTIONS = { capture: true, passive: true } as const;
@@ -362,7 +364,7 @@ export function startInspector(env: InspectorGuestEnv): InspectorGuest | null {
           value = keep.has(name) ? value : "...";
         } else if (name.startsWith("on") || name === "srcdoc") {
           value = "...";
-        } else if (/^\s*data:/i.test(value)) {
+        } else if (DATA_URI_START.test(value)) {
           value = "data:...elided";
         } else if (name === "style") {
           value = elideDataUrls(value);
@@ -390,7 +392,9 @@ export function startInspector(env: InspectorGuestEnv): InspectorGuest | null {
           }
           if (!emit(closeOf(cur))) break;
         } else if (cur.nodeType === 3 && !redact) {
-          const text = escapeHtml((cur as Text).data.slice(0, RAW_TEXT_UNITS).replace(/\s+/g, " "));
+          let raw = (cur as Text).data.slice(0, RAW_TEXT_UNITS);
+          if (cur.parentElement?.localName === "style") raw = elideDataUrls(raw);
+          const text = escapeHtml(raw.replace(/\s+/g, " "));
           if (text.trim() !== "") {
             const room = limit - length;
             if (text.length > room) { if (room > 0) out.push(text.slice(0, room)); length = limit; truncated = true; break; }
@@ -579,7 +583,7 @@ export function startInspector(env: InspectorGuestEnv): InspectorGuest | null {
     if (key === lastRectKey) return;
     lastRectKey = key;
     if (target === "hover" && ensureHost()) paint(rect);
-    send(INSPECT_CHANNEL.rect, { target, connected: true, rect } satisfies InspectRectMessage);
+    send(INSPECT_CHANNEL.rect, (target === "hover" ? { target, connected: true, rect, tag: safeTag(el) } : { target, connected: true, rect }) satisfies InspectRectMessage);
   }
   function onViewportChange(): void {
     scheduleRectReport();
@@ -668,7 +672,11 @@ export function startInspector(env: InspectorGuestEnv): InspectorGuest | null {
     attachListeners();
     observe();
     if (mode === "pick" && host && !host.isConnected) scheduleHeal();
-    // Layout changes that fire no scroll or resize (a chart re-render, a removal the observer could not see).
+    // Layout changes that fire no scroll or resize (a chart re-render, a removal the observer could not see) AND recovery:
+    // forget what was last reported so the current state (moved or gone) is sent again, at most once per tick. A report
+    // the embedder dropped or could not act on yet therefore never leaves it stuck (review B1).
+    goneReported = false;
+    lastRectKey = "";
     scheduleRectReport();
   }
 

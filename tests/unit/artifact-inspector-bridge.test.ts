@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ArtifactFeedbackRequest, ArtifactFeedbackTarget } from "../../src/artifacts/feedback-contract";
-import { INSPECT_CHANNEL, INSPECTOR_SCREENSHOT, type GuestSelectMessage } from "../../src/artifacts/inspector-protocol";
+import { INSPECT_CHANNEL, INSPECTOR_CAPS, INSPECTOR_SCREENSHOT, type GuestSelectMessage } from "../../src/artifacts/inspector-protocol";
 import {
   ArtifactInspectorBridge,
   artifactFeedbackTarget,
@@ -600,11 +600,12 @@ describe("rect reports (Phase 2a)", () => {
     expect(({} as Record<string, unknown>).polluted).toBeUndefined();
   });
 
-  it("has its own 120 per second budget: a scroll flood never starves a select, and a hover/select flood never starves rects", async () => {
+  it("has its own budget: a scroll flood never starves a select, and a hover/select flood never starves rects", async () => {
     const { bridge, webview, rects, hovers, selections } = setup();
     bridge.setMode("pick");
-    for (let i = 0; i < 500; i++) webview.emit(INSPECT_CHANNEL.rect, rectMsg());
-    expect(rects).toHaveLength(120);
+    const cap = INSPECTOR_CAPS.rectsPerSecond;
+    for (let i = 0; i < cap + 380; i++) webview.emit(INSPECT_CHANNEL.rect, rectMsg());
+    expect(rects).toHaveLength(cap);
     webview.emit(INSPECT_CHANNEL.select, guestSelect());
     await settle();
     expect(selections).toHaveLength(1); // the select budget is untouched
@@ -614,7 +615,36 @@ describe("rect reports (Phase 2a)", () => {
     expect(hovers).toHaveLength(30);
     clock += 1001;
     webview.emit(INSPECT_CHANNEL.rect, rectMsg());
-    expect(rects).toHaveLength(121);
+    expect(rects).toHaveLength(cap + 1);
+  });
+
+  it("is comfortably above 144 Hz: a jittery 120/144/240 Hz scroll is delivered whole, the LAST rect is never lost, and select/hover/cancel are unaffected (A2)", async () => {
+    for (const hz of [60, 120, 144, 240]) {
+      const { bridge, webview, rects, hovers, selections, cancels } = setup();
+      bridge.setMode("hold");
+      let t = clock;
+      let sent = 0;
+      let seed = 12345;
+      const rnd = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 2 ** 32; };
+      const frameMs = 1000 / hz;
+      for (let frame = 0; frame < hz * 3; frame++) { // 3 seconds of continuous scrolling
+        t += frameMs + (rnd() - 0.5) * 3; // +-1.5 ms jitter
+        clock = Math.floor(t);
+        webview.emit(INSPECT_CHANNEL.rect, rectMsg({ target: "selected", rect: { x: 1, y: frame, width: 3, height: 4 } }));
+        sent++;
+      }
+      expect(rects, `${hz} Hz`).toHaveLength(sent);
+      expect((rects.at(-1) as { rect: { y: number } }).rect.y).toBe(hz * 3 - 1);
+      // the other budgets are untouched by the scroll traffic
+      bridge.setMode("pick");
+      webview.emit(INSPECT_CHANNEL.hover, { tag: "div", rect: { x: 1, y: 1, width: 1, height: 1 }, via: "pointer" });
+      webview.emit(INSPECT_CHANNEL.select, guestSelect());
+      await settle();
+      expect(hovers).toHaveLength(1);
+      expect(selections).toHaveLength(1);
+      webview.emit(INSPECT_CHANNEL.cancel, { reason: "escape" });
+      expect(cancels()).toBe(1);
+    }
   });
 
   it("a dropped rect report never re-sends the mode (it cannot strand the guest)", () => {

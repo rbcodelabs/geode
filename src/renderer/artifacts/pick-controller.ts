@@ -50,6 +50,8 @@ export class PickController {
   private disposed = false;
   /** Text carried from a popover whose element vanished into the next selection (never past leaving pick mode). */
   private draft = "";
+  /** A gone report that arrived after the select but before the popover exists (the screenshot await); applied on open. */
+  private pendingGone = false;
 
   constructor(private readonly host: PickControllerHost) {}
 
@@ -74,7 +76,9 @@ export class PickController {
     this.origin = origin;
     const draft = this.draft;
     this.draft = "";
-    this.set({ ...IDLE, phase: "popover", snapshot, comment: draft });
+    const gone = this.pendingGone;
+    this.pendingGone = false;
+    this.set({ ...IDLE, phase: "popover", snapshot, comment: draft, elementGone: gone });
     this.host.focus("comment");
   }
 
@@ -113,8 +117,19 @@ export class PickController {
 
   /** The guest says the selected element left the document (or was replaced). Keeps the typed comment. */
   elementChanged(): void {
-    if (this.disposed || this.current.phase !== "popover" || this.current.elementGone) return;
+    if (this.disposed) return;
+    // The bridge is in hold the moment the guest sends its select, but the popover only exists after the screenshot
+    // (up to 2 s). A gone report in that window is remembered, never dropped.
+    if (this.current.phase === "pick") { this.pendingGone = true; return; }
+    if (this.current.phase !== "popover" || this.current.elementGone) return;
     this.set({ ...this.current, elementGone: true });
+  }
+
+  /** The guest reports the SAME node connected again (the page re-attached it): the gone state clears. */
+  elementReturned(): void {
+    if (this.disposed) return;
+    this.pendingGone = false;
+    if (this.current.phase === "popover" && this.current.elementGone) this.set({ ...this.current, elementGone: false });
   }
 
   /** "Pick again" after the element vanished: back to pick mode, with the typed comment carried into the next selection. */
@@ -123,6 +138,7 @@ export class PickController {
     const draft = this.current.comment;
     const origin = this.origin;
     this.token++;
+    this.pendingGone = false;
     this.set({ ...IDLE, phase: "pick", handlerGone: this.current.handlerGone });
     this.draft = draft;
     this.host.setGuestMode("pick");
@@ -136,6 +152,7 @@ export class PickController {
     if (this.current.submit === "accepted") { this.done(); return true; }
     this.token++;
     this.draft = "";
+    this.pendingGone = false;
     const origin = this.origin;
     this.set({ ...IDLE, phase: "pick", handlerGone: this.current.handlerGone });
     this.host.setGuestMode("pick");
@@ -198,6 +215,7 @@ export class PickController {
   private exit(focus: FocusOrigin | null): void {
     this.token++;
     this.draft = "";
+    this.pendingGone = false;
     this.set({ ...IDLE, handlerGone: this.current.handlerGone });
     this.host.setGuestMode("off");
     if (focus) this.host.focus(focus);

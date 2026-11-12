@@ -2,6 +2,7 @@ import type { Rect } from "../../artifacts/feedback-contract";
 import { setIcon } from "../api/icons";
 import { INSPECTOR_SCREENSHOT } from "../../artifacts/inspector-protocol";
 import type { PickState } from "./pick-controller";
+import type { InspectHoverMessage } from "../../artifacts/inspector-protocol";
 import type { SelectionSnapshot } from "../views/artifact-inspector-bridge";
 
 /**
@@ -12,6 +13,7 @@ import type { SelectionSnapshot } from "../views/artifact-inspector-bridge";
 
 const COMMENT_MAX_UNITS = 4000;
 const ELEMENT_GONE = "The element changed or was removed. Pick it again to keep your comment.";
+const OFFSCREEN_NOTE = "The element is off screen. Scroll back to see it.";
 const STALE_NOTE = "The page reloaded; this selection may be out of date.";
 const STATUS_ICONS: Record<string, string | null> = {
   idle: null,
@@ -39,6 +41,51 @@ export function choosePopoverBounds(
   // Read the fields explicitly: a DOMRect's are prototype getters, so `{ ...stage }` would copy nothing.
   if (stage.width >= POPOVER_MIN_WIDTH + 2 * MARGIN) return { left: stage.left, top: stage.top, width: stage.width, height: stage.height, within: "stage" };
   return { left: 0, top: 0, width: win.width, height: win.height, within: "window" };
+}
+
+/** Cap the popover's height to the room it has (it scrolls inside), never below a usable minimum. */
+export function popoverMaxHeight(bounds: { height: number }): number {
+  return Math.max(120, bounds.height - 2 * MARGIN);
+}
+
+/** Final safety net: pull a placement fully inside the window so Send and Cancel are always on screen. */
+export function clampIntoWindow(
+  pos: { left: number; top: number },
+  size: { width: number; height: number },
+  win: { width: number; height: number },
+): { left: number; top: number } {
+  const maxLeft = Math.max(MARGIN, win.width - MARGIN - size.width);
+  const maxTop = Math.max(MARGIN, win.height - MARGIN - size.height);
+  return { left: Math.min(Math.max(MARGIN, pos.left), maxLeft), top: Math.min(Math.max(MARGIN, pos.top), maxTop) };
+}
+
+/**
+ * Whether to move the popover for a change. A layout change (resize, preset, pane) always re-positions it, to keep it
+ * inside its bounds. Movement of the ELEMENT (scroll, mutation; the page controls it) does not move it while the pointer
+ * is over it or focus is inside it, so a page cannot slide Send and Cancel out from under a click (review A4); it settles
+ * when the user leaves.
+ */
+export function shouldMovePopover(change: { reason: "layout" | "rect" | "settle"; pointerInside: boolean; focusInside: boolean }): boolean {
+  return change.reason !== "rect" || (!change.pointerInside && !change.focusInside);
+}
+
+/** True when the element's window rect does not intersect the visible area (the stage) at all. */
+export function isElementOffscreen(
+  element: { left: number; top: number; right: number; bottom: number },
+  visible: { left: number; top: number; right: number; bottom: number },
+): boolean {
+  return element.right <= visible.left || element.left >= visible.right || element.bottom <= visible.top || element.top >= visible.bottom;
+}
+
+/** The tag as the page wrote it (SVG keeps camelCase): from the first tag of outerHTML when it matches the contract tag. */
+export function pageCaseTag(selection: { readonly tag: string; readonly outerHTML: { readonly html: string } }): string {
+  const match = /^<([A-Za-z][A-Za-z0-9:-]*)/.exec(selection.outerHTML.html);
+  return match && match[1]!.toLowerCase() === selection.tag ? match[1]! : selection.tag;
+}
+
+/** Toolbar chip text for a hover: tag plus size, or tag plus the keyboard label. */
+export function hoverChipText(hover: InspectHoverMessage): string {
+  return hover.label ? `<${hover.tag}> ${hover.label}` : `<${hover.tag}> ${Math.round(hover.rect.width)} × ${Math.round(hover.rect.height)}`;
 }
 
 export interface PopoverCallbacks {
@@ -73,7 +120,7 @@ export function popoverPosition(
 }
 
 /** The status line: what is happening, and whether it needs the assertive `alert` role. */
-export function popoverStatus(state: PickState, displayName: string): { text: string; alert: boolean } {
+export function popoverStatus(state: PickState, displayName: string, extra?: { offscreen?: boolean }): { text: string; alert: boolean } {
   let text = "";
   let alert = false;
   if (state.submit === "pending") text = `Sending to ${displayName}…`;
@@ -88,6 +135,7 @@ export function popoverStatus(state: PickState, displayName: string): { text: st
   } else if (state.handlerGone) text = `${displayName} is no longer available, so this comment cannot be sent. Cancel to keep browsing.`;
   else if (state.submit === "rejected") { text = state.outcome?.message ?? "The comment could not be sent."; alert = true; }
   if (state.stale) text = text ? `${text} ${STALE_NOTE}` : STALE_NOTE;
+  if (extra?.offscreen) text = text ? `${text} ${OFFSCREEN_NOTE}` : OFFSCREEN_NOTE;
   return { text, alert };
 }
 
@@ -224,10 +272,10 @@ export class PickPopover {
     this.repick.addEventListener("click", () => this.callbacks.onRepick());
   }
 
-  render(state: PickState, displayName: string): void {
+  render(state: PickState, displayName: string, extra?: { offscreen?: boolean }): void {
     const snapshot = state.snapshot;
     if (snapshot) {
-      this.heading.textContent = `Comment on <${snapshot.selection.tag}>`;
+      this.heading.textContent = `Comment on <${pageCaseTag(snapshot.selection)}>`;
       this.target.textContent = describeTarget(snapshot);
       this.disclosure.textContent = describeSelectionForDisclosure(snapshot, state.comment);
     }
@@ -240,7 +288,7 @@ export class PickPopover {
     this.area.readOnly = pending || accepted;
     this.el.setAttribute("aria-busy", String(pending));
 
-    const status = popoverStatus(state, displayName);
+    const status = popoverStatus(state, displayName, extra);
     this.status.textContent = status.text;
     // One politeness: an alert is assertive by role; everything else is a polite status. Never both.
     this.status.setAttribute("role", status.alert ? "alert" : "status");
@@ -259,6 +307,10 @@ export class PickPopover {
     }
 
     const gone = state.elementGone && !accepted && !pending;
+    // Send is about to disappear: if it (or anything in the popover) had focus, keyboard users land on "Pick again"
+    // instead of losing focus to <body> (and Esc with it).
+    const focusWasInside = this.el.contains(this.doc.activeElement);
+    const wasGone = !this.repick.hidden;
     this.repick.hidden = !gone;
     this.send.hidden = accepted || gone; // in the gone state "Pick again" replaces Send
     this.cancel.hidden = accepted;
@@ -266,6 +318,7 @@ export class PickPopover {
     this.send.textContent = pending ? "Sending…" : state.submit === "rejected" ? "Retry" : "Send";
     this.send.disabled = pending || state.handlerGone || state.elementGone || state.comment.trim().length === 0;
     this.cancel.disabled = pending;
+    if (gone && !wasGone && focusWasInside) this.repick.focus();
   }
 
   focusComment(): void { this.area.focus(); }

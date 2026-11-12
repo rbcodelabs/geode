@@ -88,9 +88,13 @@ export function validateRectMessage(raw: unknown): InspectRectMessage | null {
   if (!b) return null;
   if (b.target !== "hover" && b.target !== "selected") return null;
   if (typeof b.connected !== "boolean") return null;
-  if (!b.connected) return b.rect === null ? { target: b.target, connected: false, rect: null } : null;
+  if (!b.connected) return b.rect === null && b.tag === undefined ? { target: b.target, connected: false, rect: null } : null;
   const r = rect(b.rect);
-  return r === null ? null : { target: b.target, connected: true, rect: r };
+  if (r === null) return null;
+  if (b.tag === undefined) return { target: b.target, connected: true, rect: r };
+  // A tag names the hovered element for the chip; it only belongs on a hover report.
+  const t = b.target === "hover" ? tag(b.tag) : null;
+  return t === null ? null : { target: b.target, connected: true, rect: r, tag: t };
 }
 
 /**
