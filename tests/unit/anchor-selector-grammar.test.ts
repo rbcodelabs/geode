@@ -135,3 +135,10 @@ describe("isRestrictedSelector: the guest's selector grammar subset", () => {
     expect(performance.now() - started).toBeLessThan(2000);
   });
 });
+
+describe("attribute value cap matches the selection generator (128)", () => {
+  it("accepts 128 units and rejects 129", () => {
+    expect(isRestrictedSelector(`div[data-x="${"a".repeat(128)}"]`)).toBe(true);
+    expect(isRestrictedSelector(`div[data-x="${"a".repeat(129)}"]`)).toBe(false);
+  });
+});
