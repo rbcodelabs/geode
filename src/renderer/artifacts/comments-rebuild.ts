@@ -119,7 +119,7 @@ function nullable<T>(value: unknown, parse: (v: unknown) => T): T | null {
 }
 
 // eslint-disable-next-line no-control-regex
-const CONTROLS_AND_BIDI = /[\u0000-\u001f\u007f-\u009f​-‏  ‪-‮⁦-⁩﻿]/g;
+const CONTROLS_AND_BIDI = /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069\ufeff]/g;
 // eslint-disable-next-line no-control-regex
 const CONTROLS_KEEP_NEWLINE_TAB = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g;
 

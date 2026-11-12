@@ -135,12 +135,12 @@ describe("allowlist rebuild", () => {
   it("strips control characters and truncates display strings (notice 300, label 120, lastMessage 500)", () => {
     const raw = clone(load("snapshot.json"));
     raw.health = "recovered";
-    raw.notice = `a\u0000b‮c\n${"n".repeat(400)}`;
+    raw.notice = `a\u0000b\u202ec\n${"n".repeat(400)}`;
     raw.comments[0].label = `L${"x".repeat(300)}`;
     raw.comments[0].send.lastMessage = `m\u0007${"y".repeat(900)}`;
     const out = rebuildSnapshot(raw)!;
     expect(out.notice!.length).toBe(300);
-    expect(out.notice).not.toMatch(/[\u0000-\u001f‮]/);
+    expect(out.notice).not.toMatch(/[\u0000-\u001f\u202e]/);
     expect(out.comments[0]!.label.length).toBe(120);
     expect(out.comments[0]!.send.lastMessage!.length).toBe(500);
     expect(out.comments[0]!.send.lastMessage).not.toMatch(/\u0007/);
