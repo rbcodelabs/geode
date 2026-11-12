@@ -394,6 +394,7 @@ export class ArtifactView implements View, ReloadableView {
     popover.el.addEventListener("focusout", () => window.setTimeout(() => this.repositionPick("settle"), 0));
     this.layoutObserver.observe(this.stageEl);
     this.layoutObserver.observe(frame);
+    this.layoutObserver.observe(popover.el); // its own height changes (the "what will be sent" disclosure) need a re-fit
     window.addEventListener("resize", this.onWindowResize);
     this.bridge = bridge;
     this.pick = controller;

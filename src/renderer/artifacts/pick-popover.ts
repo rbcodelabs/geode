@@ -66,7 +66,7 @@ export function clampIntoWindow(
  * when the user leaves.
  */
 export function shouldMovePopover(change: { reason: "layout" | "rect" | "settle"; pointerInside: boolean; focusInside: boolean }): boolean {
-  return change.reason !== "rect" || (!change.pointerInside && !change.focusInside);
+  return change.reason === "layout" || (!change.pointerInside && !change.focusInside);
 }
 
 /** True when the element's window rect does not intersect the visible area (the stage) at all. */

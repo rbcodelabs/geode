@@ -248,6 +248,117 @@ test.describe("element picker phase 2a", () => {
     } finally { await s.cleanup(); }
   });
 
+  test("B1: an element removed between the click and the popover opening opens the popover in the gone state (never a live Send over nothing)", async () => {
+    const s = await session(RESPONSIVE_ARTIFACT);
+    try {
+      let opened = false;
+      for (const delay of [70, 100, 140, 190]) {
+        await toggleOf(s.window).click();
+        await expect(toggleOf(s.window)).toHaveAttribute("aria-pressed", "true");
+        await guestEval(s.window, `window.__restore && window.__restore()`); // a fresh #victim each attempt
+        await expect.poll(() => guestEval(s.window, `document.querySelectorAll("#victim").length`)).toBe(1);
+        const r = await trueRect(s.window, "#victim");
+        await guestEval(s.window, `window.__removeSoon(${delay})`);
+        await clickAt(s.app, r.x + r.width / 2, r.y + r.height / 2);
+        const shown = await popoverOf(s.window).waitFor({ state: "visible", timeout: 4_000 }).then(() => true, () => false);
+        if (shown) {
+          // however the race fell, a popover that opened over a removed element is in the gone state, with Send hidden
+          await expect(statusOf(s.window)).toHaveText("The element changed or was removed. Pick it again to keep your comment.", { timeout: 4_000 });
+          await expect(popoverOf(s.window).getByRole("button", { name: "Send" })).toBeHidden();
+          await windowShot(s, "B1-element-gone-before-popover");
+          opened = true;
+          break;
+        }
+        // the guest saw the removal first and never selected: pick mode is on again, try a later removal
+        await guestEval(s.window, `window.__restore && window.__restore()`);
+      }
+      expect(opened, "a popover opened over an already-removed element at least once").toBe(true);
+    } finally { await s.cleanup(); }
+  });
+
+  test("A10: the same node re-attached after a gone report clears the gone state", async () => {
+    const s = await session(RESPONSIVE_ARTIFACT);
+    try {
+      await toggleOf(s.window).click();
+      await clickAt(s.app, 100, 420);
+      await expect(popoverOf(s.window)).toBeVisible();
+      await popoverOf(s.window).getByRole("textbox").fill("Keep my words.");
+      await guestEval(s.window, `window.__remove()`);
+      await expect(statusOf(s.window)).toContainText("changed or was removed", { timeout: 8_000 });
+      await guestEval(s.window, `window.__reattach()`);
+      await expect(popoverOf(s.window).getByRole("button", { name: "Send" })).toBeVisible({ timeout: 8_000 });
+      await expect(statusOf(s.window)).not.toContainText("changed or was removed");
+      await expect(popoverOf(s.window).getByRole("textbox")).toHaveValue("Keep my words.");
+      await popoverOf(s.window).getByRole("button", { name: "Send" }).click();
+      await expect(statusOf(s.window)).toHaveText("Queued for the agent.");
+    } finally { await s.cleanup(); }
+  });
+
+  test("A1: a tall popover in a short window keeps Send and Cancel on screen and clickable", async () => {
+    const s = await session(RESPONSIVE_ARTIFACT, { size: [1280, 520] });
+    try {
+      await toggleOf(s.window).click();
+      const r0 = await trueRect(s.window, "#fluid");
+      await clickAt(s.app, r0.x + r0.width / 2, r0.y + 30);
+      await expect(popoverOf(s.window)).toBeVisible();
+      await popoverOf(s.window).getByRole("textbox").fill("Short window comment");
+      await popoverOf(s.window).locator("details > summary").click(); // the tall state
+      const win = await s.window.evaluate(() => ({ w: innerWidth, h: innerHeight }));
+      // the disclosure grows the popover; the ResizeObserver re-fits it within a frame or two
+      await expect.poll(async () => { const b = (await popoverOf(s.window).boundingBox())!; return b.y + b.height; }, { timeout: 5_000 }).toBeLessThanOrEqual(win.h + 1);
+      const pop = (await popoverOf(s.window).boundingBox())!;
+      expect(pop.y).toBeGreaterThanOrEqual(0);
+      const stage = (await s.window.locator(".artifact-view-stage").boundingBox())!;
+      expect(pop.y + pop.height).toBeLessThanOrEqual(stage.y + stage.height + 1);
+      for (const name of ["Send", "Cancel"]) {
+        const box = (await popoverOf(s.window).getByRole("button", { name }).boundingBox())!;
+        const hit = await s.window.evaluate(([x, y, label]) => document.elementFromPoint(x as number, y as number)?.textContent?.trim() === label, [box.x + box.width / 2, box.y + box.height / 2, name]);
+        expect(hit, `${name} is hit-testable`).toBe(true);
+      }
+      await windowShot(s, "A1-tall-popover-short-window");
+      await popoverOf(s.window).getByRole("button", { name: "Send" }).click();
+      await expect(statusOf(s.window)).toHaveText("Queued for the agent.");
+    } finally { await s.cleanup(); }
+  });
+
+  test("C1: an element scrolled out of view shows an off-screen cue on the popover, which stays usable; scrolling back removes it", async () => {
+    const s = await session(RESPONSIVE_ARTIFACT);
+    try {
+      await toggleOf(s.window).click();
+      const r0 = await trueRect(s.window, "#fluid");
+      await clickAt(s.app, r0.x + r0.width / 2, r0.y + 30);
+      await expect(popoverOf(s.window)).toBeVisible();
+      await expect(statusOf(s.window)).not.toContainText("off screen");
+      await popoverOf(s.window).getByRole("textbox").fill("A comment about a block that is about to scroll away");
+      await popoverOf(s.window).getByRole("textbox").blur();
+      await s.window.mouse.move(5, 5); // pointer and focus out of the popover so it may follow
+      await guestEval(s.window, `window.scrollTo(0, 1500)`);
+      await expect(statusOf(s.window)).toContainText("The element is off screen. Scroll back to see it.", { timeout: 8_000 });
+      await expect(popoverOf(s.window).getByRole("button", { name: "Send" })).toBeEnabled();
+      await windowShot(s, "C1-off-screen-cue");
+      await guestEval(s.window, `window.scrollTo(0, 0)`);
+      await expect(statusOf(s.window)).not.toContainText("off screen", { timeout: 8_000 });
+    } finally { await s.cleanup(); }
+  });
+
+  test("A4: the popover does not slide from under the pointer when the page moves the element", async () => {
+    const s = await session(RESPONSIVE_ARTIFACT);
+    try {
+      await toggleOf(s.window).click();
+      const r0 = await trueRect(s.window, "#fluid");
+      await clickAt(s.app, r0.x + r0.width / 2, r0.y + 30);
+      await expect(popoverOf(s.window)).toBeVisible();
+      const before = (await popoverOf(s.window).boundingBox())!;
+      await s.window.mouse.move(before.x + before.width / 2, before.y + before.height / 2); // pointer over the popover
+      await guestEval(s.window, `window.scrollTo(0, 120)`);
+      const boxMoved = async () => (await s.window.locator(".artifact-view-selection-box").boundingBox())!.y;
+      const y0 = r0.y;
+      await expect.poll(async () => Math.round(y0 - (await boxMoved() - ((await frameOf(s.window).boundingBox())!.y))), { timeout: 8_000 }).toBeGreaterThanOrEqual(115); // the box followed
+      const after = (await popoverOf(s.window).boundingBox())!;
+      expect(Math.abs(after.x - before.x) + Math.abs(after.y - before.y)).toBeLessThanOrEqual(1); // the popover did not move
+    } finally { await s.cleanup(); }
+  });
+
   test("R2: [ and ] scroll the walked element into view so the highlight is visible", async () => {
     const s = await session(RESPONSIVE_ARTIFACT);
     try {

@@ -443,7 +443,11 @@ describe("pointer and focus guard (review A4)", () => {
     expect(shouldMovePopover({ reason: "rect", pointerInside: false, focusInside: false })).toBe(true);
     expect(shouldMovePopover({ reason: "rect", pointerInside: true, focusInside: false })).toBe(false);
     expect(shouldMovePopover({ reason: "rect", pointerInside: false, focusInside: true })).toBe(false);
-    expect(shouldMovePopover({ reason: "settle", pointerInside: true, focusInside: true })).toBe(true);
+    // "settle" (the user just left, or focus just left) moves only when truly nothing is inside any more: a blur that happens
+    // on mousedown of Send must not slide Send away before mouseup
+    expect(shouldMovePopover({ reason: "settle", pointerInside: true, focusInside: false })).toBe(false);
+    expect(shouldMovePopover({ reason: "settle", pointerInside: false, focusInside: true })).toBe(false);
+    expect(shouldMovePopover({ reason: "settle", pointerInside: false, focusInside: false })).toBe(true);
   });
 });
 

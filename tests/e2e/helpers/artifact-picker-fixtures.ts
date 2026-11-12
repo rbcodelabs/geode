@@ -255,7 +255,9 @@ export const RESPONSIVE_ARTIFACT: ArtifactSpec = {
     "app.js": `window.__marker = "loaded-" + Math.random().toString(36).slice(2);
 let removed = null;
 window.__remove = () => { const el = document.getElementById("victim"); removed = el; el.remove(); };
-window.__restore = () => { const el = document.createElement("button"); el.id = "victim"; el.type = "button"; el.textContent = "Remove me (again)"; document.getElementById("tall").appendChild(el); };`,
+window.__removeSoon = (ms) => { setTimeout(() => window.__remove(), ms); };
+window.__reattach = () => { if (removed) document.getElementById("tall").appendChild(removed); };
+window.__restore = () => { if (document.getElementById("victim")) return; const el = document.createElement("button"); el.id = "victim"; el.type = "button"; el.textContent = "Remove me (again)"; document.getElementById("tall").appendChild(el); };`,
   },
 };
 
