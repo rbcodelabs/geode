@@ -377,6 +377,10 @@ describe("narrow pane (Phase 2a R3)", () => {
   it("uses the stage as the bounds when it is wide enough", () => {
     expect(choosePopoverBounds({ left: 300, top: 40, width: 700, height: 500 }, win)).toEqual({ left: 300, top: 40, width: 700, height: 500, within: "stage" });
   });
+  it("works with a real DOMRect, whose fields are prototype getters (an object spread would lose them)", () => {
+    class FakeDomRect { get left() { return 300; } get top() { return 40; } get width() { return 700; } get height() { return 500; } }
+    expect(choosePopoverBounds(new FakeDomRect(), win)).toEqual({ left: 300, top: 40, width: 700, height: 500, within: "stage" });
+  });
   it("falls back to the whole window when the stage is narrower than the minimum popover width", () => {
     expect(choosePopoverBounds({ left: 300, top: 40, width: 36, height: 500 }, win)).toEqual({ left: 0, top: 0, width: 640, height: 800, within: "window" });
     expect(choosePopoverBounds({ left: 0, top: 0, width: POPOVER_MIN_WIDTH + 2 * 8 - 1, height: 500 }, win).within).toBe("window");

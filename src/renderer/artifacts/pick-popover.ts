@@ -36,7 +36,8 @@ export function choosePopoverBounds(
   stage: { left: number; top: number; width: number; height: number },
   win: { width: number; height: number },
 ): { left: number; top: number; width: number; height: number; within: "stage" | "window" } {
-  if (stage.width >= POPOVER_MIN_WIDTH + 2 * MARGIN) return { ...stage, within: "stage" };
+  // Read the fields explicitly: a DOMRect's are prototype getters, so `{ ...stage }` would copy nothing.
+  if (stage.width >= POPOVER_MIN_WIDTH + 2 * MARGIN) return { left: stage.left, top: stage.top, width: stage.width, height: stage.height, within: "stage" };
   return { left: 0, top: 0, width: win.width, height: win.height, within: "window" };
 }
 

@@ -231,3 +231,53 @@ export function makeEnv(prefix: string, options: { probePlugin?: boolean; vaultF
   fs.writeFileSync(path.join(userDataDir, "geode.json"), JSON.stringify({ recentVaults: [vaultPath], lastVault: vaultPath }));
   return { temp, userDataDir, vaultPath };
 }
+
+/**
+ * Phase 2a: a page whose elements MOVE when the pane resizes or the page scrolls.
+ *  #fluid  left 50%, width 20% of the viewport, 60 px tall at y 300 (moves and resizes with the window)
+ *  #victim a button the page can remove and re-add (window.__remove / window.__restore)
+ *  #far    a paragraph 2500 px down, the first child of section#tall (so a keyboard walk body > section > #far reaches it)
+ * Positions are absolute against the initial containing block, so they are exact at any pane size.
+ */
+export const RESPONSIVE_ARTIFACT: ArtifactSpec = {
+  id: "picker-responsive",
+  title: "Responsive page",
+  html: `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Responsive</title>
+<link rel="stylesheet" href="style.css"></head><body>
+<section id="tall"><p id="far">Far down the page</p><div id="fluid">Fluid block</div><button id="victim" type="button">Remove me</button></section>
+<script src="app.js"></script></body></html>`,
+  files: {
+    "style.css": `body{margin:0;font:16px system-ui,sans-serif;background:#fff;color:#111}
+#tall{height:3000px}
+#far{position:absolute;left:40px;top:2500px;margin:0;width:260px;height:40px;background:#fde68a}
+#fluid{position:absolute;left:50%;top:300px;width:20%;height:60px;background:#bfdbfe}
+#victim{position:absolute;left:50px;top:400px;width:140px;height:44px;margin:0;padding:0;border:0;background:#2a6;color:#fff}`,
+    "app.js": `window.__marker = "loaded-" + Math.random().toString(36).slice(2);
+let removed = null;
+window.__remove = () => { const el = document.getElementById("victim"); removed = el; el.remove(); };
+window.__restore = () => { const el = document.createElement("button"); el.id = "victim"; el.type = "button"; el.textContent = "Remove me (again)"; document.getElementById("tall").appendChild(el); };`,
+  },
+};
+
+/** A report-like inline SVG chart (rect/circle/polyline/text/g) with the camelCase SVG elements Phase 2a must select. */
+export const CHART_ARTIFACT: ArtifactSpec = {
+  id: "picker-chart",
+  title: "Chart page",
+  html: `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Chart</title>
+<link rel="stylesheet" href="style.css"></head><body>
+<main><figure data-chart="revenue"><svg id="chart" viewBox="0 0 400 200" width="400" height="200">
+  <defs>
+    <linearGradient id="grad"><stop offset="0" stop-color="#60a5fa"/><stop offset="1" stop-color="#2563eb"/></linearGradient>
+    <clipPath id="clip"><rect width="400" height="200"/></clipPath>
+  </defs>
+  <g class="grid"><line x1="0" y1="50" x2="400" y2="50" stroke="#ddd"/><line x1="0" y1="100" x2="400" y2="100" stroke="#ddd"/></g>
+  <g><rect id="bar1" x="40" y="80" width="60" height="100" fill="url(#grad)"/><rect id="bar2" x="140" y="50" width="60" height="130" fill="url(#grad)"/><rect id="bar3" x="240" y="110" width="60" height="70" fill="url(#grad)"/></g>
+  <polyline points="70,70 170,40 270,100" fill="none" stroke="#f97316" stroke-width="3"/>
+  <circle cx="70" cy="70" r="6" fill="#f97316"/><circle cx="170" cy="40" r="6" fill="#f97316"/>
+  <text x="70" y="195" text-anchor="middle">Q1</text><text x="170" y="195" text-anchor="middle">Q2</text>
+  <foreignObject id="note" x="310" y="20" width="80" height="40"><div xmlns="http://www.w3.org/1999/xhtml" id="note-body" style="font:12px sans-serif;padding:4px;background:#fef3c7">Peak in Q2</div></foreignObject>
+</svg></figure></main></body></html>`,
+  files: {
+    "style.css": `body{margin:0;font:16px system-ui,sans-serif}main{padding:0}figure{margin:0;position:absolute;left:20px;top:20px}svg{display:block}`,
+  },
+};

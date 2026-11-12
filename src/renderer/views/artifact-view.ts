@@ -449,7 +449,8 @@ export class ArtifactView implements View, ReloadableView {
     const popover = this.popover;
     if (!popover) return;
     popover.el.hidden = state.phase !== "popover";
-    this.selectionBoxEl.hidden = state.phase !== "popover";
+    // No box for an element the page removed: it would tint empty space.
+    this.selectionBoxEl.hidden = state.phase !== "popover" || state.elementGone;
     if (state.phase === "popover") {
       popover.render(state, this.handlerName);
       this.positionPopover(state);
