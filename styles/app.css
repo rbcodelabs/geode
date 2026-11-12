@@ -5830,14 +5830,18 @@ body.is-mobile .empty-state-action-hint {
   overflow: hidden;
   pointer-events: none;
 }
+/* A fixed-position child of document.body (see ArtifactView.attachInspector): free to use the window in a very narrow
+   pane. min-width must match POPOVER_MIN_WIDTH in pick-popover.ts. */
 .pick-popover {
-  position: absolute;
+  position: fixed;
+  z-index: 60;
   display: flex;
   flex-direction: column;
   gap: 8px;
   box-sizing: border-box;
-  width: min(340px, calc(100% - 16px));
-  max-height: calc(100% - 16px);
+  width: min(340px, calc(100vw - 16px));
+  min-width: min(240px, calc(100vw - 16px));
+  max-height: calc(100vh - 16px);
   padding: 12px;
   overflow: auto;
   border: 1px solid var(--background-modifier-border-hover);

@@ -3,7 +3,9 @@ import { describe, expect, it, vi } from "vitest";
 import type { ArtifactFeedbackOutcome } from "../../src/renderer/artifacts/feedback-registry";
 import type { PickState } from "../../src/renderer/artifacts/pick-controller";
 import {
+  POPOVER_MIN_WIDTH,
   PickPopover,
+  choosePopoverBounds,
   describeSelectionForDisclosure,
   popoverPosition,
   popoverStatus,
@@ -29,14 +31,14 @@ const snapshot = (over: Record<string, unknown> = {}, shot: boolean | "omit-vaul
   screenshotOmitted: shot === true ? null : "vault-read",
 }) as unknown as SelectionSnapshot;
 
-const base: PickState = { phase: "popover", submit: "idle", snapshot: snapshot(), comment: "", outcome: null, stale: false, handlerGone: false };
+const base: PickState = { phase: "popover", submit: "idle", snapshot: snapshot(), comment: "", outcome: null, stale: false, handlerGone: false, elementGone: false };
 const rejected = (message: string, source: ArtifactFeedbackOutcome["source"] = "handler"): ArtifactFeedbackOutcome =>
   ({ status: "rejected", reason: "failed", message, source });
 
 function mount() {
   const dom = new JSDOM("<!doctype html><body></body>");
   const doc = dom.window.document;
-  const callbacks = { onComment: vi.fn(), onSend: vi.fn(), onCancel: vi.fn(), onDone: vi.fn(), onEscape: vi.fn() };
+  const callbacks = { onComment: vi.fn(), onSend: vi.fn(), onCancel: vi.fn(), onDone: vi.fn(), onEscape: vi.fn(), onRepick: vi.fn() };
   const popover = new PickPopover(doc, callbacks);
   doc.body.append(popover.el);
   const render = (state: Partial<PickState> = {}, displayName = "Design") => popover.render({ ...base, ...state }, displayName);
@@ -337,5 +339,62 @@ describe("PickPopover events", () => {
     render({ submit: "accepted", comment: "hi", outcome: { status: "accepted", source: "handler" } });
     popover.focusDone();
     expect(doc.activeElement).toBe(q(".pick-popover-done"));
+  });
+});
+
+describe("element gone state (Phase 2a R1)", () => {
+  it("says so, keeps the typed text, disables Send and offers Pick again", () => {
+    const { q, render, popover, callbacks } = mount();
+    render({ comment: "Make it larger", elementGone: true });
+    expect(q(".pick-popover-status").textContent).toBe("The element changed or was removed. Pick it again to keep your comment.");
+    expect(q(".pick-popover-statusline").classList.contains("is-error")).toBe(true);
+    expect(q<HTMLTextAreaElement>("textarea").value).toBe("Make it larger");
+    expect(q<HTMLButtonElement>(".pick-popover-send").disabled).toBe(true);
+    const visible = [...popover.el.querySelectorAll("button")].filter((b) => !b.hidden).map((b) => b.textContent);
+    expect(visible).toEqual(["Pick again", "Cancel"]);
+    q(".pick-popover-repick").click();
+    expect(callbacks.onRepick).toHaveBeenCalledTimes(1);
+  });
+
+  it("hides Pick again in every other state", () => {
+    const { q, render } = mount();
+    for (const state of [{}, { submit: "pending" as const }, { submit: "rejected" as const, outcome: rejected("No.") }]) {
+      render({ comment: "x", ...state });
+      expect(q<HTMLButtonElement>(".pick-popover-repick").hidden).toBe(true);
+    }
+  });
+
+  it("popoverStatus: gone wins over an idle or rejected state but not over pending or accepted", () => {
+    const text = "The element changed or was removed. Pick it again to keep your comment.";
+    expect(popoverStatus({ ...base, elementGone: true }, "Design")).toEqual({ text, alert: true });
+    expect(popoverStatus({ ...base, elementGone: true, submit: "rejected", outcome: rejected("No.") }, "Design").text).toBe(text);
+    expect(popoverStatus({ ...base, elementGone: true, submit: "pending" }, "Design").text).toBe("Sending to Design…");
+  });
+});
+
+describe("narrow pane (Phase 2a R3)", () => {
+  const win = { width: 640, height: 800 };
+  it("uses the stage as the bounds when it is wide enough", () => {
+    expect(choosePopoverBounds({ left: 300, top: 40, width: 700, height: 500 }, win)).toEqual({ left: 300, top: 40, width: 700, height: 500, within: "stage" });
+  });
+  it("falls back to the whole window when the stage is narrower than the minimum popover width", () => {
+    expect(choosePopoverBounds({ left: 300, top: 40, width: 36, height: 500 }, win)).toEqual({ left: 0, top: 0, width: 640, height: 800, within: "window" });
+    expect(choosePopoverBounds({ left: 0, top: 0, width: POPOVER_MIN_WIDTH + 2 * 8 - 1, height: 500 }, win).within).toBe("window");
+    expect(choosePopoverBounds({ left: 0, top: 0, width: POPOVER_MIN_WIDTH + 2 * 8, height: 500 }, win).within).toBe("stage");
+  });
+  it("has a usable minimum width", () => {
+    expect(POPOVER_MIN_WIDTH).toBeGreaterThanOrEqual(220);
+    expect(POPOVER_MIN_WIDTH).toBeLessThanOrEqual(260);
+  });
+  it("a window-bounds placement keeps a minimum-width popover fully inside the window for an anchor anywhere", () => {
+    const bounds = choosePopoverBounds({ left: 300, top: 40, width: 36, height: 500 }, win);
+    const size = { width: POPOVER_MIN_WIDTH, height: 300 };
+    for (const anchor of [{ x: 310, y: 100, width: 20, height: 20 }, { x: 600, y: 700, width: 30, height: 30 }, { x: -50, y: -50, width: 5, height: 5 }]) {
+      const p = popoverPosition(anchor, size, { width: bounds.width, height: bounds.height });
+      expect(p.left).toBeGreaterThanOrEqual(8);
+      expect(p.left + size.width).toBeLessThanOrEqual(win.width - 8);
+      expect(p.top).toBeGreaterThanOrEqual(8);
+      expect(p.top + size.height).toBeLessThanOrEqual(win.height - 8);
+    }
   });
 });

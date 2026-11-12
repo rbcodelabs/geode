@@ -363,3 +363,79 @@ describe("PickController: focus after a completed pick", () => {
     expect(focuses.at(-1)).toBe("guest");
   });
 });
+
+describe("PickController: the selected element changed or left (Phase 2a R1)", () => {
+  it("flags an open popover when the element is gone, keeps the typed comment, and blocks Send", () => {
+    const { controller, submits } = selected("Make this bigger");
+    controller.elementChanged();
+    expect(controller.state.elementGone).toBe(true);
+    expect(controller.state.comment).toBe("Make this bigger");
+    expect(controller.canSend()).toBe(false);
+    controller.send();
+    expect(submits).toHaveLength(0);
+    expect(controller.canCancel()).toBe(true);
+  });
+
+  it("ignores it while picking or off, and clears the flag with the next selection", () => {
+    const { controller } = setup();
+    controller.elementChanged();
+    expect(controller.state.elementGone).toBe(false);
+    controller.enter("pointer");
+    controller.elementChanged();
+    expect(controller.state.elementGone).toBe(false);
+  });
+
+  it("does not disturb a send that is already pending (the plugin has it); the flag shows afterwards", async () => {
+    const { controller, submits } = selected();
+    controller.send();
+    controller.elementChanged();
+    expect(controller.state.submit).toBe("pending");
+    submits[0]!.deferred.resolve(accepted("Queued."));
+    await flush();
+    expect(controller.state.submit).toBe("accepted");
+  });
+
+  it("repick returns to pick mode, re-arms the guest, and carries the draft into the NEXT selection only", () => {
+    const { controller, modes } = selected("Make this bigger");
+    controller.elementChanged();
+    modes.length = 0;
+    expect(controller.repick()).toBe(true);
+    expect(controller.state.phase).toBe("pick");
+    expect(modes).toEqual(["pick"]);
+    controller.selected(snapshot("sel_next"), "toggle");
+    expect(controller.state.comment).toBe("Make this bigger");
+    expect(controller.state.elementGone).toBe(false);
+    expect(controller.state.snapshot?.selection.selectionId).toBe("sel_next");
+    // a normal cancel afterwards does not resurrect it
+    controller.cancel();
+    controller.selected(snapshot("sel_third"), "toggle");
+    expect(controller.state.comment).toBe("");
+  });
+
+  it("repick is refused unless the element is gone, and while pending", () => {
+    const { controller } = selected();
+    expect(controller.repick()).toBe(false);
+    controller.send();
+    controller.elementChanged();
+    expect(controller.repick()).toBe(false);
+  });
+
+  it("leaving pick mode discards a carried draft", () => {
+    const { controller } = selected("draft text");
+    controller.elementChanged();
+    controller.repick();
+    controller.escape(); // exits pick
+    controller.enter("pointer");
+    controller.selected(snapshot(), "toggle");
+    expect(controller.state.comment).toBe("");
+  });
+
+  it("Esc on a gone popover goes to pick mode like any cancel, and the draft is not carried (Cancel means discard)", () => {
+    const { controller } = selected("draft text");
+    controller.elementChanged();
+    controller.escape();
+    expect(controller.state.phase).toBe("pick");
+    controller.selected(snapshot("sel_b"), "toggle");
+    expect(controller.state.comment).toBe("");
+  });
+});

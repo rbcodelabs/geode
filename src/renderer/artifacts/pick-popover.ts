@@ -11,6 +11,7 @@ import type { SelectionSnapshot } from "../views/artifact-inspector-bridge";
  */
 
 const COMMENT_MAX_UNITS = 4000;
+const ELEMENT_GONE = "The element changed or was removed. Pick it again to keep your comment.";
 const STALE_NOTE = "The page reloaded; this selection may be out of date.";
 const STATUS_ICONS: Record<string, string | null> = {
   idle: null,
@@ -23,12 +24,30 @@ const GAP = 8;
 const MARGIN = 8;
 let nextId = 0;
 
+/** The narrowest popover that is still usable. Keep in sync with `.pick-popover { min-width }` in styles/app.css. */
+export const POPOVER_MIN_WIDTH = 240;
+
+/**
+ * Where the popover may sit. Normally inside the stage; when the pane is too narrow for a usable popover (a 640 px
+ * window with both side panels open leaves a 36 px pane) the whole window is used instead, so Send and Cancel stay
+ * reachable. Coordinates are in window (client) px, which is what a fixed-position popover needs.
+ */
+export function choosePopoverBounds(
+  stage: { left: number; top: number; width: number; height: number },
+  win: { width: number; height: number },
+): { left: number; top: number; width: number; height: number; within: "stage" | "window" } {
+  if (stage.width >= POPOVER_MIN_WIDTH + 2 * MARGIN) return { ...stage, within: "stage" };
+  return { left: 0, top: 0, width: win.width, height: win.height, within: "window" };
+}
+
 export interface PopoverCallbacks {
   onComment(text: string): void;
   onSend(): void;
   onCancel(): void;
   onDone(): void;
   onEscape(): void;
+  /** "Pick again" after the selected element vanished (Phase 2a). */
+  onRepick(): void;
 }
 
 /**
@@ -61,6 +80,9 @@ export function popoverStatus(state: PickState, displayName: string): { text: st
   else if (state.handlerGone && state.submit === "rejected" && state.outcome?.source === "disposed") {
     // Disposed while the send was in flight: show the registry's neutral message, not "cannot be sent".
     text = state.outcome.message ?? "";
+    alert = true;
+  } else if (state.elementGone) {
+    text = ELEMENT_GONE;
     alert = true;
   } else if (state.handlerGone) text = `${displayName} is no longer available, so this comment cannot be sent. Cancel to keep browsing.`;
   else if (state.submit === "rejected") { text = state.outcome?.message ?? "The comment could not be sent."; alert = true; }
@@ -121,6 +143,7 @@ export class PickPopover {
   private readonly statusLine: HTMLElement;
   private readonly send: HTMLButtonElement;
   private readonly cancel: HTMLButtonElement;
+  private readonly repick: HTMLButtonElement;
   private readonly done: HTMLButtonElement;
   private renderedComment = "";
 
@@ -163,11 +186,15 @@ export class PickPopover {
     this.cancel.textContent = "Cancel";
     this.send = make("button", "mod-cta pick-popover-send");
     this.send.type = "button";
+    this.repick = make("button", "mod-cta pick-popover-repick");
+    this.repick.type = "button";
+    this.repick.textContent = "Pick again";
+    this.repick.hidden = true;
     this.done = make("button", "mod-cta pick-popover-done");
     this.done.type = "button";
     this.done.textContent = "Done";
     // DOM order is tab order (primary first); CSS lays the row out reversed.
-    actions.append(this.send, this.cancel, this.done);
+    actions.append(this.repick, this.send, this.cancel, this.done);
 
     this.el.append(this.heading, this.target, this.area, details, this.statusLine, actions);
 
@@ -193,6 +220,7 @@ export class PickPopover {
     this.send.addEventListener("click", () => this.callbacks.onSend());
     this.cancel.addEventListener("click", () => this.callbacks.onCancel());
     this.done.addEventListener("click", () => this.callbacks.onDone());
+    this.repick.addEventListener("click", () => this.callbacks.onRepick());
   }
 
   render(state: PickState, displayName: string): void {
@@ -229,11 +257,13 @@ export class PickPopover {
       else this.statusIcon.replaceChildren();
     }
 
-    this.send.hidden = accepted;
+    const gone = state.elementGone && !accepted && !pending;
+    this.repick.hidden = !gone;
+    this.send.hidden = accepted || gone; // in the gone state "Pick again" replaces Send
     this.cancel.hidden = accepted;
     this.done.hidden = !accepted;
     this.send.textContent = pending ? "Sending…" : state.submit === "rejected" ? "Retry" : "Send";
-    this.send.disabled = pending || state.handlerGone || state.comment.trim().length === 0;
+    this.send.disabled = pending || state.handlerGone || state.elementGone || state.comment.trim().length === 0;
     this.cancel.disabled = pending;
   }
 
