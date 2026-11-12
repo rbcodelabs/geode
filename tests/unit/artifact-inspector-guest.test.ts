@@ -681,3 +681,319 @@ describe("bounded work and click provenance (review A1, A2)", () => {
     expect((h.last(INSPECT_CHANNEL.select)?.payload as { tag: string }).tag).toBe("h2");
   });
 });
+
+describe("SVG (Phase 2a R4): selectors keep the tag case of non-HTML elements", () => {
+  const SVG = `<body><main><svg id="chart" viewBox="0 0 100 50" width="100" height="50">
+    <defs>
+      <linearGradient><stop offset="0"/><stop offset="1"/></linearGradient>
+      <clipPath><rect width="10" height="10"/></clipPath>
+    </defs>
+    <foreignObject width="50" height="20"><div>note</div></foreignObject>
+    <text><textPath>on a path</textPath></text>
+  </svg></main></body>`;
+  const selectorOf = (h: GuestHarness, el: Element) => (selectOn(h, el) as { selector: string; tag: string }).selector;
+
+  it("builds selectors with the original localName for linearGradient, clipPath, foreignObject and textPath", () => {
+    for (const name of ["linearGradient", "clipPath", "foreignObject", "textPath"]) {
+      const h = pick(SVG);
+      const el = [...h.doc.querySelectorAll("*")].find((e) => e.localName === name)!;
+      expect(el, name).toBeDefined();
+      const selector = selectorOf(h, el);
+      expect(selector, name).toContain(name); // original case: CSS type selectors are case-sensitive for SVG
+      expect(selector, name).not.toContain(name.toLowerCase());
+      const found = h.doc.querySelectorAll(selector);
+      expect(found.length, selector).toBe(1);
+      expect(found[0]).toBe(el);
+    }
+  });
+
+  it("keeps the contract tag lower-case (the embedder validator and ElementSelection are unchanged)", () => {
+    const h = pick(SVG);
+    const el = [...h.doc.querySelectorAll("*")].find((e) => e.localName === "linearGradient")!;
+    const payload = selectOn(h, el) as { tag: string; textAnchor: { tag: string }; ancestors: Array<{ tag: string }> };
+    expect(payload.tag).toBe("lineargradient");
+    expect(payload.textAnchor.tag).toBe("lineargradient");
+    expect(payload.ancestors.every((a) => /^[a-z][a-z0-9:-]{0,31}$/.test(a.tag))).toBe(true);
+  });
+
+  it("still lower-cases HTML tags in selectors", () => {
+    const h = pick(`<body><DIV><P>a</P><P>b</P></DIV></body>`);
+    const second = h.doc.querySelectorAll("p")[1]!;
+    const selector = selectorOf(h, second);
+    expect(selector).toBe(selector.toLowerCase().replace(/\bbody\b/, "body"));
+    expect(h.doc.querySelectorAll(selector)[0]).toBe(second);
+  });
+
+  it("every selector produced for a report-like chart resolves to exactly the picked node", () => {
+    const chart = `<body><main><figure data-chart="revenue"><div class="chart-scroll"><svg viewBox="0 0 200 100">
+      <g class="grid"><line x1="0" y1="10" x2="200" y2="10"/><line x1="0" y1="50" x2="200" y2="50"/></g>
+      <g><rect x="10" y="20" width="20" height="60"/><rect x="40" y="30" width="20" height="50"/><rect x="70" y="10" width="20" height="70"/></g>
+      <polyline points="10,80 40,60 70,30"/><circle cx="10" cy="80" r="3"/><circle cx="40" cy="60" r="3"/>
+      <text x="10" y="95">Q1</text><text x="40" y="95">Q2</text>
+    </svg></div></figure></main></body>`;
+    const h = pick(chart);
+    const all = [...h.doc.querySelectorAll("svg, svg *")];
+    expect(all.length).toBeGreaterThan(10);
+    for (const el of all) {
+      const payload = selectOn(h, el) as { selector: string; selectorAlternates: string[] };
+      expect(payload.selector, el.localName).not.toBe("");
+      for (const sel of [payload.selector, ...payload.selectorAlternates]) {
+        const found = h.doc.querySelectorAll(sel);
+        expect(found.length, sel).toBe(1);
+        expect(found[0], sel).toBe(el);
+      }
+      h.deliver(INSPECT_CHANNEL.mode, modePick); // back to pick for the next element
+    }
+  });
+
+  it("serializes SVG outerHTML with the original tag case on both the opening and the closing tag", () => {
+    const h = pick(SVG);
+    const gradient = [...h.doc.querySelectorAll("*")].find((e) => e.localName === "linearGradient")!;
+    const html = (selectOn(h, gradient) as { outerHTML: { html: string } }).outerHTML.html;
+    expect(html).toContain("<linearGradient>");
+    expect(html).toContain("</linearGradient>");
+    expect(html).not.toContain("<lineargradient");
+    const h2 = pick(SVG);
+    const foreign = [...h2.doc.querySelectorAll("*")].find((e) => e.localName === "foreignObject")!;
+    const html2 = (selectOn(h2, foreign) as { outerHTML: { html: string } }).outerHTML.html;
+    expect(html2).toContain("<foreignObject");
+    expect(html2).toContain("</foreignObject>");
+  });
+
+  it("keeps the case of SVG attribute names (viewBox, gradientUnits) but lower-cases HTML attribute names (QA finding)", () => {
+    const h = pick(`<body><DIV CLASS="c" ID="d"><svg id="chart" viewBox="0 0 400 200" preserveAspectRatio="none"><linearGradient gradientUnits="userSpaceOnUse"/></svg></DIV></body>`);
+    const svg = h.doc.querySelector("svg")!;
+    const html = (selectOn(h, svg) as { outerHTML: { html: string } }).outerHTML.html;
+    expect(html).toContain('viewBox="0 0 400 200"');
+    expect(html).toContain('preserveAspectRatio="none"');
+    expect(html).toContain('<linearGradient gradientUnits="userSpaceOnUse">');
+    expect(html).not.toContain("viewbox=");
+    const h2 = pick(`<body><DIV CLASS="c" ID="d">x</DIV></body>`);
+    const div = (selectOn(h2, h2.doc.querySelector("div")!) as { outerHTML: { html: string } }).outerHTML.html;
+    expect(div).toBe('<div class="c" id="d">x</div>');
+  });
+
+  it("still elides handlers and data URIs on SVG elements regardless of attribute case", () => {
+    const h = pick(`<body><svg><image href="data:image/png;base64,AAAA" onLoad="evil()" /></svg></body>`);
+    const html = (selectOn(h, h.doc.querySelector("svg")!) as { outerHTML: { html: string } }).outerHTML.html;
+    expect(html).not.toContain("evil");
+    expect(html).not.toContain("base64");
+  });
+
+  it("bounds the walk over a large SVG (nodes and time) like any other subtree", () => {
+    const h = boot(`<body><svg id="big" viewBox="0 0 10 10"></svg></body>`, { start: false });
+    const svg = $(h, "#big");
+    for (let i = 0; i < 5000; i++) svg.appendChild(h.doc.createElementNS("http://www.w3.org/2000/svg", i % 2 ? "clipPath" : "circle"));
+    h.start();
+    h.deliver(INSPECT_CHANNEL.mode, modePick);
+    const out = (selectOn(h, svg) as { outerHTML: { html: string; truncated: boolean } }).outerHTML;
+    expect(out.truncated).toBe(true);
+    expect(out.html.length).toBeLessThanOrEqual(INSPECTOR_CAPS.outerHtmlUnits);
+  }, 30_000);
+});
+
+describe("keyboard walk scrolls the element into view (Phase 2a R2)", () => {
+  it("calls scrollIntoView({block:'nearest', inline:'nearest'}) on the walked element before reporting its rect, for [ and ]", () => {
+    const h = boot(PAGE, { start: false });
+    const calls: Array<{ el: Element; opts: unknown; rectAtCall: unknown }> = [];
+    (h.win.Element.prototype as unknown as { scrollIntoView: unknown }).scrollIntoView = function (this: Element, opts: unknown) {
+      calls.push({ el: this, opts, rectAtCall: null });
+      // the element is brought into view: its rect is only valid after this call
+      h.setRect(this, { x: 11, y: 12, width: 30, height: 40 });
+    };
+    h.start();
+    h.deliver(INSPECT_CHANNEL.mode, modePick);
+    const btn = $(h, "button");
+    h.setRect(btn, { x: 1, y: 5000, width: 3, height: 4 });
+    h.pointAt(btn);
+    h.fire("mousemove", {});
+    h.flush();
+    h.deliver(INSPECT_CHANNEL.key, { key: "parent" });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.el).toBe(btn.parentElement);
+    expect(calls[0]!.opts).toEqual({ block: "nearest", inline: "nearest" });
+    const hovers = h.all(INSPECT_CHANNEL.hover);
+    expect((hovers.at(-1)!.payload as { rect: unknown }).rect).toEqual({ x: 11, y: 12, width: 30, height: 40 });
+    h.deliver(INSPECT_CHANNEL.key, { key: "child" });
+    expect(calls).toHaveLength(2);
+    expect(calls[1]!.el).toBe(btn);
+  });
+
+  it("works for SVG elements and tolerates a host without scrollIntoView or one that throws", () => {
+    const h = boot(`<body><svg><g id="g"><rect id="r" width="1" height="1"/></g></svg></body>`, { start: false });
+    (h.win.Element.prototype as unknown as { scrollIntoView: unknown }).scrollIntoView = function () { throw new Error("boom"); };
+    h.start();
+    h.deliver(INSPECT_CHANNEL.mode, modePick);
+    h.pointAt($(h, "#g"));
+    h.fire("mousemove", {});
+    h.flush();
+    expect(() => h.deliver(INSPECT_CHANNEL.key, { key: "child" })).not.toThrow();
+    expect((h.all(INSPECT_CHANNEL.hover).at(-1)!.payload as { tag: string }).tag).toBe("rect");
+  });
+});
+
+describe("live rect reports (Phase 2a R1)", () => {
+  const scroll = (h: GuestHarness) => h.win.dispatchEvent(new h.win.Event("scroll"));
+  const resize = (h: GuestHarness) => h.win.dispatchEvent(new h.win.Event("resize"));
+  const rectsSent = (h: GuestHarness) => h.all(INSPECT_CHANNEL.rect).map((m) => m.payload as { target: string; connected: boolean; rect: unknown });
+
+  function hoveredButton() {
+    const h = pick();
+    const btn = $(h, "button");
+    h.setRect(btn, { x: 100, y: 200, width: 160, height: 48 });
+    h.pointAt(btn);
+    h.fire("mousemove", {});
+    h.flush();
+    return { h, btn };
+  }
+  async function selectedButton() {
+    const { h, btn } = hoveredButton();
+    clickOn(h, btn, { detail: 1 });
+    h.flush(3);
+    expect(h.last(INSPECT_CHANNEL.select)).toBeDefined();
+    return { h, btn };
+  }
+
+  it("re-paints the hover highlight and reports the new rect when the page scrolls or the pane resizes (rAF-throttled)", () => {
+    const { h, btn } = hoveredButton();
+    h.setRect(btn, { x: 100, y: 120, width: 160, height: 48 });
+    scroll(h);
+    scroll(h);
+    resize(h);
+    expect(rectsSent(h)).toEqual([]); // nothing until the frame
+    h.flush();
+    expect(rectsSent(h)).toEqual([{ target: "hover", connected: true, tag: "button", rect: { x: 100, y: 120, width: 160, height: 48 } }]);
+    expect(h.sheets.at(-1)).toMatch(/top:\s*120px/);
+  });
+
+  it("reports a selected element's rect while the guest is in hold, with target 'selected'", async () => {
+    const { h, btn } = await selectedButton();
+    h.setRect(btn, { x: 90, y: 20, width: 160, height: 48 });
+    scroll(h);
+    h.flush();
+    expect(rectsSent(h).at(-1)).toEqual({ target: "selected", connected: true, rect: { x: 90, y: 20, width: 160, height: 48 } });
+  });
+
+  it("does not repeat an unchanged rect on scroll, but re-sends the current state on each 1 s tick (self-healing, B1)", async () => {
+    const { h, btn } = await selectedButton();
+    h.setRect(btn, { x: 1, y: 2, width: 3, height: 4 });
+    scroll(h); h.flush();
+    scroll(h); h.flush();
+    expect(rectsSent(h).filter((r) => r.target === "selected")).toHaveLength(1);
+    h.tick(); h.flush();
+    expect(rectsSent(h).filter((r) => r.target === "selected")).toHaveLength(2); // the tick re-sends, at most once per tick
+    scroll(h); h.flush();
+    expect(rectsSent(h).filter((r) => r.target === "selected")).toHaveLength(2);
+    h.tick(); h.flush();
+    expect(rectsSent(h).filter((r) => r.target === "selected")).toHaveLength(3);
+  });
+
+  it("says the selected element is gone when the page removes it (mutation), once per event, and again on each tick until the state changes (B1)", async () => {
+    const { h, btn } = await selectedButton();
+    btn.remove();
+    await Promise.resolve(); // MutationObserver microtask
+    h.flush();
+    const gone = { target: "selected", connected: false, rect: null };
+    expect(rectsSent(h).filter((r) => r.target === "selected")).toEqual([gone]);
+    scroll(h); h.flush(); // a scroll alone does not repeat it
+    expect(rectsSent(h).filter((r) => r.target === "selected")).toHaveLength(1);
+    h.tick(); h.flush(); // the tick does: a dropped or lost report is recovered within a second
+    expect(rectsSent(h).filter((r) => r.target === "selected")).toEqual([gone, gone]);
+  });
+
+  it("recovers a gone report the embedder never received: the next tick sends it again", async () => {
+    const { h, btn } = await selectedButton();
+    btn.remove();
+    await Promise.resolve();
+    h.flush();
+    h.sent.length = 0; // the message was lost in transit (dropped by a budget or never handled)
+    h.tick(); h.flush();
+    expect(rectsSent(h)).toEqual([{ target: "selected", connected: false, rect: null }]);
+  });
+
+  it("recovers a moved rect that was lost: the tick re-sends the current rect", async () => {
+    const { h, btn } = await selectedButton();
+    h.setRect(btn, { x: 5, y: 6, width: 7, height: 8 });
+    scroll(h); h.flush();
+    h.sent.length = 0; // lost
+    h.tick(); h.flush();
+    expect(rectsSent(h)).toEqual([{ target: "selected", connected: true, rect: { x: 5, y: 6, width: 7, height: 8 } }]);
+  });
+
+  it("reports a connected rect again when the same node is re-attached after a gone report (A10)", async () => {
+    const { h, btn } = await selectedButton();
+    const parent = btn.parentElement!;
+    btn.remove();
+    await Promise.resolve();
+    h.flush();
+    parent.appendChild(btn);
+    h.setRect(btn, { x: 9, y: 9, width: 9, height: 9 });
+    scroll(h); h.flush();
+    expect(rectsSent(h).at(-1)).toEqual({ target: "selected", connected: true, rect: { x: 9, y: 9, width: 9, height: 9 } });
+  });
+
+  it("a removal with no observer callback is still found by the periodic tick", async () => {
+    const { h, btn } = await selectedButton();
+    btn.parentElement!.removeChild(btn);
+    h.tick();
+    h.flush();
+    expect(rectsSent(h).at(-1)).toEqual({ target: "selected", connected: false, rect: null });
+  });
+
+  it("clears the hover highlight and reports a disconnected hover when the hovered element is removed", () => {
+    const { h, btn } = hoveredButton();
+    btn.remove();
+    scroll(h);
+    h.flush();
+    expect(rectsSent(h).at(-1)).toEqual({ target: "hover", connected: false, rect: null });
+    expect(h.sheets.at(-1)).toContain("display:none");
+  });
+
+  it("a hover rect names its element, so the embedder never shows one element's tag with another's size (A9)", () => {
+    const { h, btn } = hoveredButton();
+    h.setRect(btn, { x: 1, y: 2, width: 30, height: 40 });
+    scroll(h); h.flush();
+    expect(rectsSent(h).at(-1)).toMatchObject({ target: "hover", tag: "button" });
+  });
+
+  it("sends nothing in off mode and nothing for a selection the embedder has already left (mode message)", async () => {
+    const { h, btn } = await selectedButton();
+    h.deliver(INSPECT_CHANNEL.mode, { mode: "off", redactText: false });
+    const before = rectsSent(h).length;
+    h.setRect(btn, { x: 1, y: 1, width: 1, height: 1 });
+    scroll(h); resize(h); h.flush(); h.tick(); h.flush();
+    expect(rectsSent(h)).toHaveLength(before);
+    h.deliver(INSPECT_CHANNEL.mode, modePick);
+    scroll(h); h.flush();
+    expect(rectsSent(h)).toHaveLength(before); // pick with no hovered element: nothing to report
+  });
+
+  it("ignores nothing it should honour: an untrusted scroll still triggers a (harmless, throttled) report", () => {
+    const { h, btn } = hoveredButton();
+    h.setRect(btn, { x: 1, y: 2, width: 3, height: 4 });
+    scroll(h);
+    h.flush();
+    expect(rectsSent(h)).toHaveLength(1);
+  });
+});
+
+describe("data: URI elision survives leading control characters and zero-width (review A7)", () => {
+  it("elides data: values that start with C0 controls, whitespace or zero-width characters, in HTML and SVG", () => {
+    const values = ["\u0001data:text/html,zzz", "\u0000\u001f data:image/png;base64,AAAA", "\u200bdata:text/plain,x", "\ufeffdata:text/plain,x", "  DATA:text/plain,x"];
+    for (const value of values) {
+      const h = pick(`<body><div id="x"><a id="a">y</a><svg><image id="i"/></svg></div></body>`);
+      h.doc.querySelector("#a")!.setAttribute("href", value);
+      h.doc.querySelector("#i")!.setAttribute("href", value);
+      const html = (selectOn(h, h.doc.querySelector("#x")!) as { outerHTML: { html: string } }).outerHTML.html;
+      expect(html, JSON.stringify(value)).not.toMatch(/zzz|AAAA|text\/plain/);
+      expect(html).toContain("data:...elided");
+    }
+  });
+
+  it("elides url(data:...) inside <style> text", () => {
+    const h = pick(`<body><div id="x"><style>.a{background:url(data:image/png;base64,QUJDREVGRw==)}</style></div></body>`);
+    const html = (selectOn(h, h.doc.querySelector("#x")!) as { outerHTML: { html: string } }).outerHTML.html;
+    expect(html).not.toContain("QUJDREVGRw");
+    expect(html).toContain("url(data:...elided)");
+  });
+});

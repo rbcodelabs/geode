@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ArtifactFeedbackRequest, ArtifactFeedbackTarget } from "../../src/artifacts/feedback-contract";
-import { INSPECT_CHANNEL, INSPECTOR_SCREENSHOT, type GuestSelectMessage } from "../../src/artifacts/inspector-protocol";
+import { INSPECT_CHANNEL, INSPECTOR_CAPS, INSPECTOR_SCREENSHOT, type GuestSelectMessage } from "../../src/artifacts/inspector-protocol";
 import {
   ArtifactInspectorBridge,
   artifactFeedbackTarget,
@@ -60,6 +60,7 @@ function setup(opts: { vault?: boolean } = {}) {
   const submitted: ArtifactFeedbackRequest[] = [];
   const registry = { submit: vi.fn(async (_t: ArtifactFeedbackTarget, request: ArtifactFeedbackRequest) => { submitted.push(request); return { status: "accepted" as const, source: "handler" as const }; }) };
   const hovers: unknown[] = [];
+  const rects: unknown[] = [];
   const selections: SelectionSnapshot[] = [];
   let cancels = 0;
   let counter = 0;
@@ -70,11 +71,11 @@ function setup(opts: { vault?: boolean } = {}) {
     registry,
     getRevision: () => revision,
     getViewportPreset: () => preset,
-    callbacks: { onHover: (h) => hovers.push(h), onSelect: (s) => selections.push(s), onCancel: () => { cancels++; } },
+    callbacks: { onHover: (h) => hovers.push(h), onSelect: (s) => selections.push(s), onCancel: () => { cancels++; }, onRect: (r) => rects.push(r) },
     now: () => clock,
     randomBytes: (n) => Uint8Array.from({ length: n }, () => (counter++ * 37 + 11) & 0xff),
   });
-  return { webview, bridge, registry, submitted, hovers, selections, cancels: () => cancels };
+  return { webview, bridge, registry, submitted, hovers, rects, selections, cancels: () => cancels };
 }
 const settle = async () => { for (let i = 0; i < 6; i++) await Promise.resolve(); };
 
@@ -569,5 +570,88 @@ describe("helpers", () => {
     expect(isPickAvailable({ runtime: "nextjs", inspector: { protocol: 1 } } as never, registry, target)).toBe(false);
     expect(isPickAvailable(reg, { has: () => false }, target)).toBe(false);
     expect(isPickAvailable(null, registry, target)).toBe(false);
+  });
+});
+
+describe("rect reports (Phase 2a)", () => {
+  const rectMsg = (over: Record<string, unknown> = {}) => ({ target: "hover", connected: true, rect: { x: 1, y: 2, width: 3, height: 4 }, ...over });
+
+  it("passes a validated hover rect while picking and a selected rect while holding, nothing otherwise", () => {
+    const { bridge, webview, rects } = setup();
+    webview.emit(INSPECT_CHANNEL.rect, rectMsg()); // off
+    bridge.setMode("pick");
+    webview.emit(INSPECT_CHANNEL.rect, rectMsg());
+    webview.emit(INSPECT_CHANNEL.rect, rectMsg({ target: "selected" })); // nothing is selected while picking
+    bridge.setMode("hold");
+    webview.emit(INSPECT_CHANNEL.rect, rectMsg({ target: "selected", rect: { x: 5, y: 6, width: 7, height: 8 } }));
+    webview.emit(INSPECT_CHANNEL.rect, rectMsg()); // a hover rect while holding is stale
+    expect(rects).toEqual([rectMsg(), rectMsg({ target: "selected", rect: { x: 5, y: 6, width: 7, height: 8 } })]);
+  });
+
+  it("drops invalid, oversized, polluted or wrong-sender reports", () => {
+    const { bridge, webview, rects } = setup();
+    bridge.setMode("pick");
+    webview.emit(INSPECT_CHANNEL.rect, rectMsg({ rect: { x: 1, y: 2, width: -3, height: 4 } }));
+    webview.emit(INSPECT_CHANNEL.rect, { ...rectMsg(), pad: "x".repeat(70_000) });
+    webview.emit(INSPECT_CHANNEL.rect, JSON.parse('{"__proto__":{"polluted":true},"target":"hover","connected":true,"rect":{"x":1,"y":2,"width":3,"height":4}}'));
+    webview.emit(INSPECT_CHANNEL.rect, rectMsg(), { target: { other: true } });
+    webview.emit(INSPECT_CHANNEL.rect, rectMsg(), { isMainFrame: false });
+    expect(rects).toEqual([]);
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+  });
+
+  it("has its own budget: a scroll flood never starves a select, and a hover/select flood never starves rects", async () => {
+    const { bridge, webview, rects, hovers, selections } = setup();
+    bridge.setMode("pick");
+    const cap = INSPECTOR_CAPS.rectsPerSecond;
+    for (let i = 0; i < cap + 380; i++) webview.emit(INSPECT_CHANNEL.rect, rectMsg());
+    expect(rects).toHaveLength(cap);
+    webview.emit(INSPECT_CHANNEL.select, guestSelect());
+    await settle();
+    expect(selections).toHaveLength(1); // the select budget is untouched
+    const hover = { tag: "div", rect: { x: 1, y: 1, width: 1, height: 1 }, via: "pointer" };
+    bridge.setMode("pick");
+    for (let i = 0; i < 100; i++) webview.emit(INSPECT_CHANNEL.hover, hover);
+    expect(hovers).toHaveLength(30);
+    clock += 1001;
+    webview.emit(INSPECT_CHANNEL.rect, rectMsg());
+    expect(rects).toHaveLength(cap + 1);
+  });
+
+  it("is comfortably above 144 Hz: a jittery 120/144/240 Hz scroll is delivered whole, the LAST rect is never lost, and select/hover/cancel are unaffected (A2)", async () => {
+    for (const hz of [60, 120, 144, 240]) {
+      const { bridge, webview, rects, hovers, selections, cancels } = setup();
+      bridge.setMode("hold");
+      let t = clock;
+      let sent = 0;
+      let seed = 12345;
+      const rnd = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 2 ** 32; };
+      const frameMs = 1000 / hz;
+      for (let frame = 0; frame < hz * 3; frame++) { // 3 seconds of continuous scrolling
+        t += frameMs + (rnd() - 0.5) * 3; // +-1.5 ms jitter
+        clock = Math.floor(t);
+        webview.emit(INSPECT_CHANNEL.rect, rectMsg({ target: "selected", rect: { x: 1, y: frame, width: 3, height: 4 } }));
+        sent++;
+      }
+      expect(rects, `${hz} Hz`).toHaveLength(sent);
+      expect((rects.at(-1) as { rect: { y: number } }).rect.y).toBe(hz * 3 - 1);
+      // the other budgets are untouched by the scroll traffic
+      bridge.setMode("pick");
+      webview.emit(INSPECT_CHANNEL.hover, { tag: "div", rect: { x: 1, y: 1, width: 1, height: 1 }, via: "pointer" });
+      webview.emit(INSPECT_CHANNEL.select, guestSelect());
+      await settle();
+      expect(hovers).toHaveLength(1);
+      expect(selections).toHaveLength(1);
+      webview.emit(INSPECT_CHANNEL.cancel, { reason: "escape" });
+      expect(cancels()).toBe(1);
+    }
+  });
+
+  it("a dropped rect report never re-sends the mode (it cannot strand the guest)", () => {
+    const { bridge, webview } = setup();
+    bridge.setMode("pick");
+    const before = webview.modes().length;
+    for (let i = 0; i < 200; i++) webview.emit(INSPECT_CHANNEL.rect, rectMsg());
+    expect(webview.modes().length).toBe(before);
   });
 });

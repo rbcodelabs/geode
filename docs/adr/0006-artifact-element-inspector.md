@@ -840,3 +840,112 @@ is already gone when Geode settles the call, so Geode must word it itself.
   Linux), which is macOS verification of that layer.
 - Heavy-DOM guest tests (50k nodes, 4000-deep nesting, 720k-character style) use explicit 30 s timeouts and build nesting with
   `createElement`; the macOS runner timed out the default 5 s once.
+
+## Implementation notes: Phase 2a (re-anchor, keyboard scroll, narrow pane, SVG selectors)
+
+Scope: the Geode half of spec 13d. No change to the v1 plugin contract (`feedback-contract.ts`), `ElementSelection`, the CSP,
+the request filter or the manifest schema.
+
+**New guest-to-embedder channel `geode-artifact:inspect:v1:rect`** (D4 table row).
+
+| Field | Type | Rule |
+|---|---|---|
+| `target` | `"hover" \| "selected"` | `hover` follows the highlighted element while picking; `selected` follows the element the popover is about |
+| `connected` | boolean | `false` means the element left the document |
+| `rect` | `{x, y, width, height}` or `null` | guest viewport CSS px; `null` exactly when `connected` is false; finite, magnitude <= 1e6, width and height >= 0 |
+
+It carries no identity, no selector and no page text, so the worst a hostile page can do with it is move or hide embedder UI
+(availability only, like every other message). The embedder re-validates it like any guest message (`validateRectMessage`:
+fresh object from an allowlist, hostile own keys reject, no partial acceptance, 64 KB cap), accepts a `hover` rect only in
+`pick` and a `selected` rect only in `hold`, and gives it its OWN sliding-window budget (`rectsPerSecond: 120`) separate from
+hover (30/s), select (4/s), cancel and ready, so scroll traffic can neither starve a select (the Phase 1 blocker) nor be starved
+by a hover sweep. A dropped rect never re-sends the mode: it cannot strand the guest, the next report follows.
+
+**Guest.** `scroll` (capture, passive) and `resize` listeners on `window`, re-asserted with the others every second, schedule ONE
+rAF-throttled report; the periodic tick also schedules one, so a removal the observer missed or a re-render that fires no scroll
+is found within a second. A report is sent only when the rect changed. In `pick` the guest repaints its own highlight from the
+live rect of the hovered element (the stale-highlight bug) and reports it so the toolbar chip stays current; in `hold` it
+reports the selected element, watched by a `childList` MutationObserver on its parent for prompt removal detection. A removed
+element is reported once as `connected: false` (and the hover highlight is hidden).
+
+**Embedder.** The controller gained `elementGone` and `repick()`. When the selected element is gone the popover keeps the typed
+text, hides the selection box, disables Send and shows "The element changed or was removed. Pick it again to keep your
+comment." with a **Pick again** button; Pick again returns to pick mode and carries the draft into the NEXT selection only (leaving
+pick mode, Cancel or Esc discards it). The selection box and the popover follow the live rect, and are re-positioned on scroll
+and resize reports and whenever the stage or the webview changes size (`ResizeObserver`) or the window resizes.
+
+**Narrow pane (R3).** The popover is a fixed-position child of `document.body` (not of the pane, which clips it), with a minimum
+width of 240 px (`POPOVER_MIN_WIDTH`, mirrored in CSS). Its bounds are the stage when the stage is at least 256 px wide, otherwise
+the whole window (`choosePopoverBounds`), so Send and Cancel stay reachable in a 36 px pane (640 px window with both side panels
+open). It is hidden whenever its artifact view is not showing (another tab, zero-size stage) and removed with the view.
+
+**Keyboard walk (R2).** `[` and `]` call `scrollIntoView({ block: "nearest", inline: "nearest" })` on the walked element before its
+rect is read (feature-detected, exceptions swallowed; works for SVG elements), so the highlight and the reported rect are the
+on-screen ones.
+
+**SVG selectors (R4).** Selector builders use the element's original `localName` for non-HTML elements and lower-case HTML
+tags; `outerHTML` keeps the original case on both the opening and closing tag. The contract `tag` stays lower-case
+(`lineargradient`, `foreignobject`), unchanged. Measured in this repository's Electron 42 (Chromium): in an HTML document the
+lower-cased spelling (`foreignobject`, `lineargradient`, `clippath`, `textpath`) also matches the SVG element, so the original
+Phase 2a QA claim that such selectors "never match" does not reproduce here; the change is spec-correct and engine-portable (a
+case-sensitive consumer such as an XML document or another selector engine), not a fix for a Chromium failure.
+
+**Tests.** Unit: validator (rect), bridge (routing, own budget, no mode re-send), guest under jsdom (live rect reports, removal by
+mutation and by tick, scrollIntoView, SVG selectors for `linearGradient`/`clipPath`/`foreignObject`/`textPath` and a chart
+fixture, SVG outerHTML case, bounded SVG walks), controller (elementGone, repick, draft lifecycle), popover (gone state, bounds
+chooser, DOMRect getters). E2E (`artifact-element-picker-p2a.spec.ts`): hover follows a window resize (violet border pixel),
+popover and box follow resize, preset change and scroll, a removed element, keyboard walk scroll, a 36 px pane, tab-hidden
+popover, an SVG chart pick. Screenshots are written to `test-results/p2a-screenshots`.
+
+**Residual.** The reported rect is the element's border box; elements fully clipped by an ancestor still report their layout rect
+(the box is clipped by the stage). A page that re-creates the same element on every frame is reported as removed once, then
+the user picks again.
+
+## Implementation notes: Phase 2a review fix pass
+
+**Fixed in code (each with a test that failed first).**
+- **Element gone is never lost (B1).** The guest forgets what it last reported on every 1 s tick (`reassert`), so the current
+  rect or the gone state is re-sent at most once per second until the state changes; a report the embedder dropped (budget) or
+  could not act on yet is recovered within a second. The controller remembers a gone report that arrives while still in `pick`
+  (the bridge is in hold the moment the select is sent, the popover appears only after the screenshot await of up to 2 s) and
+  applies it when the popover opens; a moved rect in that window is kept by the view and applied as the first live rect.
+- **A popover can no longer hang out of the window (A1).** Its height is capped to the room it has (stage or window bounds,
+  minimum 120 px; it scrolls inside), its placement is clamped fully inside the window, and it is re-fitted when its own size
+  changes (the "Show what will be sent" disclosure).
+- **Rect cadence (A2, A3).** The embedder budget for `rect` is 360 per second (a 144 Hz display sends at most one report per
+  frame; 240 Hz with jitter still fits), and the view coalesces to one update per animation frame, applies only the latest rect and
+  skips values that round to the one already applied. The ADR sentence "a dropped rect never strands state, the next report
+  follows" is now true even when nothing changes any more, because of the tick re-send. A replay of 60/120/144/240 Hz with jitter
+  against the real bridge proves the last rect is delivered and the other budgets are untouched.
+- **The page cannot slide the popover under the pointer (A4).** While the pointer is over the popover or focus is inside it,
+  element movement (scroll, mutation) moves the selection box but not the popover; layout changes (resize, preset, the popover's
+  own growth) always re-fit it, and it settles when the user leaves.
+- **Focus and live regions (A5).** When Send disappears (element gone) and it, or anything in the popover, had focus, focus moves
+  to "Pick again". The hover chip's live region is only rewritten when the announced text changes. Tab order is unchanged: the
+  popover is the last child of `document.body`, so Tab from its last button leaves the Geode UI instead of continuing in the
+  artifact toolbar; Esc and the buttons work from anywhere in it.
+- **Data-URI elision (A7).** Values that start with C0 control characters, whitespace or zero-width characters before `data:` are
+  elided like plain ones (the URL parser ignores them), in the guest sanitizer; `url(data:...)` inside `<style>` text is elided
+  too. The embedder redactor already replaces every non-keep attribute value, which a test now pins for such values.
+- **Chip atomicity (A9).** A hover `rect` report carries the lower-case `tag` of its element (optional, validated, connected hover
+  only), so the chip never shows one element's tag with another's size; a keyboard label is dropped on rect updates.
+- **Re-attached node (A10).** A connected `selected` rect for the same node after a gone report clears the gone state (the page
+  re-attached it); otherwise "Pick again" remains the recovery.
+- **QA C1, C3.** When the selected element is scrolled out of the stage the popover adds "The element is off screen. Scroll back
+  to see it." and stays usable. The popover heading shows the tag as the page wrote it (`linearGradient`), taken from the first tag
+  of the selection's `outerHTML`; the contract `tag` is unchanged and lower-case.
+
+**Documented (no code change).**
+- **A6, document.open():** `document.open()` erases the window's listeners, including the guest's `scroll` and `resize`; the 1 s
+  re-assertion re-adds them and re-reads the rect, so rect tracking recovers within a second (the Phase 1 A3 availability window).
+- **A8, keyboard walk side effects:** `scrollIntoView` also scrolls `overflow: hidden` containers (carousels, clipped panels), so
+  the walk changes page state the user did not ask to change, and the page can observe the resulting scroll events and so learn that
+  a picker is active and roughly which element was walked to (pointer events were already hidden from it, scroll is not). No loop is
+  possible: the guest never scrolls from a scroll handler and the walk runs only on a trusted key or an embedder message.
+- **Routing:** the first registered handler whose `canHandle` passes receives a submission, with no fall-through (D1); an early
+  handler without `canHandle` can starve later ones. Unchanged from Phase 1.
+- **R4 evidence:** only the jsdom unit tests prove that selector tag case is preserved. In this repository's Chromium the lower-cased
+  SVG spelling also matches in an HTML document, so the Chromium e2e pass is a regression guard (the selector resolves to exactly the
+  node), not evidence for the change; it passes on the old code too.
+- **Residual:** a page that moves the selected element every frame still makes the guest send one rect per frame (rate limited,
+  coalesced in the view); the popover itself no longer follows while the user is using it.

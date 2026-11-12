@@ -363,3 +363,130 @@ describe("PickController: focus after a completed pick", () => {
     expect(focuses.at(-1)).toBe("guest");
   });
 });
+
+describe("PickController: the selected element changed or left (Phase 2a R1)", () => {
+  it("flags an open popover when the element is gone, keeps the typed comment, and blocks Send", () => {
+    const { controller, submits } = selected("Make this bigger");
+    controller.elementChanged();
+    expect(controller.state.elementGone).toBe(true);
+    expect(controller.state.comment).toBe("Make this bigger");
+    expect(controller.canSend()).toBe(false);
+    controller.send();
+    expect(submits).toHaveLength(0);
+    expect(controller.canCancel()).toBe(true);
+  });
+
+  it("ignores it while picking or off, and clears the flag with the next selection", () => {
+    const { controller } = setup();
+    controller.elementChanged();
+    expect(controller.state.elementGone).toBe(false);
+    controller.enter("pointer");
+    controller.elementChanged();
+    expect(controller.state.elementGone).toBe(false);
+  });
+
+  it("does not disturb a send that is already pending (the plugin has it); the flag shows afterwards", async () => {
+    const { controller, submits } = selected();
+    controller.send();
+    controller.elementChanged();
+    expect(controller.state.submit).toBe("pending");
+    submits[0]!.deferred.resolve(accepted("Queued."));
+    await flush();
+    expect(controller.state.submit).toBe("accepted");
+  });
+
+  it("repick returns to pick mode, re-arms the guest, and carries the draft into the NEXT selection only", () => {
+    const { controller, modes } = selected("Make this bigger");
+    controller.elementChanged();
+    modes.length = 0;
+    expect(controller.repick()).toBe(true);
+    expect(controller.state.phase).toBe("pick");
+    expect(modes).toEqual(["pick"]);
+    controller.selected(snapshot("sel_next"), "toggle");
+    expect(controller.state.comment).toBe("Make this bigger");
+    expect(controller.state.elementGone).toBe(false);
+    expect(controller.state.snapshot?.selection.selectionId).toBe("sel_next");
+    // a normal cancel afterwards does not resurrect it
+    controller.cancel();
+    controller.selected(snapshot("sel_third"), "toggle");
+    expect(controller.state.comment).toBe("");
+  });
+
+  it("repick is refused unless the element is gone, and while pending", () => {
+    const { controller } = selected();
+    expect(controller.repick()).toBe(false);
+    controller.send();
+    controller.elementChanged();
+    expect(controller.repick()).toBe(false);
+  });
+
+  it("leaving pick mode discards a carried draft", () => {
+    const { controller } = selected("draft text");
+    controller.elementChanged();
+    controller.repick();
+    controller.escape(); // exits pick
+    controller.enter("pointer");
+    controller.selected(snapshot(), "toggle");
+    expect(controller.state.comment).toBe("");
+  });
+
+  it("Esc on a gone popover goes to pick mode like any cancel, and the draft is not carried (Cancel means discard)", () => {
+    const { controller } = selected("draft text");
+    controller.elementChanged();
+    controller.escape();
+    expect(controller.state.phase).toBe("pick");
+    controller.selected(snapshot("sel_b"), "toggle");
+    expect(controller.state.comment).toBe("");
+  });
+});
+
+describe("PickController: gone or returned before the popover exists (review B1, A10)", () => {
+  it("remembers a gone report that arrives while still in pick (after a select, before the screenshot lands) and applies it when the popover opens", () => {
+    const { controller } = setup();
+    controller.enter("pointer");
+    controller.elementChanged(); // the bridge is already in hold; the popover does not exist yet
+    controller.selected(snapshot(), "toggle");
+    expect(controller.state.phase).toBe("popover");
+    expect(controller.state.elementGone).toBe(true);
+    expect(controller.canSend()).toBe(false);
+  });
+
+  it("a remembered gone report does not leak into the following selection or survive leaving pick mode", () => {
+    const { controller } = setup();
+    controller.enter("pointer");
+    controller.elementChanged();
+    controller.selected(snapshot("sel_1"), "toggle");
+    controller.cancel();
+    controller.selected(snapshot("sel_2"), "toggle");
+    expect(controller.state.elementGone).toBe(false);
+    const other = setup();
+    other.controller.enter("pointer");
+    other.controller.elementChanged();
+    other.controller.escape(); // leaves pick mode
+    other.controller.enter("pointer");
+    other.controller.selected(snapshot(), "toggle");
+    expect(other.controller.state.elementGone).toBe(false);
+  });
+
+  it("elementReturned clears the gone state when the page re-attaches the same node (A10), and does nothing otherwise", () => {
+    const { controller } = selected("kept");
+    controller.elementChanged();
+    expect(controller.canSend()).toBe(false);
+    controller.elementReturned();
+    expect(controller.state.elementGone).toBe(false);
+    expect(controller.state.comment).toBe("kept");
+    expect(controller.canSend()).toBe(true);
+    const idle = setup();
+    idle.controller.elementReturned();
+    expect(idle.controller.state.elementGone).toBe(false);
+  });
+
+  it("a remembered gone report is cleared by a returned report before the popover opens", () => {
+    const { controller } = setup();
+    controller.enter("pointer");
+    controller.elementChanged();
+    controller.elementReturned();
+    controller.selected(snapshot(), "toggle");
+    expect(controller.state.elementGone).toBe(false);
+  });
+});

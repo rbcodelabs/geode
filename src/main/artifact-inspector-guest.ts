@@ -9,6 +9,7 @@ import {
   type InspectHoverMessage,
   type InspectKey,
   type InspectMode,
+  type InspectRectMessage,
 } from "../artifacts/inspector-protocol";
 
 /**
@@ -58,6 +59,11 @@ const TEXT_CHAR_BUDGET = 400;
 const RAW_ATTRIBUTE_UNITS = INSPECTOR_CAPS.attributeValueUnits * 2;
 const RAW_TEXT_UNITS = 16_384;
 const HIGHLIGHT_COLOR = "#7c3aed";
+/** A data: URL as the URL parser sees it: leading C0 controls, spaces and zero-width characters are ignored. */
+const DATA_URI_START = /^[\u0000-\u0020\u200b-\u200d\u2060\ufeff]*data:/i;
+const HTML_NAMESPACE = "http://www.w3.org/1999/xhtml";
+/** Same pointer-sized budget the embedder applies to hover: one report per frame at most, and only when something changed. */
+const SCROLL_OPTIONS = { capture: true, passive: true } as const;
 
 const IMPLICIT_ROLES: Record<string, string> = {
   button: "button", select: "combobox", textarea: "textbox", ul: "list", ol: "list", li: "listitem",
@@ -131,12 +137,31 @@ export function startInspector(env: InspectorGuestEnv): InspectorGuest | null {
   let tickHandle: number | null = null;
   let observer: MutationObserver | null = null;
   let disposed = false;
+  // Phase 2a: what the embedder is told to follow while the page scrolls, resizes or mutates.
+  let selected: Element | null = null;
+  let selectedObserver: MutationObserver | null = null;
+  let lastRectKey = "";
+  let goneReported = false;
+  let rectFrameScheduled = false;
+  const nativeScrollIntoView = win.Element.prototype.scrollIntoView as ((options?: ScrollIntoViewOptions) => void) | undefined;
 
   const isElement = (value: unknown): value is Element => value instanceof ElementCtor;
   const isOwnHost = (el: Element | null): boolean => el !== null && host !== null && el === host;
   const rectOf = (el: Element): { x: number; y: number; width: number; height: number } => {
     const r = nativeGBCR.call(el) as DOMRect;
     return { x: finite(r.x ?? r.left), y: finite(r.y ?? r.top), width: finite(r.width), height: finite(r.height) };
+  };
+  /**
+   * Type selectors are case-insensitive for HTML elements but CASE-SENSITIVE for SVG and other non-HTML elements, so
+   * `lineargradient` never matches `<linearGradient>`. HTML tags are lower-cased, everything else keeps its localName.
+   */
+  const isHtml = (el: Element): boolean => el.namespaceURI === HTML_NAMESPACE || el.namespaceURI === null;
+  const selectorTag = (el: Element): string => (isHtml(el) ? el.localName.toLowerCase() : el.localName);
+  /** Tag name as written into the bounded outerHTML (opening and closing): original case outside HTML, sanitized. */
+  const markupTag = (el: Element): string => {
+    if (isHtml(el)) return safeTag(el);
+    const kept = el.localName.replace(/[^A-Za-z0-9:-]/g, "-").replace(/^[^A-Za-z]+/, "").slice(0, 32);
+    return kept === "" ? TAG_FALLBACK : kept;
   };
   const safeTag = (el: Element): string => {
     const lowered = el.localName.toLowerCase().replace(/[^a-z0-9:-]/g, "-").replace(/^[^a-z]+/, "").slice(0, 32);
@@ -230,8 +255,8 @@ export function startInspector(env: InspectorGuestEnv): InspectorGuest | null {
         const anchored = uniqueId(cur);
         if (anchored) { segments.unshift(anchored); break; }
       }
-      const tag = cur.localName.toLowerCase();
-      if (!/^[a-z][a-z0-9-]*$/.test(tag)) return null;
+      const tag = selectorTag(cur);
+      if (!/^[A-Za-z][A-Za-z0-9-]*$/.test(tag)) return null;
       if (cur === doc.body || cur === doc.documentElement) { segments.unshift(tag); break; }
       const pos = positionAmong(cur, kind === "of-type");
       if (!pos) return null;
@@ -251,7 +276,7 @@ export function startInspector(env: InspectorGuestEnv): InspectorGuest | null {
       () => uniqueId(el),
       () => {
         const classes = [...el.classList].filter((c) => c.length <= INSPECTOR_CAPS.ancestorClassUnits).slice(0, 2);
-        return classes.length > 0 ? `${el.localName.toLowerCase()}${classes.map((c) => `.${cssEscapeIdent(c)}`).join("")}` : null;
+        return classes.length > 0 ? `${selectorTag(el)}${classes.map((c) => `.${cssEscapeIdent(c)}`).join("")}` : null;
       },
       () => structuralPath(el, "of-type"),
       () => structuralPath(el, "child"),
@@ -330,24 +355,26 @@ export function startInspector(env: InspectorGuestEnv): InspectorGuest | null {
       const attrs = el.attributes;
       for (let i = 0; i < attrs.length && i < ATTRIBUTE_LIMIT; i++) {
         const attr = attrs[i]!;
-        const name = attr.name.toLowerCase();
+        const name = attr.name.toLowerCase(); // used for every policy check (on*, srcdoc, the redaction keep list)
         if (!/^[a-z_:][-a-z0-9_:.]*$/.test(name)) continue;
+        // SVG attribute names are case-sensitive (viewBox, gradientUnits); HTML ones are written lower-case.
+        const written = isHtml(el) ? name : attr.name.replace(/[^A-Za-z0-9_:.-]/g, "-");
         let value = attr.value.length > RAW_ATTRIBUTE_UNITS ? attr.value.slice(0, RAW_ATTRIBUTE_UNITS) : attr.value;
         if (redact) {
           value = keep.has(name) ? value : "...";
         } else if (name.startsWith("on") || name === "srcdoc") {
           value = "...";
-        } else if (/^\s*data:/i.test(value)) {
+        } else if (DATA_URI_START.test(value)) {
           value = "data:...elided";
         } else if (name === "style") {
           value = elideDataUrls(value);
         }
         if (value.length > INSPECTOR_CAPS.attributeValueUnits) value = `${value.slice(0, INSPECTOR_CAPS.attributeValueUnits)}...`;
-        text += ` ${name}="${escapeAttr(value)}"`;
+        text += ` ${written}="${escapeAttr(value)}"`;
       }
       return text;
     };
-    const closeOf = (el: Element): string => (VOID_ELEMENTS.has(el.localName) ? "" : `</${safeTag(el)}>`);
+    const closeOf = (el: Element): string => (VOID_ELEMENTS.has(el.localName) ? "" : `</${markupTag(el)}>`);
 
     const stack: Element[] = [];
     let cur: Node | null = root;
@@ -357,7 +384,7 @@ export function startInspector(env: InspectorGuestEnv): InspectorGuest | null {
         nodes++;
         if (nodes > INSPECTOR_CAPS.walkerNodes || ((nodes & 15) === 0 && now() - started > INSPECTOR_CAPS.walkerMillis)) { truncated = true; break; }
         if (isElement(cur)) {
-          if (!emit(`<${safeTag(cur)}${attributeText(cur)}>`)) break;
+          if (!emit(`<${markupTag(cur)}${attributeText(cur)}>`)) break;
           if (cur.firstChild && !VOID_ELEMENTS.has(cur.localName) && cur.localName !== "script") {
             stack.push(cur);
             cur = cur.firstChild;
@@ -365,7 +392,9 @@ export function startInspector(env: InspectorGuestEnv): InspectorGuest | null {
           }
           if (!emit(closeOf(cur))) break;
         } else if (cur.nodeType === 3 && !redact) {
-          const text = escapeHtml((cur as Text).data.slice(0, RAW_TEXT_UNITS).replace(/\s+/g, " "));
+          let raw = (cur as Text).data.slice(0, RAW_TEXT_UNITS);
+          if (cur.parentElement?.localName === "style") raw = elideDataUrls(raw);
+          const text = escapeHtml(raw.replace(/\s+/g, " "));
           if (text.trim() !== "") {
             const room = limit - length;
             if (text.length > room) { if (room > 0) out.push(text.slice(0, room)); length = limit; truncated = true; break; }
@@ -487,6 +516,8 @@ export function startInspector(env: InspectorGuestEnv): InspectorGuest | null {
     if (el === current && key === lastSentKey) return;
     current = el;
     lastSentKey = key;
+    lastRectKey = rectKey(rect);
+    goneReported = false;
     if (ensureHost()) paint(rect);
     const message: { tag: string; rect: typeof rect; via: "pointer" | "keyboard"; label?: string } = { tag: safeTag(el), rect, via };
     if (via === "keyboard" && !redact) {
@@ -516,7 +547,55 @@ export function startInspector(env: InspectorGuestEnv): InspectorGuest | null {
     } else {
       next = from.firstElementChild;
     }
-    if (next) hoverElement(next, "keyboard");
+    if (next) {
+      // A walk can land on an element outside the viewport (a section far down a long page, an SVG shape): bring it
+      // into view first so the highlight is visible and the rect we report is the on-screen one.
+      if (typeof nativeScrollIntoView === "function") {
+        try { nativeScrollIntoView.call(next, { block: "nearest", inline: "nearest" }); } catch { /* not scrollable here */ }
+      }
+      hoverElement(next, "keyboard");
+    }
+  }
+
+  // ---- live rect reports (Phase 2a R1) ----
+  const rectKey = (r: { x: number; y: number; width: number; height: number }): string => `${r.x}|${r.y}|${r.width}|${r.height}`;
+  function scheduleRectReport(): void {
+    if (rectFrameScheduled || disposed || mode === "off") return;
+    rectFrameScheduled = true;
+    requestFrame(reportRects);
+  }
+  /** Reports the hovered element (pick) or the selected one (hold) when its rect changed or it left the document. */
+  function reportRects(): void {
+    rectFrameScheduled = false;
+    if (disposed || mode === "off") return;
+    const el = mode === "pick" ? current : mode === "hold" ? selected : null;
+    if (!el) return;
+    const target: InspectRectMessage["target"] = mode === "pick" ? "hover" : "selected";
+    if (!el.isConnected || isOwnHost(el)) {
+      if (goneReported) return;
+      goneReported = true;
+      if (target === "hover") { current = null; lastSentKey = ""; paint(null); }
+      send(INSPECT_CHANNEL.rect, { target, connected: false, rect: null } satisfies InspectRectMessage);
+      return;
+    }
+    const rect = rectOf(el);
+    const key = rectKey(rect);
+    if (key === lastRectKey) return;
+    lastRectKey = key;
+    if (target === "hover" && ensureHost()) paint(rect);
+    send(INSPECT_CHANNEL.rect, (target === "hover" ? { target, connected: true, rect, tag: safeTag(el) } : { target, connected: true, rect }) satisfies InspectRectMessage);
+  }
+  function onViewportChange(): void {
+    scheduleRectReport();
+  }
+  function watchSelected(el: Element | null): void {
+    selectedObserver?.disconnect();
+    selected = el;
+    if (!el?.parentNode) return;
+    try {
+      selectedObserver ??= new win.MutationObserver(() => scheduleRectReport());
+      selectedObserver.observe(el.parentNode, { childList: true });
+    } catch { /* detached */ }
   }
 
   // ---- select ----
@@ -535,6 +614,9 @@ export function startInspector(env: InspectorGuestEnv): InspectorGuest | null {
         setMode("pick", redact, false);
         return;
       }
+      lastRectKey = rectKey(message.boundingBox.viewport);
+      goneReported = false;
+      watchSelected(el);
       send(INSPECT_CHANNEL.select, message);
     }));
   }
@@ -577,15 +659,25 @@ export function startInspector(env: InspectorGuestEnv): InspectorGuest | null {
   }
   function attachListeners(): void {
     for (const type of LISTENED_EVENTS) addListener(type, onEvent, true);
+    addListener("scroll", onViewportChange, SCROLL_OPTIONS);
+    addListener("resize", onViewportChange, SCROLL_OPTIONS);
   }
   function detachListeners(): void {
     for (const type of LISTENED_EVENTS) removeListener(type, onEvent, true);
+    removeListener("scroll", onViewportChange, SCROLL_OPTIONS);
+    removeListener("resize", onViewportChange, SCROLL_OPTIONS);
   }
   function reassert(): void {
     if (disposed || mode === "off") return;
     attachListeners();
     observe();
     if (mode === "pick" && host && !host.isConnected) scheduleHeal();
+    // Layout changes that fire no scroll or resize (a chart re-render, a removal the observer could not see) AND recovery:
+    // forget what was last reported so the current state (moved or gone) is sent again, at most once per tick. A report
+    // the embedder dropped or could not act on yet therefore never leaves it stuck (review B1).
+    goneReported = false;
+    lastRectKey = "";
+    scheduleRectReport();
   }
 
   function setMode(next: InspectMode, nextRedact: boolean, fromEmbedder: boolean): void {
@@ -595,6 +687,7 @@ export function startInspector(env: InspectorGuestEnv): InspectorGuest | null {
     current = null;
     lastSentKey = "";
     hoverQueued = null;
+    if (next !== "hold") { watchSelected(null); lastRectKey = ""; goneReported = false; }
     if (next !== "pick") removeHost();
     if (next === "off") {
       if (tickHandle !== null) { clearTimer(tickHandle); tickHandle = null; }
@@ -628,6 +721,7 @@ export function startInspector(env: InspectorGuestEnv): InspectorGuest | null {
       disposed = true;
       detachListeners();
       observer?.disconnect();
+      selectedObserver?.disconnect();
       if (tickHandle !== null) { clearTimer(tickHandle); tickHandle = null; }
       removeHost();
       mode = "off";

@@ -11,7 +11,18 @@ import { ArtifactVaultBridge } from "../artifacts/vault-bridge";
 import { ArtifactInspectorBridge, artifactFeedbackTarget, isPickAvailable, type InspectorHover, type InspectorWebview } from "./artifact-inspector-bridge";
 import type { ArtifactFeedbackTarget } from "../../artifacts/feedback-contract";
 import { PickController, type FocusTarget, type PickState } from "../artifacts/pick-controller";
-import { PickPopover, popoverPosition } from "../artifacts/pick-popover";
+import {
+  PickPopover,
+  choosePopoverBounds,
+  clampIntoWindow,
+  hoverChipText,
+  isElementOffscreen,
+  popoverMaxHeight,
+  popoverPosition,
+  shouldMovePopover,
+} from "../artifacts/pick-popover";
+import { createRectCoalescer, type RectCoalescer } from "../artifacts/rect-coalescer";
+import type { InspectRectMessage } from "../../artifacts/inspector-protocol";
 
 type ViewportPreset = "desktop" | "tablet" | "mobile" | "custom" | "fill";
 interface Viewport { preset: ViewportPreset; width: number; height: number }
@@ -67,6 +78,17 @@ export class ArtifactView implements View, ReloadableView {
   private readonly selectionBoxEl = document.createElement("div");
   private readonly sentChipEl = document.createElement("span");
   private lastPickPhase: PickState["phase"] = "off";
+  /** The selected element's CURRENT viewport rect (Phase 2a), reported by the guest; null until it moves. */
+  private liveRect: { x: number; y: number; width: number; height: number } | null = null;
+  private liveRectFor: PickState["snapshot"] = null;
+  /** A selected rect that arrived after the select but before the popover opened (the screenshot await); applied on open. */
+  private earlyRect: { x: number; y: number; width: number; height: number } | null = null;
+  private rectCoalescer: RectCoalescer<{ x: number; y: number; width: number; height: number }> | null = null;
+  private pointerInPopover = false;
+  private offscreen = false;
+  private lastHover: InspectorHover | null = null;
+  private layoutObserver: ResizeObserver | undefined;
+  private readonly onWindowResize = (): void => this.repositionPick("layout");
   private bridge: ArtifactInspectorBridge | null = null;
   private pick: PickController | null = null;
   private popover: PickPopover | null = null;
@@ -335,6 +357,7 @@ export class ArtifactView implements View, ReloadableView {
         onHover: (hover) => this.showHover(hover),
         onSelect: (snapshot) => this.pick?.selected(snapshot, document.activeElement === frame ? "guest" : "toggle"),
         onCancel: () => { this.pick?.cancelFromGuest(); },
+        onRect: (report) => this.onGuestRect(report),
       },
     });
     const controller = new PickController({
@@ -349,9 +372,30 @@ export class ArtifactView implements View, ReloadableView {
       onCancel: () => { controller.cancel(); },
       onDone: () => controller.done(),
       onEscape: () => { controller.escape(); },
+      onRepick: () => { controller.repick(); },
     });
     popover.el.hidden = true;
-    this.overlayEl.replaceChildren(this.selectionBoxEl, popover.el);
+    // The popover lives on document.body (fixed position), not in the pane: in a very narrow pane it must be free to use
+    // the window, and the pane clips and contains anything inside it. It is hidden whenever this view is not showing.
+    this.overlayEl.replaceChildren(this.selectionBoxEl);
+    document.body.appendChild(popover.el);
+    this.layoutObserver = new ResizeObserver(() => this.repositionPick("layout"));
+    // One embedder update per animation frame, however fast the page animates the element (review A3).
+    this.rectCoalescer = createRectCoalescer({
+      schedule: (cb) => window.requestAnimationFrame(cb),
+      cancel: (h) => window.cancelAnimationFrame(h),
+      apply: (box) => {
+        if (this.pick?.state.phase === "popover") { this.liveRect = box; this.repositionPick("rect"); } else this.earlyRect = box;
+      },
+    });
+    // Do not slide the popover from under the pointer or the caret because the page moved the element (review A4).
+    popover.el.addEventListener("mouseenter", () => { this.pointerInPopover = true; });
+    popover.el.addEventListener("mouseleave", () => { this.pointerInPopover = false; this.repositionPick("settle"); });
+    popover.el.addEventListener("focusout", () => window.setTimeout(() => this.repositionPick("settle"), 0));
+    this.layoutObserver.observe(this.stageEl);
+    this.layoutObserver.observe(frame);
+    this.layoutObserver.observe(popover.el); // its own height changes (the "what will be sent" disclosure) need a re-fit
+    window.addEventListener("resize", this.onWindowResize);
     this.bridge = bridge;
     this.pick = controller;
     this.popover = popover;
@@ -366,6 +410,18 @@ export class ArtifactView implements View, ReloadableView {
     this.unsubscribeFeedback = undefined;
     this.pick?.dispose();
     this.bridge?.dispose();
+    this.layoutObserver?.disconnect();
+    this.layoutObserver = undefined;
+    this.rectCoalescer?.dispose();
+    this.rectCoalescer = null;
+    this.pointerInPopover = false;
+    this.offscreen = false;
+    this.earlyRect = null;
+    window.removeEventListener("resize", this.onWindowResize);
+    this.popover?.el.remove();
+    this.liveRect = null;
+    this.liveRectFor = null;
+    this.lastHover = null;
     this.pick = null;
     this.bridge = null;
     this.popover = null;
@@ -401,8 +457,11 @@ export class ArtifactView implements View, ReloadableView {
   }
 
   private showHover(hover: InspectorHover): void {
+    this.lastHover = hover;
     this.hoverEl.hidden = false;
-    this.hoverEl.textContent = hover.label ? `<${hover.tag}> ${hover.label}` : `<${hover.tag}> ${Math.round(hover.rect.width)} × ${Math.round(hover.rect.height)}`;
+    const text = hoverChipText(hover);
+    // Only touch the live region when the announced text changes (a scroll tick must not re-announce a keyboard label).
+    if (this.hoverEl.textContent !== text) this.hoverEl.textContent = text;
     // Pointer hovering is visual only; a keyboard walk is announced.
     this.hoverEl.setAttribute("aria-live", hover.via === "keyboard" ? "polite" : "off");
   }
@@ -421,13 +480,23 @@ export class ArtifactView implements View, ReloadableView {
     this.lastPickPhase = state.phase;
     this.lastSubmit = state.submit;
     if (state.submit === "accepted") this.lastOutcomeMessage = state.outcome?.message;
+    if (state.snapshot !== this.liveRectFor) {
+      this.liveRectFor = state.snapshot;
+      // A rect the guest reported between the select and the popover is this selection's current position: keep it.
+      this.liveRect = state.snapshot ? this.earlyRect : null;
+      this.earlyRect = null;
+      this.rectCoalescer?.reset();
+      this.offscreen = false;
+    }
+    if (!state.snapshot) this.earlyRect = null;
     const popover = this.popover;
     if (!popover) return;
     popover.el.hidden = state.phase !== "popover";
-    this.selectionBoxEl.hidden = state.phase !== "popover";
+    // No box for an element the page removed: it would tint empty space.
+    this.selectionBoxEl.hidden = state.phase !== "popover" || state.elementGone;
     if (state.phase === "popover") {
-      popover.render(state, this.handlerName);
-      this.positionPopover(state);
+      popover.render(state, this.handlerName, { offscreen: this.offscreen });
+      this.positionPopover(state, "layout");
     }
   }
 
@@ -447,28 +516,76 @@ export class ArtifactView implements View, ReloadableView {
     chip.hidden = false;
   }
 
-  /** Below the selected element, flipped above or clamped to the stage; it does not follow scrolling. */
-  private positionPopover(state: PickState): void {
+  /** The guest reports where the hovered or selected element is NOW (scroll, resize, mutation, or the 1 s re-send). */
+  private onGuestRect(report: InspectRectMessage): void {
+    if (report.target === "hover") {
+      if (!report.connected || !report.rect) { this.hoverEl.hidden = true; this.hoverEl.textContent = ""; this.lastHover = null; return; }
+      // The message names its element, so the chip's tag and size always belong together (a label from an older hover is dropped).
+      if (report.tag) this.showHover({ tag: report.tag, rect: report.rect, via: "pointer" });
+      return;
+    }
+    if (!report.connected || !report.rect) { this.pick?.elementChanged(); return; }
+    // The same node is connected again (the page re-attached it): the gone state clears.
+    this.pick?.elementReturned();
+    this.rectCoalescer?.push(report.rect);
+  }
+
+  private repositionPick(reason: "layout" | "rect" | "settle"): void {
+    const state = this.pick?.state;
+    if (state && state.phase === "popover") this.positionPopover(state, reason);
+  }
+
+  /**
+   * Marks the selected element and puts the popover below it (flipped above, clamped into the stage; in a pane too
+   * narrow to be usable, clamped into the window; its height capped to the room it has so Send and Cancel stay on
+   * screen). Anchors to the guest-reported live rect, so it follows scroll and resize, and is re-run when the pane or
+   * window changes size. Hidden while this view is not showing.
+   */
+  private positionPopover(state: PickState, reason: "layout" | "rect" | "settle"): void {
     const popover = this.popover;
     const snapshot = state.snapshot;
     if (!popover || !snapshot || !this.webview) return;
+    // Reads first, writes after (one forced layout per update).
     const stage = this.stageEl.getBoundingClientRect();
+    const showing = stage.width > 0 && stage.height > 0 && this.containerEl.getClientRects().length > 0;
+    popover.el.style.visibility = showing ? "" : "hidden";
+    this.selectionBoxEl.style.visibility = showing ? "" : "hidden";
+    if (!showing) return;
     const frame = this.webview.getBoundingClientRect();
-    const box = snapshot.selection.boundingBox.viewport;
-    const anchor = { x: frame.left - stage.left + box.x, y: frame.top - stage.top + box.y, width: box.width, height: box.height };
-    // The selected element stays visibly marked while the popover is open (the guest's own highlight is hidden
-    // so it cannot appear in the screenshot). Non-interactive, clipped to the stage by the overlay.
-    this.selectionBoxEl.style.left = `${Math.round(anchor.x)}px`;
-    this.selectionBoxEl.style.top = `${Math.round(anchor.y)}px`;
-    this.selectionBoxEl.style.width = `${Math.max(2, Math.round(anchor.width))}px`;
-    this.selectionBoxEl.style.height = `${Math.max(2, Math.round(anchor.height))}px`;
-    const placed = popoverPosition(
-      anchor,
-      { width: popover.el.offsetWidth, height: popover.el.offsetHeight },
-      { width: stage.width, height: stage.height },
+    const box = this.liveRect ?? snapshot.selection.boundingBox.viewport;
+    // The selected element stays visibly marked while the popover is open (the guest's own highlight is hidden so it
+    // cannot appear in the screenshot). Non-interactive, clipped to the stage by the overlay.
+    const ax = frame.left - stage.left + box.x;
+    const ay = frame.top - stage.top + box.y;
+    this.selectionBoxEl.style.left = `${Math.round(ax)}px`;
+    this.selectionBoxEl.style.top = `${Math.round(ay)}px`;
+    this.selectionBoxEl.style.width = `${Math.max(2, Math.round(box.width))}px`;
+    this.selectionBoxEl.style.height = `${Math.max(2, Math.round(box.height))}px`;
+
+    // A small cue when the element is scrolled out of view; the popover stays usable (QA C1).
+    const offscreen = !state.elementGone && isElementOffscreen(
+      { left: frame.left + box.x, top: frame.top + box.y, right: frame.left + box.x + box.width, bottom: frame.top + box.y + box.height },
+      { left: stage.left, top: stage.top, right: stage.right, bottom: stage.bottom },
     );
-    popover.el.style.left = `${Math.round(placed.left)}px`;
-    popover.el.style.top = `${Math.round(placed.top)}px`;
+    if (offscreen !== this.offscreen) {
+      this.offscreen = offscreen;
+      popover.render(state, this.handlerName, { offscreen });
+    }
+
+    const focusInside = popover.el.contains(document.activeElement);
+    if (!shouldMovePopover({ reason, pointerInside: this.pointerInPopover, focusInside })) return;
+    const win = { width: window.innerWidth, height: window.innerHeight };
+    const bounds = choosePopoverBounds(stage, win);
+    popover.el.style.maxHeight = `${popoverMaxHeight(bounds)}px`;
+    const size = { width: popover.el.offsetWidth, height: Math.min(popover.el.offsetHeight, popoverMaxHeight(bounds)) };
+    const placed = popoverPosition(
+      { x: frame.left + box.x - bounds.left, y: frame.top + box.y - bounds.top, width: box.width, height: box.height },
+      size,
+      { width: bounds.width, height: bounds.height },
+    );
+    const final = clampIntoWindow({ left: bounds.left + placed.left, top: bounds.top + placed.top }, size, win);
+    popover.el.style.left = `${Math.round(final.left)}px`;
+    popover.el.style.top = `${Math.round(final.top)}px`;
   }
 
   /** Esc and the [ ] walk keys while focus is in the embedder chrome (toolbar, popover). */

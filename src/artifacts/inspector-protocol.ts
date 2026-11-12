@@ -22,6 +22,8 @@ export const INSPECT_CHANNEL = {
   hover: `${PREFIX}hover`,
   select: `${PREFIX}select`,
   cancel: `${PREFIX}cancel`,
+  /** guest to embedder (Phase 2a): the CURRENT rect of the hovered or selected element after a scroll, resize or mutation. */
+  rect: `${PREFIX}rect`,
 } as const;
 
 export const INSPECT_GUEST_TO_EMBEDDER_CHANNELS: readonly string[] = [
@@ -29,6 +31,7 @@ export const INSPECT_GUEST_TO_EMBEDDER_CHANNELS: readonly string[] = [
   INSPECT_CHANNEL.hover,
   INSPECT_CHANNEL.select,
   INSPECT_CHANNEL.cancel,
+  INSPECT_CHANNEL.rect,
 ];
 
 export type InspectMode = "off" | "pick" | "hold";
@@ -45,6 +48,19 @@ export interface InspectHoverMessage {
   readonly label?: string;
 }
 export interface InspectCancelMessage { readonly reason: "escape" }
+/**
+ * Phase 2a. The live viewport rect of what the user is pointing at. `hover` follows the highlighted element while
+ * picking; `selected` follows the element the popover is about. `connected: false` (rect null) means the element left
+ * the document. Carries no identity and no selection data: it can only move or hide embedder UI.
+ */
+export interface InspectRectMessage {
+  readonly target: "hover" | "selected";
+  readonly connected: boolean;
+  /** Guest viewport CSS px; null exactly when `connected` is false. */
+  readonly rect: Rect | null;
+  /** Only on a connected `hover` report: the lower-case tag of the element the rect belongs to (keeps the chip atomic). */
+  readonly tag?: string;
+}
 
 /** The origin-G half of `ElementSelection` as the page's DOM supplies it. Untrusted. */
 export interface GuestSelectMessage {
@@ -107,6 +123,9 @@ export const INSPECTOR_CAPS = {
   /** Embedder: all inspector channels combined. */
   messagesPerSecond: 30,
   selectsPerSecond: 4,
+  /** Embedder: `rect` reports, a budget of their own so scroll traffic can never starve select or cancel (and vice versa). */
+  // 360: comfortably above 144 Hz displays (one report per animation frame at most, so 240 Hz still fits with jitter).
+  rectsPerSecond: 360,
   /** Guest: highlight host re-attachments per second before it marks itself degraded. */
   reattachPerSecond: 20,
   /** Guest outerHTML walker budgets. */

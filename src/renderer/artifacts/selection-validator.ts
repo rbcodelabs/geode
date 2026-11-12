@@ -5,6 +5,7 @@ import {
   INSPECTOR_STYLE_ALLOWLIST,
   type GuestSelectMessage,
   type InspectHoverMessage,
+  type InspectRectMessage,
 } from "../../artifacts/inspector-protocol";
 
 /**
@@ -79,6 +80,21 @@ export function validateHoverMessage(raw: unknown): InspectHoverMessage | null {
   if (b.label === undefined) return { tag: t, rect: r, via: "keyboard" };
   const label = str(b.label, INSPECTOR_CAPS.hoverLabelUnits);
   return label === null ? null : { tag: t, rect: r, via: "keyboard", label };
+}
+
+/** Phase 2a: the live rect of the hovered or selected element. Connected iff the rect is present. */
+export function validateRectMessage(raw: unknown): InspectRectMessage | null {
+  const b = bag(raw);
+  if (!b) return null;
+  if (b.target !== "hover" && b.target !== "selected") return null;
+  if (typeof b.connected !== "boolean") return null;
+  if (!b.connected) return b.rect === null && b.tag === undefined ? { target: b.target, connected: false, rect: null } : null;
+  const r = rect(b.rect);
+  if (r === null) return null;
+  if (b.tag === undefined) return { target: b.target, connected: true, rect: r };
+  // A tag names the hovered element for the chip; it only belongs on a hover report.
+  const t = b.target === "hover" ? tag(b.tag) : null;
+  return t === null ? null : { target: b.target, connected: true, rect: r, tag: t };
 }
 
 /**
