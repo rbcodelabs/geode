@@ -288,7 +288,8 @@ export const CHART_ARTIFACT: ArtifactSpec = {
  * Phase 2b-i G2 (pinned-comment anchors): a page for the anchor tracker with the attacks T1 (forged anchor messages),
  * T2 (patched prototypes, decoys) and T3 (pathological selectors on a heavy DOM) available on demand through
  * window.__anchorHostile. Positions are absolute so rectangles are exact at any pane size:
- *   #buy {100,200,160x48}  #note {100,280}  h2#plans-h {100,100}  section#plans {80,150,700x200}
+ *   h2#plans-h {100,100}  section#plans {80,150,700x200}  #buy and #note are positioned INSIDE #plans:
+ *   #buy viewport rect {180,350,160x48}
  */
 export const ANCHORS_ARTIFACT: ArtifactSpec = {
   id: "picker-anchors",

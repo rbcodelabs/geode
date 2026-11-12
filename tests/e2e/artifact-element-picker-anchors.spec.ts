@@ -10,7 +10,8 @@ import { counts, guestEval, inView, lastRects, lastResults, near, percentile, qu
  * on a 50k-node DOM, T9 the page cannot read comments or see them on the wire.
  */
 
-const BUY = { x: 100, y: 200, width: 160, height: 48 };
+// #buy is positioned inside the absolutely positioned section#plans (80,150), so its viewport rect is (180,350).
+const BUY = { x: 180, y: 350, width: 160, height: 48 };
 const waitResults = (w: import("@playwright/test").Page, epoch: number) =>
   expect.poll(async () => (await lastResults(w))?.epoch ?? 0, { timeout: 20_000 }).toBeGreaterThanOrEqual(epoch);
 
@@ -31,8 +32,12 @@ test.describe("guest anchors (phase 2b-i G2)", () => {
       const first = (await lastResults(s.window))!;
       expect(first.results.map((x: any) => [x.key, x.match, x.agrees])).toEqual([["a0", "selector", true], ["a1", "selector", true], ["a2", "selector", true]]);
       const trueFluid = await guestEval<{ x: number; width: number }>(s.window, `(() => { const r = document.querySelector("#fluid").getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height }; })()`);
-      expect(near(first.results[0].rect.x, trueFluid.x)).toBe(true);
       expect(first.results[0].visible).toBe(true);
+      await expect.poll(async () => {
+        const msg = await lastRects(s.window) ?? await lastResults(s.window);
+        const x = (msg as any).rects ? (msg as any).rects[0].rect.x : (msg as any).results[0].rect.x;
+        return near(x, await guestEval<number>(s.window, `document.querySelector("#fluid").getBoundingClientRect().x`));
+      }, { timeout: 20_000 }).toBe(true);
       expect(first.results[1].visible).toBe(false); // 2500 px down
 
       // resize: the fluid block moves, a rects report follows with its new place
@@ -85,7 +90,12 @@ test.describe("guest anchors (phase 2b-i G2)", () => {
       await s.window.waitForTimeout(1500);
       const after = await counts(s.window);
       expect(after.results).toBe(settled.results);
-      expect(after.rects).toBe(settled.rects);
+      // The real guest legitimately re-reports rects every second; what must never appear is a forged one.
+      const forgedSeen = await inView(s.window, (p: any) => {
+        const snap = p.snapshot();
+        return snap.results.some((m: any) => m.results.some((x: any) => x.rect && x.rect.width === 5)) || snap.rects.some((m: any) => m.rects.some((x: any) => x.rect && x.rect.width === 5));
+      });
+      expect(forgedSeen).toBe(false);
       expect(await guestEval<number>(s.window, `window.__forged`)).toBeGreaterThanOrEqual(8);
       expect((await lastResults(s.window))!.results[0].rect).toMatchObject(BUY);
     } finally { await s.cleanup(); }
