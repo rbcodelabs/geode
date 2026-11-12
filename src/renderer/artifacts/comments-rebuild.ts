@@ -131,7 +131,10 @@ function dropTrailingHighSurrogate(text: string): string {
 /** Display-only text: tabs and newlines become spaces, controls and bidi overrides are removed, then truncated to `max` units. */
 export function cleanDisplayText(value: unknown, max: number): string {
   if (typeof value !== "string") return fail();
-  const cleaned = value.replace(/[\t\n\r]+/g, " ").replace(CONTROLS_AND_BIDI, "");
+  // Truncate before cleaning: the input is untrusted and may be tens of MB. Four times the cap leaves room for the
+  // characters cleaning removes; the final slice enforces the cap itself.
+  const head = value.length > max * 4 ? value.slice(0, max * 4) : value;
+  const cleaned = head.replace(/[\t\n\r]+/g, " ").replace(CONTROLS_AND_BIDI, "");
   return cleaned.length > max ? dropTrailingHighSurrogate(cleaned.slice(0, max)) : cleaned;
 }
 
@@ -198,11 +201,11 @@ function comment(value: unknown): ArtifactComment {
   // The id is derived from the selection id (design note A2.4); a mismatch means the provider invented an id.
   if (id !== `cmt_${selectionId.slice(4)}`) return fail();
   const rawText = field(source, "text");
-  if (typeof rawText !== "string") return fail();
+  if (typeof rawText !== "string" || rawText.length > ARTIFACT_COMMENTS_CAPS.maxTextUnits) return fail();
   const text = rawText.replace(CONTROLS_KEEP_NEWLINE_TAB, "");
   if (text.length < 1 || text.length > ARTIFACT_COMMENTS_CAPS.maxTextUnits) return fail();
   const send = dict(field(source, "send"));
-  return {
+  const built: ArtifactComment = {
     id,
     selectionId,
     ordinal: int(field(source, "ordinal"), 1),
@@ -228,6 +231,9 @@ function comment(value: unknown): ArtifactComment {
       lastMessage: nullable(field(send, "lastMessage"), (v) => cleanDisplayText(v, ARTIFACT_COMMENTS_CAPS.maxMessageUnits)),
     },
   };
+  // A comment pinned on a vault:read artifact carries no page text and no pixels (design note T11).
+  if (built.redacted && (built.anchor.textAnchor.text !== "" || built.hasScreenshot)) return fail();
+  return built;
 }
 
 function selection(value: unknown): ElementSelection {
@@ -245,7 +251,7 @@ function selection(value: unknown): ElementSelection {
   }
   const dpr = num(field(view, "devicePixelRatio"));
   if (dpr <= 0) return fail();
-  return {
+  const built: ElementSelection = {
     schemaVersion: 1,
     selectionId: pattern(field(source, "selectionId"), SELECTION_ID),
     artifactId: str(field(source, "artifactId"), 1, 256),
@@ -284,6 +290,9 @@ function selection(value: unknown): ElementSelection {
       tabIndex: nullable(field(a11y, "tabIndex"), (v) => int(v, -1, 32767)),
     },
   };
+  // A redacted selection (vault:read) carries neither text anchor text nor an accessible name.
+  if (built.redacted && (built.textAnchor.text !== "" || built.a11y.name !== null)) return fail();
+  return built;
 }
 
 export function rebuildComment(value: unknown): ArtifactComment | null {
@@ -294,15 +303,27 @@ export function rebuildSelection(value: unknown): ElementSelection | null {
   return guarded(() => selection(value));
 }
 
-export function rebuildDetail(value: unknown): ArtifactCommentDetail | null {
+/** `target`, when given, is the artifact the call was made for: the stored selection must belong to it. */
+export function rebuildDetail(value: unknown, target?: { readonly artifactId: string }): ArtifactCommentDetail | null {
   return guarded((): ArtifactCommentDetail => {
     const source = dict(value);
     const built = comment(field(source, "comment"));
     const stored = nullable(field(source, "selection"), selection);
-    // The sidecar must be the selection this comment was pinned from.
-    if (stored !== null && stored.selectionId !== built.selectionId) return fail();
+    if (stored !== null) {
+      // The sidecar must be the selection this comment was pinned from, on this artifact, with the same redaction.
+      if (stored.selectionId !== built.selectionId) return fail();
+      if (target !== undefined && stored.artifactId !== target.artifactId) return fail();
+      if (stored.redacted !== built.redacted) return fail();
+    }
     return { comment: built, selection: stored };
   });
+}
+
+/** Geode-authored note appended when a snapshot was cut to the cap, within the notice limit. */
+function truncationNotice(plugin: string | null, total: number): string {
+  const ours = `Showing the first ${ARTIFACT_COMMENTS_CAPS.maxComments} of ${total} comments.`;
+  if (plugin === null || plugin === "") return ours;
+  return `${plugin.slice(0, ARTIFACT_COMMENTS_CAPS.maxNoticeUnits - ours.length - 1)} ${ours}`;
 }
 
 export function rebuildSnapshot(value: unknown): ArtifactCommentsSnapshot | null {
@@ -316,11 +337,13 @@ export function rebuildSnapshot(value: unknown): ArtifactCommentsSnapshot | null
     if (new Set(comments.map((c) => c.id)).size !== comments.length) return fail();
     if (new Set(comments.map((c) => c.ordinal)).size !== comments.length) return fail();
     comments.sort((a, b) => a.ordinal - b.ordinal);
+    const total = rawComments.length;
+    const notice = nullable(field(source, "notice"), (v) => cleanDisplayText(v, ARTIFACT_COMMENTS_CAPS.maxNoticeUnits));
     return {
       storeId: pattern(field(source, "storeId"), STORE_ID),
       revision: int(field(source, "revision"), 0),
       health: oneOf(field(source, "health"), HEALTHS),
-      notice: nullable(field(source, "notice"), (v) => cleanDisplayText(v, ARTIFACT_COMMENTS_CAPS.maxNoticeUnits)),
+      notice: total > ARTIFACT_COMMENTS_CAPS.maxComments ? truncationNotice(notice, total) : notice,
       comments,
       foreignCount: int(field(source, "foreignCount"), 0),
     };

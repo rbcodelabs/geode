@@ -10,6 +10,7 @@ import {
   type SendCommentsInput,
   type UpdateCommentInput,
 } from "../../artifacts/feedback-contract-v2";
+import type { ArtifactFeedbackTarget } from "../../artifacts/feedback-contract";
 import { rebuildHealedAnchor } from "./comments-rebuild";
 import { freezePlain } from "./freeze-plain";
 
@@ -110,10 +111,24 @@ export function checkReports(reports: unknown): Checked<AnchorReport[]> {
   return good(out);
 }
 
-/** The request is built by Geode (validated bridge, controller); only its presence is checked here. The provider re-validates it. */
-export function checkSave(input: unknown): Checked<SavePinnedCommentInput> {
+/**
+ * The request is built by Geode (validated bridge, controller), so only its coherence with the routed target is
+ * checked here: the selection must belong to the target artifact, and on a vault:read artifact there must be no
+ * screenshot and the selection must be redacted (the same invariants the plugin enforces). The provider re-validates
+ * everything else. A request that cannot be frozen (cyclic, absurdly deep) is refused instead of throwing.
+ */
+export function checkSave(input: unknown, target: ArtifactFeedbackTarget): Checked<SavePinnedCommentInput> {
   if (!isObject(input) || !isObject(input.request)) return bad("There is nothing to save.");
-  const selection = input.request.selection;
+  const request = input.request;
+  const selection = request.selection;
   if (!isObject(selection) || typeof selection.selectionId !== "string" || !/^sel_[0-9a-f]{32}$/.test(selection.selectionId)) return bad("There is nothing to save.");
-  return { ok: true, value: freezePlain({ request: input.request } as unknown as SavePinnedCommentInput) };
+  if (selection.artifactId !== target.artifactId) return bad("This selection belongs to a different artifact.");
+  if (target.vaultRead && (request.screenshot !== null && request.screenshot !== undefined || selection.redacted !== true)) {
+    return bad("This artifact can read the vault, so a pin cannot include a screenshot or page text.");
+  }
+  try {
+    return { ok: true, value: freezePlain({ request } as unknown as SavePinnedCommentInput) };
+  } catch {
+    return bad("That request is too deeply nested to send.");
+  }
 }

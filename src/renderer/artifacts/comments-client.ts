@@ -73,6 +73,10 @@ export interface ArtifactCommentsClient {
 export interface CommentsClientDeps {
   readonly owner: ArtifactFeedbackOwner;
   readonly provider: ArtifactCommentsProvider;
+  /** Read once by the registry at register; the client never reads `provider.capabilities` itself. */
+  readonly capabilities: ArtifactCommentsCapabilities;
+  /** Minimum time between the starts of two change-driven refreshes. */
+  readonly minRefreshMs: number;
   /** Frozen allowlist copy of the routed target; the same object is passed to every provider call. */
   readonly target: ArtifactFeedbackTarget;
   readonly isLive: () => boolean;
@@ -102,23 +106,31 @@ class CommentsClient implements ArtifactCommentsClient {
   private cancelFrame: (() => void) | null = null;
   private refreshing = false;
   private newerDuringRefresh = false;
-  private latestEvent: { storeId: string; revision: number } | null = null;
+  /** True from just before `provider.subscribe` is called: a change emitted synchronously inside it must count. */
+  private subscribed = false;
+  private lastRefreshStartedAt: number | null = null;
 
   constructor(private readonly deps: CommentsClientDeps) {
-    const raw = deps.provider.capabilities;
-    this.capabilities = Object.freeze({
-      pins: true,
-      batchSend: true,
-      textEdit: raw.textEdit === true && typeof deps.provider.commitTextEdit === "function" && typeof deps.provider.undoTextEdit === "function",
-    });
+    let textEditMethods = false;
+    try {
+      textEditMethods = typeof deps.provider.commitTextEdit === "function" && typeof deps.provider.undoTextEdit === "function";
+    } catch {
+      textEditMethods = false;
+    }
+    this.capabilities = Object.freeze({ pins: true, batchSend: true, textEdit: deps.capabilities.textEdit && textEditMethods });
   }
 
   get cached(): ArtifactCommentsSnapshot | null { return this.snapshot; }
 
   list(): Promise<ArtifactCommentsResult<ArtifactCommentsSnapshot>> {
     return this.invoke("list", this.deps.callTimeoutMs, (ctx) => this.deps.provider.list(this.deps.target, ctx), rebuildSnapshot).then((result) => {
-      if (result.status === "ok") this.remember(result.value);
-      return result;
+      if (result.status !== "ok") return result;
+      this.remember(result.value);
+      // A slower, older answer must not reach the caller (or a change listener) after a newer one was cached.
+      const kept = this.snapshot;
+      return kept !== null && kept !== result.value && kept.storeId === result.value.storeId && kept.revision > result.value.revision
+        ? { status: "ok" as const, value: kept }
+        : result;
     });
   }
 
@@ -126,11 +138,16 @@ class CommentsClient implements ArtifactCommentsClient {
     const checked = checkId(id);
     if (!checked.ok) return this.invalid(checked);
     return this.invoke("get", this.deps.callTimeoutMs, (ctx) => this.deps.provider.get(this.deps.target, checked.value, ctx),
-      (raw) => { const detail = rebuildDetail(raw); return detail !== null && detail.comment.id === checked.value ? detail : null; });
+      (raw) => { const detail = rebuildDetail(raw, this.deps.target); return detail !== null && detail.comment.id === checked.value ? detail : null; });
   }
 
   save(input: SavePinnedCommentInput): Promise<ArtifactCommentsResult<{ readonly comment: ArtifactComment; readonly created: boolean }>> {
-    const checked = checkSave(input);
+    let checked: Checked<SavePinnedCommentInput>;
+    try {
+      checked = checkSave(input, this.deps.target);
+    } catch {
+      return Promise.resolve(rejected("invalid", "That request could not be read."));
+    }
     if (!checked.ok) return this.invalid(checked);
     const selectionId = checked.value.request.selection.selectionId;
     return this.invoke("save", this.deps.callTimeoutMs, (ctx) => this.deps.provider.save(this.deps.target, checked.value, ctx),
@@ -183,7 +200,7 @@ class CommentsClient implements ArtifactCommentsClient {
   onDidChange(listener: (result: ArtifactCommentsResult<ArtifactCommentsSnapshot>) => void): () => void {
     if (this.closed) return () => {};
     this.listeners.add(listener);
-    if (this.subscription === null) this.openSubscription();
+    if (!this.subscribed) this.openSubscription();
     return () => {
       if (!this.listeners.delete(listener)) return;
       if (this.listeners.size === 0) this.closeSubscription();
@@ -243,7 +260,12 @@ class CommentsClient implements ArtifactCommentsClient {
       this.flights.add(flight);
       timer = setTimeout(() => {
         console.warn(`[artifact-comments] "${this.deps.owner.pluginId}" ${label} did not answer within ${timeoutMs} ms`);
-        flight.settle(rejected("failed", `No response from ${name} in ${Math.round(timeoutMs / 1000)} s.`), true);
+        const waited = `No response from ${name} in ${Math.round(timeoutMs / 1000)} s.`;
+        // A write may have reached the plugin even though no answer came back (v1 submit wording).
+        const hint = label === "save" ? " It may have been received; check the thread before retrying. Retry reuses the same selection id."
+          : label === "sendBatch" ? " It may have been received; check the thread before retrying. Retry reuses the same request id."
+          : "";
+        flight.settle(rejected("failed", waited + hint), true);
       }, timeoutMs);
       const failed = (error: unknown): void => {
         console.warn(`[artifact-comments] "${this.deps.owner.pluginId}" ${label} failed`, error);
@@ -276,6 +298,7 @@ class CommentsClient implements ArtifactCommentsClient {
       return;
     }
     this.slotHeld = true;
+    this.subscribed = true;
     try {
       const subscription = this.deps.provider.subscribe(this.deps.target, (raw) => this.onProviderChange(raw));
       if (subscription === null || typeof subscription !== "object" || typeof subscription.dispose !== "function") {
@@ -284,15 +307,21 @@ class CommentsClient implements ArtifactCommentsClient {
       this.subscription = subscription;
     } catch (error) {
       console.warn(`[artifact-comments] "${this.deps.owner.pluginId}" subscribe failed`, error);
+      this.subscribed = false;
+      this.cancelPending();
       this.releaseSlot();
     }
   }
 
-  private closeSubscription(): void {
+  private cancelPending(): void {
     this.cancelFrame?.();
     this.cancelFrame = null;
-    this.latestEvent = null;
     this.newerDuringRefresh = false;
+  }
+
+  private closeSubscription(): void {
+    this.subscribed = false;
+    this.cancelPending();
     const subscription = this.subscription;
     this.subscription = null;
     if (subscription !== null) {
@@ -310,18 +339,18 @@ class CommentsClient implements ArtifactCommentsClient {
   /** Never throws: it runs inside the plugin's call stack. */
   private onProviderChange(raw: unknown): void {
     try {
-      if (this.closed || this.subscription === null) return;
+      if (this.closed || !this.subscribed) return;
       const change = rebuildChange(raw);
+      // A malformed event is not trusted for its content, but a plausible revision still means "something changed":
+      // the list that follows is the authority (A8).
+      const revision = change !== null ? change.revision : plausibleRevision(raw);
       if (change === null) {
         console.warn(`[artifact-comments] "${this.deps.owner.pluginId}" sent a malformed change event`);
-        return;
+        if (revision === null) return;
       }
       const current = this.snapshot;
-      if (current !== null && current.storeId === change.storeId && change.revision <= current.revision) return;
-      const latest = this.latestEvent;
-      if (latest === null || latest.storeId !== change.storeId || change.revision > latest.revision) {
-        this.latestEvent = { storeId: change.storeId, revision: change.revision };
-      }
+      if (change !== null && current !== null && current.storeId === change.storeId && change.revision <= current.revision) return;
+      if (change === null && current !== null && revision !== null && revision <= current.revision) return;
       if (this.refreshing) { this.newerDuringRefresh = true; return; }
       this.scheduleRefresh();
     } catch (error) {
@@ -329,19 +358,26 @@ class CommentsClient implements ArtifactCommentsClient {
     }
   }
 
+  /** Coalesces to one refresh per frame and at most one per `minRefreshMs`. */
   private scheduleRefresh(): void {
     if (this.cancelFrame !== null) return;
-    this.cancelFrame = this.deps.scheduleFrame(() => {
-      this.cancelFrame = null;
-      void this.refresh();
-    });
+    const wait = this.lastRefreshStartedAt === null ? 0 : Math.max(0, this.lastRefreshStartedAt + this.deps.minRefreshMs - Date.now());
+    const run = (): void => {
+      this.cancelFrame = this.deps.scheduleFrame(() => {
+        this.cancelFrame = null;
+        void this.refresh();
+      });
+    };
+    if (wait === 0) { run(); return; }
+    const timer = setTimeout(run, wait);
+    this.cancelFrame = () => clearTimeout(timer);
   }
 
   private async refresh(): Promise<void> {
-    if (this.closed || this.subscription === null) return;
+    if (this.closed || !this.subscribed) return;
     this.refreshing = true;
     this.newerDuringRefresh = false;
-    this.latestEvent = null;
+    this.lastRefreshStartedAt = Date.now();
     const result = await this.list();
     this.refreshing = false;
     if (this.closed) return;
@@ -349,8 +385,20 @@ class CommentsClient implements ArtifactCommentsClient {
       try { listener(result); } catch (error) { console.warn("[artifact-comments] onDidChange listener threw", error); }
     }
     // A failed refresh is not retried in a loop: the next event or the next load() tries again.
-    if (result.status === "ok" && this.newerDuringRefresh && this.subscription !== null) this.scheduleRefresh();
+    if (result.status === "ok" && this.newerDuringRefresh && this.subscribed) this.scheduleRefresh();
     this.newerDuringRefresh = false;
+  }
+}
+
+/** The revision of a change event that failed validation, when it is a plain non-negative integer. */
+function plausibleRevision(raw: unknown): number | null {
+  try {
+    if (raw === null || typeof raw !== "object") return null;
+    const descriptor = Object.getOwnPropertyDescriptor(raw, "revision");
+    const value = descriptor && "value" in descriptor ? descriptor.value : undefined;
+    return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
+  } catch {
+    return null;
   }
 }
 
