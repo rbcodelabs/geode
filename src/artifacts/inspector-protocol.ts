@@ -57,6 +57,8 @@ export interface InspectHoverMessage {
   /** Only for `keyboard`; accessible name, at most 80. */
   readonly label?: string;
 }
+/** The guest's window.innerWidth/innerHeight, CSS px. The embedder's guest-to-embedder scale is frame.clientWidth / width (S2). */
+export interface InspectViewportSize { readonly width: number; readonly height: number }
 export interface InspectCancelMessage { readonly reason: "escape" }
 /**
  * Phase 2a. The live viewport rect of what the user is pointing at. `hover` follows the highlighted element while
@@ -70,6 +72,8 @@ export interface InspectRectMessage {
   readonly rect: Rect | null;
   /** Only on a connected `hover` report: the lower-case tag of the element the rect belongs to (keeps the chip atomic). */
   readonly tag?: string;
+  /** Only on a connected `selected` report: the guest viewport the rect was measured in (drives the selection box scale). */
+  readonly viewport?: InspectViewportSize;
 }
 
 /**
@@ -106,7 +110,7 @@ export interface InspectAnchorResult {
   readonly agrees: boolean;
   /** Guest viewport CSS px; null exactly when `match` is `detached` or `other-route`. */
   readonly rect: Rect | null;
-  /** The rect intersects the viewport. Always false when `rect` is null. */
+  /** Some part of the element can be seen: it intersects the viewport and every ancestor that clips it. Always false when `rect` is null. */
   readonly visible: boolean;
 }
 export interface InspectAnchorRect {
@@ -115,8 +119,8 @@ export interface InspectAnchorRect {
   readonly rect: Rect | null;
   readonly visible: boolean;
 }
-export interface InspectAnchorResultsMessage { readonly epoch: number; readonly results: readonly InspectAnchorResult[] }
-export interface InspectAnchorRectsMessage { readonly epoch: number; readonly rects: readonly InspectAnchorRect[] }
+export interface InspectAnchorResultsMessage { readonly epoch: number; readonly viewport?: InspectViewportSize; readonly results: readonly InspectAnchorResult[] }
+export interface InspectAnchorRectsMessage { readonly epoch: number; readonly viewport?: InspectViewportSize; readonly rects: readonly InspectAnchorRect[] }
 
 /** The origin-G half of `ElementSelection` as the page's DOM supplies it. Untrusted. */
 export interface GuestSelectMessage {

@@ -46,6 +46,11 @@ export interface AnchorTrackerDeps {
   /** `document.getElementsByTagName` with the captured native; null on failure. */
   elementsByTag(tag: string): ArrayLike<Element> | null;
   rectOf(el: Element): Rect;
+  /**
+   * The region of the guest viewport that ancestors let `el` show (their overflow clips, intersected), or null when no
+   * ancestor clips it. Unclipped axes are +-Infinity. A throw or an unreadable style means "unknown": treated as null.
+   */
+  clipBoxOf(el: Element): ClipBox | null;
   /** Bounded normalized text of an element (the same function the selection generator used), cut to `limit` units. */
   textOf(el: Element, limit: number): string;
   /** Lower-case sanitized tag name, exactly as the selection generator wrote it. */
@@ -56,6 +61,9 @@ export interface AnchorTrackerDeps {
   attachShadow(el: Element, init: ShadowRootInit): ShadowRoot;
   scrollIntoView: ((this: Element, options?: ScrollIntoViewOptions) => void) | undefined;
 }
+
+/** A clip region in guest viewport px. An axis nothing clips is -Infinity..Infinity. */
+export interface ClipBox { readonly left: number; readonly top: number; readonly right: number; readonly bottom: number }
 
 export interface AnchorTracker {
   onAnchors(payload: unknown): void;
@@ -111,6 +119,7 @@ export function createAnchorTracker(deps: AnchorTrackerDeps): AnchorTracker {
   let resultsTimer: number | null = null;
   let rectsTimer: number | null = null;
   let lastRectsSentAt = Number.NEGATIVE_INFINITY;
+  let lastRectsViewportKey = "";
   let passRoute = "";
   let disposed = false;
   const ownNodes = new WeakSet<Node>();
@@ -142,11 +151,26 @@ export function createAnchorTracker(deps: AnchorTrackerDeps): AnchorTracker {
   const clampRect = (r: Rect): Rect => {
     return { x: clamp(r.x, -MAGNITUDE), y: clamp(r.y, -MAGNITUDE), width: clamp(r.width, 0), height: clamp(r.height, 0) };
   };
-  /** Reported values are clamped; visibility is judged on the UNCLAMPED rect (an element 1e7 px wide really covers the viewport). */
+  /**
+   * Reported values are clamped; visibility is judged on the UNCLAMPED rect (an element 1e7 px wide really covers the
+   * viewport). Visible means some part of the element can be seen: inside the viewport AND inside every ancestor that
+   * clips it (S2: an element scrolled out of an inner scroller is inside the viewport but not on screen).
+   */
   const measureEl = (el: Element): { rect: Rect; visible: boolean } => {
     const raw = deps.rectOf(el);
-    return { rect: clampRect(raw), visible: intersectsViewport(raw) };
+    return { rect: clampRect(raw), visible: intersectsViewport(raw) && intersectsClip(raw, clipOf(el)) };
   };
+  const clipOf = (el: Element): ClipBox | null => {
+    try { return deps.clipBoxOf(el); } catch { return null; }
+  };
+  const intersectsClip = (r: Rect, clip: ClipBox | null): boolean =>
+    clip === null || (r.x < clip.right && r.x + r.width > clip.left && r.y < clip.bottom && r.y + r.height > clip.top);
+  /** The guest viewport size the embedder needs to derive the guest-to-embedder scale; omitted when the guest has none (hidden). */
+  const viewportOf = (): { width: number; height: number } | null => {
+    const width = win.innerWidth, height = win.innerHeight;
+    return Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0 && width <= MAGNITUDE && height <= MAGNITUDE ? { width, height } : null;
+  };
+  const viewportKey = (): string => { const v = viewportOf(); return v ? `${v.width}x${v.height}` : ""; };
   const intersectsViewport = (r: Rect): boolean =>
     r.width > 0 && r.height > 0 && r.x < win.innerWidth && r.y < win.innerHeight && r.x + r.width > 0 && r.y + r.height > 0;
   const rectKey = (r: Rect | null, visible: boolean): string => (r ? `${r.x}|${r.y}|${r.width}|${r.height}|${visible}` : "gone");
@@ -337,6 +361,7 @@ export function createAnchorTracker(deps: AnchorTrackerDeps): AnchorTracker {
     pass = null;
     lastPassEnd = deps.now();
     lastPassWork = p.work;
+    lastRectsViewportKey = viewportKey();
     resolved = new Map(p.placed.map(({ key, el, result }) => [key, { el, lastKey: rectKey(result.rect, result.visible) }]));
     latestResults = { epoch: p.epoch, results: p.results, json: JSON.stringify(p.results) };
     emitResults();
@@ -350,15 +375,18 @@ export function createAnchorTracker(deps: AnchorTrackerDeps): AnchorTracker {
    */
   function emitResults(): void {
     const latest = latestResults;
-    if (disposed || !latest || latest.epoch !== epoch || latest.json === sentResultsJson) return;
+    if (disposed || !latest || latest.epoch !== epoch) return;
+    const sentKey = `${latest.json}|${viewportKey()}`;
+    if (sentKey === sentResultsJson) return;
+    const viewport = viewportOf();
     const wait = lastResultsSentAt + INSPECTOR_CAPS.anchorResultsSpacingMillis - deps.now();
     if (wait > 0) {
       if (resultsTimer === null) resultsTimer = deps.setTimeout(() => { resultsTimer = null; emitResults(); }, wait);
       return;
     }
-    sentResultsJson = latest.json;
+    sentResultsJson = sentKey;
     lastResultsSentAt = deps.now();
-    deps.send(INSPECT_CHANNEL.anchorResults, { epoch: latest.epoch, results: latest.results });
+    deps.send(INSPECT_CHANNEL.anchorResults, viewport ? { epoch: latest.epoch, viewport, results: latest.results } : { epoch: latest.epoch, results: latest.results });
   }
 
   // ---- rect reporting ----
@@ -373,7 +401,8 @@ export function createAnchorTracker(deps: AnchorTrackerDeps): AnchorTracker {
     if (disposed || resolved.size === 0) return;
     const rects: InspectAnchorRect[] = [];
     const keys: string[] = [];
-    let changed = false;
+    // A viewport-only change (a pane resize with every rect identical) still has to reach the embedder: its scale moved.
+    let changed = viewportKey() !== lastRectsViewportKey;
     let gone = false;
     for (const [key, entry] of resolved) {
       let rect: Rect | null = null;
@@ -397,9 +426,11 @@ export function createAnchorTracker(deps: AnchorTrackerDeps): AnchorTracker {
         if (rectsTimer === null) rectsTimer = deps.setTimeout(() => { rectsTimer = null; measure(); }, wait);
       } else {
         lastRectsSentAt = deps.now();
+        lastRectsViewportKey = viewportKey();
+        const viewport = viewportOf();
         let i = 0;
         for (const entry of resolved.values()) entry.lastKey = keys[i++]!;
-        deps.send(INSPECT_CHANNEL.anchorRects, { epoch, rects });
+        deps.send(INSPECT_CHANNEL.anchorRects, viewport ? { epoch, viewport, rects } : { epoch, rects });
       }
     }
     if (gone) scheduleResolve(true);
