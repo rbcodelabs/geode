@@ -406,7 +406,7 @@ export class ArtifactView implements View, ReloadableView {
         // A reload (the live reload after an edit) targets the page already shown: its pins stay and are refreshed by the
         // normal rect/answer updates, so a focused badge is not torn down and re-created.
         let current = "";
-        try { current = frame.getURL(); } catch { /* before dom-ready: unknown, treated as leaving */ }
+        try { current = (frame as unknown as NavigationWebview).getURL(); } catch { /* before dom-ready: unknown, treated as leaving */ }
         if (!leavesPage(current, detail.url ?? "")) return;
         this.pins?.pageNavigating();
       });
