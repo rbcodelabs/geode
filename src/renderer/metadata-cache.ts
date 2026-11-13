@@ -1525,6 +1525,30 @@ export class MetadataCache extends Events {
   }
 
   /**
+   * Resolve one collected reference. Markdown-style links (`[t](../x.md)`,
+   * `![](./i.png)`) address a path relative to the SOURCE note's folder, so a
+   * leading `./` or `../` is normalized against it first. Wikilinks keep the
+   * pinned desktop behavior (`[[./x]]` is unresolved), and anything that does
+   * not resolve relatively falls through to the shared resolver unchanged.
+   */
+  private resolveReference(link: { link: string; original?: string }, sourcePath: string): TFile | null {
+    const target = link.link.split("#")[0].split("^")[0].trim();
+    const isMarkdownStyle = link.original !== undefined && !/^!?\[\[/.test(link.original);
+    if (isMarkdownStyle && (target.startsWith("./") || target.startsWith("../"))) {
+      const slash = sourcePath.lastIndexOf("/");
+      const segments = (slash >= 0 ? sourcePath.slice(0, slash) + "/" : "").split("/").filter(Boolean);
+      for (const part of target.split("/")) {
+        if (part === "..") { if (!segments.pop()) { segments.length = 0; return this.getFirstLinkpathDest(link.link, sourcePath); } }
+        else if (part && part !== ".") segments.push(part);
+      }
+      const path = segments.join("/");
+      const hit = this.vault.getFileByPath(path) ?? this.vault.getFileByPath(path + ".md");
+      if (hit) return hit;
+    }
+    return this.getFirstLinkpathDest(link.link, sourcePath);
+  }
+
+  /**
    * From-scratch resolution of every cached file's links, rebuilding both the
    * forward maps (`resolvedLinks`/`unresolvedLinks`) and the reverse indices
    * (`resolvedBy`/`unresolvedByKey`). Used by `initialize()` and as the
@@ -1543,7 +1567,7 @@ export class MetadataCache extends Events {
       const unresolved = new Map<string, number>();
       for (const link of metadataReferences(meta)) {
         if (isExternalReference(link.link)) continue;
-        const dest = this.getFirstLinkpathDest(link.link, path);
+        const dest = this.resolveReference(link, path);
         if (dest) {
           if (canvasSource && dest.extension !== "md") continue;
           resolved.set(dest.path, (resolved.get(dest.path) ?? 0) + 1);
@@ -1597,7 +1621,7 @@ export class MetadataCache extends Events {
       const canvasSource = isCanvasPath(path);
       for (const link of metadataReferences(meta)) {
         if (isExternalReference(link.link)) continue;
-        const dest = this.getFirstLinkpathDest(link.link, path);
+        const dest = this.resolveReference(link, path);
         if (dest) {
           if (canvasSource && dest.extension !== "md") continue;
           resolved.set(dest.path, (resolved.get(dest.path) ?? 0) + 1);
@@ -1662,7 +1686,7 @@ export class MetadataCache extends Events {
       const refs: BacklinkReference[] = [];
       for (const link of metadataReferences(meta)) {
         if (isExternalReference(link.link)) continue;
-        if (this.getFirstLinkpathDest(link.link, src)?.path !== file.path) continue;
+        if (this.resolveReference(link, src)?.path !== file.path) continue;
         refs.push({
           link: link.link,
           original: link.original ?? `${link.isEmbed ? "!" : ""}[[${link.link}${link.displayText && link.displayText !== link.link ? `|${link.displayText}` : ""}]]`,
@@ -1711,7 +1735,7 @@ export class MetadataCache extends Events {
       const snippets: string[] = [];
       for (const link of meta ? metadataReferences(meta) : []) {
         if (isExternalReference(link.link)) continue;
-        if (this.getFirstLinkpathDest(link.link, src)?.path !== file.path) continue;
+        if (this.resolveReference(link, src)?.path !== file.path) continue;
         const lineText = lines[link.position.start.line]?.trim();
         if (lineText) snippets.push(lineText);
       }
