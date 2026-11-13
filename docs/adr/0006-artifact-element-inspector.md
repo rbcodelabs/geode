@@ -1032,17 +1032,19 @@ The pin overlay (a later PR) is the first production consumer.
 
 ### Spike S1 result (a Linux Xvfb CI-class host with software rendering, Electron 42, 6 vCPU; not a Retina Mac)
 
-100 anchors, the page's own `requestAnimationFrame` loop measures frame intervals while the guest works. Budgets kept: chunk 8, slice 4 ms.
+100 anchors per case; the page's own `requestAnimationFrame` loop measures frame intervals while the guest works, and the spec asserts
+the distribution of matches so each case measures real resolution (selector 100; structural 100 as selector; text 100 as text, with
+targets inside the 5,000 element scan window; detached 100; mixed 50 selector / 25 text / 25 detached). Budgets kept: chunk 8, slice 4 ms.
 
 | Page | Anchors | Time to results | Frame interval during the pass (p95 / max) | During 60 Hz page mutation (p95 / max) |
 |---|---|---|---|---|
-| 5k nodes | 100 selector / structural / text / mixed | 0.39 to 0.40 s | 16.7 / 16.8 ms | 16.7-16.8 / 16.8 ms |
-| 5k nodes | 100 detached (worst case) | 0.89 s | 16.8 / 16.8 ms | 16.7 / 16.8 ms |
-| 50k nodes | 100 selector / text | 0.40 s | 16.7 / 16.8 ms | 16.7-16.8 / 16.8 ms |
-| 50k nodes | 100 structural / detached / mixed | 1.89 to 1.90 s | 16.7-16.8 / 16.8 ms | 33.3 / 33.4 ms (one dropped frame) |
+| 5k nodes | selector / structural / text / detached / mixed | 0.39 to 0.40 s | 16.7-16.8 / 16.8 ms | 16.7-16.8 / 16.8 ms |
+| 50k nodes | selector / text | 0.39 s | 16.7-16.8 / 16.8 ms | 16.7-16.8 / 16.8 ms |
+| 50k nodes | structural / detached / mixed | 1.89 to 1.90 s | 16.7-16.8 / 16.8 ms | 16.7-33.3 / 33.4 ms (one dropped frame in a few cases) |
+| 5k and 50k nodes | 100 selector anchors while the page scrolls every frame for 3 s | n/a | 16.7-16.8 / 16.8 ms | 181 / 180 rect messages in 3 s (one per frame, under the 120/s embedder budget) |
 
-Baseline idle frames were 16.7 ms (p95 16.8, max 16.8) throughout. A whole pass stays below one frame of added latency per slice; the cost
-shows as a longer time to results on 50k nodes, not as jank. Not measured: DPR 2, ProMotion, real GPU; those belong to spike S2 (G3).
+Idle baseline frames were 16.7 ms (p95 16.7-16.8, max 16.8). A pass adds no visible frame time at either size; the cost shows as a
+longer time to results on 50k nodes, not as jank. Not measured: DPR 2, ProMotion, a real GPU; those belong to spike S2 (G3).
 
 ### Consequences
 
