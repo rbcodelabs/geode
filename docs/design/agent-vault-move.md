@@ -57,8 +57,8 @@ Not handled: Canvas `file` nodes, Bases, frontmatter-only YAML link strings othe
 `getBacklinks(file)` (which includes a note's links to itself). `LinkCache.original` is new; `METADATA_PARSER_VERSION` was bumped to 3
 so persisted caches are re-parsed.
 
-Markdown destinations beginning `./` or `../` (including angle-bracket and `%20` forms, with `#heading` suffixes) resolve relative to the
-*source* note's folder in `selectLinkCandidates` (the shared resolution root), so they count as backlinks and in `resolvedLinks`
+Markdown-style destinations (not wikilinks, whose desktop behavior is pinned) beginning `./` or `../` (including angle-bracket and `%20` forms, with `#heading` suffixes) resolve relative to the
+*source* note's folder in `MetadataCache.resolveReference` (used by resolution and both backlink APIs), so they count as backlinks and in `resolvedLinks`
 exactly like the forms the move's link rewriter emits. Resolution is recomputed at load, so no parser-version bump was needed.
 
 ## Proposed Agent Threads tool (agent-threads/src/tools/vault.ts, next to `boundGetBacklinks`)
