@@ -11,6 +11,8 @@ export interface Loc {
 
 export interface LinkCache {
   link: string; // raw link target, e.g. "Note#Heading"
+  /** Authored source text of the link (e.g. `[[Note|x]]`, `[x](Note.md)`). Absent in caches written before it existed. */
+  original?: string;
   displayText: string;
   position: Loc;
   isEmbed: boolean;

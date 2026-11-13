@@ -56,9 +56,9 @@ test("explorer moves files and folders, preserves contents, and rejects unsafe d
 
     await page.evaluate(() => {
       const app = (window as any).app;
-      const original = app.renameFileWithLinkUpdate;
-      app.renameFileWithLinkUpdate = async () => { throw new Error("Permission denied"); };
-      (window as any).__restoreRename = () => { app.renameFileWithLinkUpdate = original; };
+      const original = app.moveVaultPath;
+      app.moveVaultPath = async () => { throw new Error("Permission denied"); };
+      (window as any).__restoreRename = () => { app.moveVaultPath = original; };
     });
     await row("Note.md").dragTo(row("Destination"));
     await expect(page.locator(".notice").filter({ hasText: "Permission denied" })).toBeVisible();
