@@ -73,7 +73,7 @@ test.describe("pinned comments (phase 2b-i G3)", () => {
   test.setTimeout(180_000);
 
   test("a11y: keyboard pin, navigate pins, rail, send, focus restoration", async () => {
-    const s = await session(BASIC_ARTIFACT, { register: "v2" });
+    const s = await session(BASIC_ARTIFACT, { register: "v2", probe: false });
     const w = s.window;
     try {
       await expect(commentsToggle(w)).toBeVisible();
@@ -150,7 +150,7 @@ test.describe("pinned comments (phase 2b-i G3)", () => {
   });
 
   test("pin positions follow the real element rects at the desktop and narrow presets (screenshots, DPR 1)", async () => {
-    const s = await session(BASIC_ARTIFACT, { register: "v2", size: [1280, 800] });
+    const s = await session(BASIC_ARTIFACT, { register: "v2", probe: false, size: [1280, 800] });
     const w = s.window;
     try {
       await seed(w, [SEED_BUY, SEED_PRICE, SEED_HEADING]);
@@ -188,7 +188,7 @@ test.describe("pinned comments (phase 2b-i G3)", () => {
   });
 
   test("overlapping pins collapse into a count badge that opens the rail filtered to those comments", async () => {
-    const s = await session(BASIC_ARTIFACT, { register: "v2" });
+    const s = await session(BASIC_ARTIFACT, { register: "v2", probe: false });
     const w = s.window;
     try {
       await seed(w, [SEED_BUY, SEED_BUY, SEED_BUY, SEED_PRICE]);
@@ -212,7 +212,7 @@ test.describe("pinned comments (phase 2b-i G3)", () => {
   });
 
   test("an agent edit re-anchors: pins follow a moved element, detach when it is removed, and no status changes by itself", async () => {
-    const s = await session(BASIC_ARTIFACT, { register: "v2" });
+    const s = await session(BASIC_ARTIFACT, { register: "v2", probe: false });
     const w = s.window;
     try {
       await seed(w, [SEED_BUY, SEED_PRICE]);
@@ -237,7 +237,7 @@ test.describe("pinned comments (phase 2b-i G3)", () => {
   });
 
   test("hostile page (T1, T9): forged anchor traffic changes no badge, and the page cannot fetch the comments file", async () => {
-    const s = await session(BASIC_ARTIFACT, { register: "v2" });
+    const s = await session(BASIC_ARTIFACT, { register: "v2", probe: false });
     const w = s.window;
     try {
       await seed(w, [{ ...SEED_BUY, text: "SECRET COMMENT TEXT" }]);
@@ -276,7 +276,7 @@ test.describe("pinned comments (phase 2b-i G3)", () => {
       await expect(popover(v1.window).getByRole("button", { name: "Pin" })).toBeHidden();
     } finally { await v1.cleanup(); }
 
-    const s = await session(BASIC_ARTIFACT, { register: "v2" });
+    const s = await session(BASIC_ARTIFACT, { register: "v2", probe: false });
     const w = s.window;
     try {
       await store(w, (st) => { st.health = "unavailable"; st.notice = "The comments file cannot be used."; st.emit("external", "all"); });
@@ -294,7 +294,7 @@ test.describe("pinned comments (phase 2b-i G3)", () => {
   });
 
   test("foreign comments are read first and adopted; a change while the rail is open appears without a reload", async () => {
-    const s = await session(BASIC_ARTIFACT, { register: "v2" });
+    const s = await session(BASIC_ARTIFACT, { register: "v2", probe: false });
     const w = s.window;
     try {
       await seed(w, [{ ...SEED_BUY, provenance: "foreign", text: "<img src=x onerror=window.__pwned=1>" }]);
