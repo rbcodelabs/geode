@@ -20,6 +20,7 @@ function makeStore() {
     listCalls: 0,
     sendCalls: [],
     updateCalls: [],
+    reports: [], // QA G3: every reportAnchors call (reports + time)
   };
 }
 
@@ -126,6 +127,7 @@ function makeProvider(store) {
       if (adopted.length) emit("local", adopted);
       return ok({ adopted });
     },
+    reportAnchors: async (_t, reports) => { store.reports.push({ at: Date.now(), reports: clone(reports) }); return ok({ applied: reports.length }); },
     subscribe: (_t, listener) => { store.listeners.add(listener); return { dispose: () => { store.listeners.delete(listener); } }; },
     sendBatch: async (_t, input) => {
       store.sendCalls.push(clone(input));
