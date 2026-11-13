@@ -185,3 +185,20 @@ describe("sanitizeAnchorQuery: what the embedder lets reach the guest", () => {
     expect(INSPECTOR_CAPS.anchorKeyPattern.test("b1")).toBe(false);
   });
 });
+
+describe("guest viewport size (S2 scale)", () => {
+  const viewport = { width: 1024, height: 768 };
+  it("is rebuilt onto results and rects when present, and absent otherwise", () => {
+    expect(validateAnchorResults({ epoch: 4, viewport: { ...viewport, extra: 1 }, results: [] }, ctx)).toEqual({ epoch: 4, viewport, results: [] });
+    expect(validateAnchorRects({ epoch: 4, viewport, rects: [] }, ctx)).toEqual({ epoch: 4, viewport, rects: [] });
+    expect(Object.keys(validateAnchorRects({ epoch: 4, rects: [] }, ctx)!)).toEqual(["epoch", "rects"]);
+  });
+  const bad: Array<[string, unknown]> = [
+    ["zero width", { width: 0, height: 768 }], ["negative height", { width: 1024, height: -1 }], ["NaN", { width: Number.NaN, height: 768 }],
+    ["a huge number", { width: 1e9, height: 768 }], ["strings", { width: "1024", height: "768" }], ["missing height", { width: 1024 }], ["not an object", 5],
+  ];
+  it.each(bad)("drops the whole message for a viewport with %s", (_n, v) => {
+    expect(validateAnchorResults({ epoch: 4, viewport: v, results: [] }, ctx)).toBeNull();
+    expect(validateAnchorRects({ epoch: 4, viewport: v, rects: [] }, ctx)).toBeNull();
+  });
+});

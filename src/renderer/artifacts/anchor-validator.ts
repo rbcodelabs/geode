@@ -7,6 +7,7 @@ import {
   type InspectAnchorRectsMessage,
   type InspectAnchorResult,
   type InspectAnchorResultsMessage,
+  type InspectViewportSize,
 } from "../../artifacts/inspector-protocol";
 
 /**
@@ -42,6 +43,15 @@ function nullableRect(value: unknown): Rect | null | undefined {
   return r === null ? undefined : r;
 }
 
+/** Absent is fine (scale 1); present must be a plain, finite, positive size or the whole message is dropped. */
+export function viewportSize(value: unknown): InspectViewportSize | null | undefined {
+  if (value === undefined) return undefined;
+  const b = bag(value);
+  if (!b) return null;
+  const width = num(own(b, "width")), height = num(own(b, "height"));
+  return width === null || height === null || width <= 0 || height <= 0 ? null : { width, height };
+}
+
 function keyOf(value: unknown, keys: ReadonlySet<string>, seen: Set<string>): string | null {
   if (typeof value !== "string" || !INSPECTOR_CAPS.anchorKeyPattern.test(value) || !keys.has(value) || seen.has(value)) return null;
   seen.add(value);
@@ -69,6 +79,8 @@ export function validateAnchorResults(raw: unknown, ctx: AnchorMessageContext): 
   if (!b) return null;
   const items = list(b, "results", ctx);
   if (!items) return null;
+  const viewport = viewportSize(own(b, "viewport"));
+  if (viewport === null) return null;
   const seen = new Set<string>();
   const results: InspectAnchorResult[] = [];
   for (const item of items) {
@@ -85,7 +97,7 @@ export function validateAnchorResults(raw: unknown, ctx: AnchorMessageContext): 
     if (box === null && visible) return null;
     results.push({ key, match: match as InspectAnchorMatch, agrees, rect: box, visible });
   }
-  return { epoch: ctx.epoch, results };
+  return viewport ? { epoch: ctx.epoch, viewport, results } : { epoch: ctx.epoch, results };
 }
 
 export function validateAnchorRects(raw: unknown, ctx: AnchorMessageContext): InspectAnchorRectsMessage | null {
@@ -93,6 +105,8 @@ export function validateAnchorRects(raw: unknown, ctx: AnchorMessageContext): In
   if (!b) return null;
   const items = list(b, "rects", ctx);
   if (!items) return null;
+  const viewport = viewportSize(own(b, "viewport"));
+  if (viewport === null) return null;
   const seen = new Set<string>();
   const rects: InspectAnchorRect[] = [];
   for (const item of items) {
@@ -105,7 +119,7 @@ export function validateAnchorRects(raw: unknown, ctx: AnchorMessageContext): In
     if (box === null && visible) return null;
     rects.push({ key, rect: box, visible });
   }
-  return { epoch: ctx.epoch, rects };
+  return viewport ? { epoch: ctx.epoch, viewport, rects } : { epoch: ctx.epoch, rects };
 }
 
 /** Re-exported: the embedder's gate on what it sends to the guest is the shared definition of a well-formed query. */

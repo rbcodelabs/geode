@@ -871,7 +871,15 @@ describe("live rect reports (Phase 2a R1)", () => {
     h.setRect(btn, { x: 90, y: 20, width: 160, height: 48 });
     scroll(h);
     h.flush();
-    expect(rectsSent(h).at(-1)).toEqual({ target: "selected", connected: true, rect: { x: 90, y: 20, width: 160, height: 48 } });
+    expect(rectsSent(h).at(-1)).toEqual({ target: "selected", connected: true, rect: { x: 90, y: 20, width: 160, height: 48 }, viewport: { width: h.win.innerWidth, height: h.win.innerHeight } });
+  });
+
+  it("a hover report carries no viewport (only the selection box needs the guest-to-embedder scale)", () => {
+    const { h, btn } = hoveredButton();
+    h.setRect(btn, { x: 100, y: 120, width: 160, height: 48 });
+    scroll(h);
+    h.flush();
+    expect(rectsSent(h).at(-1)).not.toHaveProperty("viewport");
   });
 
   it("does not repeat an unchanged rect on scroll, but re-sends the current state on each 1 s tick (self-healing, B1)", async () => {
@@ -917,7 +925,7 @@ describe("live rect reports (Phase 2a R1)", () => {
     scroll(h); h.flush();
     h.sent.length = 0; // lost
     h.tick(); h.flush();
-    expect(rectsSent(h)).toEqual([{ target: "selected", connected: true, rect: { x: 5, y: 6, width: 7, height: 8 } }]);
+    expect(rectsSent(h)).toEqual([{ target: "selected", connected: true, rect: { x: 5, y: 6, width: 7, height: 8 }, viewport: { width: h.win.innerWidth, height: h.win.innerHeight } }]);
   });
 
   it("reports a connected rect again when the same node is re-attached after a gone report (A10)", async () => {
@@ -929,7 +937,7 @@ describe("live rect reports (Phase 2a R1)", () => {
     parent.appendChild(btn);
     h.setRect(btn, { x: 9, y: 9, width: 9, height: 9 });
     scroll(h); h.flush();
-    expect(rectsSent(h).at(-1)).toEqual({ target: "selected", connected: true, rect: { x: 9, y: 9, width: 9, height: 9 } });
+    expect(rectsSent(h).at(-1)).toEqual({ target: "selected", connected: true, rect: { x: 9, y: 9, width: 9, height: 9 }, viewport: { width: h.win.innerWidth, height: h.win.innerHeight } });
   });
 
   it("a removal with no observer callback is still found by the periodic tick", async () => {

@@ -6,6 +6,7 @@ import {
   type GuestSelectMessage,
   type InspectHoverMessage,
   type InspectRectMessage,
+  type InspectViewportSize,
 } from "../../artifacts/inspector-protocol";
 
 /**
@@ -82,15 +83,28 @@ export function validateHoverMessage(raw: unknown): InspectHoverMessage | null {
   return label === null ? null : { tag: t, rect: r, via: "keyboard", label };
 }
 
+/** The guest viewport size a selected report carries; a positive plain size or null. */
+function viewportSize(value: unknown): InspectViewportSize | null {
+  const b = bag(value);
+  if (!b) return null;
+  const width = num(b.width), height = num(b.height);
+  return width === null || height === null || width <= 0 || height <= 0 ? null : { width, height };
+}
+
 /** Phase 2a: the live rect of the hovered or selected element. Connected iff the rect is present. */
 export function validateRectMessage(raw: unknown): InspectRectMessage | null {
   const b = bag(raw);
   if (!b) return null;
   if (b.target !== "hover" && b.target !== "selected") return null;
   if (typeof b.connected !== "boolean") return null;
-  if (!b.connected) return b.rect === null && b.tag === undefined ? { target: b.target, connected: false, rect: null } : null;
+  if (!b.connected) return b.rect === null && b.tag === undefined && b.viewport === undefined ? { target: b.target, connected: false, rect: null } : null;
   const r = rect(b.rect);
   if (r === null) return null;
+  if (b.viewport !== undefined) {
+    // Only the selection box needs the guest-to-embedder scale; a hover report (which has the tag) never carries one.
+    const viewport = b.target === "selected" && b.tag === undefined ? viewportSize(b.viewport) : null;
+    return viewport === null ? null : { target: b.target, connected: true, rect: r, viewport };
+  }
   if (b.tag === undefined) return { target: b.target, connected: true, rect: r };
   // A tag names the hovered element for the chip; it only belongs on a hover report.
   const t = b.target === "hover" ? tag(b.tag) : null;
