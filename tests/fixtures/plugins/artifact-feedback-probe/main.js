@@ -129,6 +129,7 @@ function makeProvider(store) {
     subscribe: (_t, listener) => { store.listeners.add(listener); return { dispose: () => { store.listeners.delete(listener); } }; },
     sendBatch: async (_t, input) => {
       store.sendCalls.push(clone(input));
+      if (store.sendMode === "hang-once") { store.sendMode = "sent"; return new Promise(() => {}); } // QA G3: a provider that never answers the first call
       const ids = input.ids.map((id) => find(id)).filter(Boolean).sort((a, b) => a.ordinal - b.ordinal);
       const queued = store.sendMode === "queued";
       for (const c of ids) { c.status = queued ? "pending" : "sent"; c.sentAt = queued ? null : new Date().toISOString(); c.send.attempts++; bump(c); }
