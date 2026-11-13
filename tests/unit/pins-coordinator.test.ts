@@ -615,3 +615,62 @@ describe("after a pin is saved from the popover", () => {
     expect(r.coordinator.focusTargetAfterPin()).toEqual({ type: "badge", id: idOf(1) });
   });
 });
+
+describe("S2 guest-to-embedder scale and the on-screen set", () => {
+  const frame = (over: Record<string, number> = {}) => ({ left: 0, top: 0, clientLeft: 1, clientTop: 1, clientWidth: 800, clientHeight: 600, ...over });
+  const VIEWPORT = { width: 1000, height: 750 };
+  const resultsWith = (r: ReturnType<typeof rig>, viewport: { width: number; height: number } | undefined, rows: Array<[string, { x: number; y: number; width: number; height: number }]>) =>
+    r.coordinator.onAnchorResults({ epoch: 1, ...(viewport ? { viewport } : {}), results: rows.map(([key, rect]) => ({ key, match: "selector", agrees: true, rect, visible: true })) } as never);
+
+  it("scales the badge position with frame.clientWidth / guest.innerWidth", async () => {
+    const r = rig(snapshot([comment(1)]));
+    r.ui.geometry = () => ({ frame: frame(), stage });
+    await r.coordinator.start();
+    resultsWith(r, VIEWPORT, [["a0", { x: 100, y: 200, width: 160, height: 48 }]]);
+    r.runFrames();
+    // box = 1 + 100 * 0.8 = 81 wide 128; top-right x = 81 + 128 - 4; y = 1 + 160 + 4
+    expect(r.lastPins().badges[0]).toMatchObject({ x: 81 + 128 - 4, y: 1 + 160 + 4 });
+  });
+
+  it("a rects message carrying a new guest viewport re-maps the badges (a preset or zoom change)", async () => {
+    const r = rig(snapshot([comment(1)]));
+    r.ui.geometry = () => ({ frame: frame(), stage });
+    await r.coordinator.start();
+    resultsWith(r, VIEWPORT, [["a0", { x: 100, y: 200, width: 160, height: 48 }]]);
+    r.runFrames();
+    const before = r.lastPins().badges[0]!.x;
+    r.coordinator.onAnchorRects({ epoch: 1, viewport: { width: 800, height: 600 }, rects: [{ key: "a0", rect: { x: 100, y: 200, width: 160, height: 48 }, visible: true }] } as never);
+    r.runFrames();
+    expect(r.lastPins().badges[0]!.x).toBe(1 + 100 + 160 - 4);
+    expect(r.lastPins().badges[0]!.x).not.toBe(before);
+  });
+
+  it("no guest viewport means scale 1 (the border-corrected mapping)", async () => {
+    const r = rig(snapshot([comment(1)]));
+    r.ui.geometry = () => ({ frame: frame(), stage });
+    await r.coordinator.start();
+    resultsWith(r, undefined, [["a0", { x: 100, y: 200, width: 160, height: 48 }]]);
+    r.runFrames();
+    expect(r.lastPins().badges[0]).toMatchObject({ x: 1 + 100 + 160 - 4, y: 1 + 200 + 4 });
+  });
+
+  it("on screen is judged on the SCALED box: unscaled it would be inside the pane, scaled it is outside", async () => {
+    const r = rig(snapshot([comment(1), comment(2)]));
+    // pane 400 x 300; the guest is twice the embedder size, so x = 700 maps to 350 (inside) and x = 900 to 450 (outside).
+    r.ui.geometry = () => ({ frame: frame({ clientWidth: 500, clientHeight: 375 }), stage: { left: 0, top: 0, width: 400, height: 300 } });
+    await r.coordinator.start();
+    resultsWith(r, { width: 1000, height: 750 }, [["a0", { x: 700, y: 20, width: 40, height: 20 }], ["a1", { x: 900, y: 20, width: 40, height: 20 }]]);
+    r.runFrames();
+    expect(r.lastPins().badges.map((b) => b.text)).toEqual(["1"]);
+  });
+
+  it("cluster counts only count pins that are on screen", async () => {
+    const r = rig(snapshot([comment(1), comment(2), comment(3)]));
+    r.ui.geometry = () => ({ frame: frame(), stage: { left: 0, top: 0, width: 400, height: 300 } });
+    await r.coordinator.start();
+    // a0 and a1 sit at the same on-pane spot (a cluster of 2); a2 is beside them but beyond the pane edge
+    resultsWith(r, undefined, [["a0", { x: 100, y: 100, width: 50, height: 20 }], ["a1", { x: 102, y: 100, width: 50, height: 20 }], ["a2", { x: 700, y: 100, width: 50, height: 20 }]]);
+    r.runFrames();
+    expect(r.lastPins().badges.map((b) => [b.kind, b.text])).toEqual([["cluster", "2"]]);
+  });
+});

@@ -4,6 +4,8 @@ import {
   badgeAnchorPoint,
   collapsePins,
   guestRectToStage,
+  guestScale,
+  selectionBoxToStage,
   intersectsStage,
   type PlacedPin,
 } from "../../src/renderer/artifacts/pin-collapse";
@@ -157,5 +159,47 @@ describe("guestRectToStage and badgeAnchorPoint (the one replaceable mapping uni
   it("never produces NaN for non-finite input", () => {
     const p = badgeAnchorPoint({ x: Number.NaN, y: Infinity, width: 1, height: 1 }, { width: 900, height: 600 });
     expect(Number.isFinite(p.x) && Number.isFinite(p.y)).toBe(true);
+  });
+});
+
+describe("guest-to-embedder scale (S2 'scaled' mapping)", () => {
+  // Retina MacBook, DPR 2: the viewport presets and app zoom made the webview content box differ from the guest innerWidth.
+  const frame = { left: 100, top: 60, clientLeft: 1, clientTop: 1, clientWidth: 800, clientHeight: 600 };
+  const guest = { width: 1000, height: 750 };
+
+  it("scale is the webview content box over the guest viewport, per axis", () => {
+    expect(guestScale(frame, guest)).toEqual({ x: 0.8, y: 0.8 });
+    expect(guestScale({ ...frame, clientHeight: 750 }, guest)).toEqual({ x: 0.8, y: 1 });
+  });
+
+  it("is 1 without a guest viewport, without the frame's client size, or for a nonsense ratio", () => {
+    expect(guestScale(frame, null)).toEqual({ x: 1, y: 1 });
+    expect(guestScale(frame, undefined)).toEqual({ x: 1, y: 1 });
+    expect(guestScale({ left: 0, top: 0, clientLeft: 0, clientTop: 0 }, guest)).toEqual({ x: 1, y: 1 });
+    for (const bad of [{ width: 0, height: 750 }, { width: Number.NaN, height: 750 }, { width: -5, height: 750 }, { width: 1e9, height: 750 }, { width: 1, height: 750 }]) {
+      expect(guestScale(frame, bad), JSON.stringify(bad)).toEqual({ x: 1, y: bad.height === 750 ? 0.8 : 1 });
+    }
+    expect(guestScale({ ...frame, clientWidth: 0 }, guest)).toEqual({ x: 1, y: 0.8 });
+  });
+
+  it("origin (frame + border - stage) plus the guest offset times the scale; size scales too", () => {
+    expect(guestRectToStage({ x: 100, y: 50, width: 200, height: 40 }, frame, { left: 20, top: 10 }, guest))
+      .toEqual({ x: 100 + 1 - 20 + 80, y: 60 + 1 - 10 + 40, width: 160, height: 32 });
+  });
+
+  it("without a viewport it is the border-corrected mapping, unchanged", () => {
+    expect(guestRectToStage({ x: 100, y: 50, width: 200, height: 40 }, frame, { left: 20, top: 10 }))
+      .toEqual({ x: 181, y: 101, width: 200, height: 40 });
+  });
+
+  it("the zero-scale-error cases: a guest viewport equal to the content box maps 1:1", () => {
+    expect(guestRectToStage({ x: 7, y: 9, width: 11, height: 13 }, frame, { left: 0, top: 0 }, { width: 800, height: 600 }))
+      .toEqual({ x: 108, y: 70, width: 11, height: 13 });
+  });
+
+  it("selectionBoxToStage: the same mapping, unrounded, never thinner than 2 px", () => {
+    expect(selectionBoxToStage({ x: 100.5, y: 50.25, width: 200, height: 40 }, frame, { left: 20, top: 10 }, guest))
+      .toEqual({ left: 100 + 1 - 20 + 100.5 * 0.8, top: 60 + 1 - 10 + 50.25 * 0.8, width: 160, height: 32 });
+    expect(selectionBoxToStage({ x: 0, y: 0, width: 0.5, height: 1 }, frame, { left: 0, top: 0 }, guest)).toMatchObject({ width: 2, height: 2 });
   });
 });
