@@ -26,6 +26,7 @@
     "e2e:kill": "node scripts/e2e-clean.mts",
     "e2e:threads-plugin": "playwright test tests/e2e/threads-sandbox-offer.spec.ts --retries=0",
     "e2e:linux": "node scripts/e2e-linux-shards.mts",
+    "spike:s2": "node spikes/picker-s2/run.mts",
     "demo": "node demo/engine/run.mts",
     "demo:doctor": "node demo/engine/run.mts doctor",
     "demo:all": "node demo/engine/run.mts all",
