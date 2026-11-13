@@ -19,7 +19,7 @@ Wikilinks, backlinks, graph view, live preview, and support for Obsidian-style c
 - **Agent-friendly.** Inline comment threads with human/agent attribution, plus a headless `geode-wiki` CLI for scripts and AI tools.
 - **Private by default.** No telemetry-driven account wall. Secrets live in your OS keychain.
 
-> ⚠️ Early alpha (v0.30.18). The core loop works, but many features are still on the [roadmap](docs/spec/00-overview.md). macOS (Apple Silicon) builds only for now.
+> ⚠️ Early alpha (v0.30.19). The core loop works, but many features are still on the [roadmap](docs/spec/00-overview.md). macOS (Apple Silicon) builds only for now.
 
 ## Quick start
 
