@@ -131,7 +131,8 @@ describe("QA G2 guest: what the guest sends is exactly the allowlist", () => {
     setAnchors(h, [q(), q({ key: "a1", selector: "#gone", textAnchor: { tag: "button", text: "Vanished" } })]);
     h.flush(3);
     const msg = lastResults(h)!;
-    expect(Object.keys(msg).sort()).toEqual(["epoch", "results"]);
+    expect(Object.keys(msg).sort()).toEqual(["epoch", "results", "viewport"]);
+    expect(Object.keys(msg.viewport).sort()).toEqual(["height", "width"]); // two numbers, nothing of the page
     for (const r of msg.results) expect(Object.keys(r).sort()).toEqual(["agrees", "key", "match", "rect", "visible"]);
     expect(Object.keys(msg.results[0]!.rect).sort()).toEqual(["height", "width", "x", "y"]);
     h.fire("scroll", {}, h.win as never);
@@ -139,7 +140,7 @@ describe("QA G2 guest: what the guest sends is exactly the allowlist", () => {
     h.fire("scroll", {}, h.win as never);
     h.flush(3);
     const rects = h.last(INSPECT_CHANNEL.anchorRects)!.payload;
-    expect(Object.keys(rects).sort()).toEqual(["epoch", "rects"]);
+    expect(Object.keys(rects).sort()).toEqual(["epoch", "rects", "viewport"]);
     for (const r of rects.rects) expect(Object.keys(r).sort()).toEqual(["key", "rect", "visible"]);
     expect(JSON.stringify(h.sent)).not.toContain("Buy now");
   });
