@@ -28,6 +28,18 @@ import { PinOverlay } from "../artifacts/pin-overlay";
 import { createPinsCoordinator, type PinsCoordinator } from "../artifacts/pins-coordinator";
 import type { InspectRectMessage } from "../../artifacts/inspector-protocol";
 
+/**
+ * Next animation frame, or 100 ms from now when the page is not visible (a hidden or occluded window never runs
+ * animation frames, and pins must still settle). Runs the callback exactly once; returns a cancel function.
+ */
+function scheduleFrameOrTimeout(callback: () => void): () => void {
+  let done = false;
+  const run = (): void => { if (done) return; done = true; window.cancelAnimationFrame(frame); window.clearTimeout(timer); callback(); };
+  const frame = window.requestAnimationFrame(run);
+  const timer = window.setTimeout(run, 100);
+  return () => { done = true; window.cancelAnimationFrame(frame); window.clearTimeout(timer); };
+}
+
 type ViewportPreset = "desktop" | "tablet" | "mobile" | "custom" | "fill";
 interface Viewport { preset: ViewportPreset; width: number; height: number }
 export interface ArtifactViewState {
@@ -569,7 +581,7 @@ export class ArtifactView implements View, ReloadableView {
     const coordinator = createPinsCoordinator({
       getClient: () => this.commentsClient,
       bridge,
-      scheduleFrame: (callback) => { const handle = window.requestAnimationFrame(() => callback()); return () => window.cancelAnimationFrame(handle); },
+      scheduleFrame: (callback) => scheduleFrameOrTimeout(callback),
       newRequestId: () => `req_${[...crypto.getRandomValues(new Uint8Array(16))].map((b) => b.toString(16).padStart(2, "0")).join("")}`,
       ui: {
         renderRail: (view) => rail.render(view),

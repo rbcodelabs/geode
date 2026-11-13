@@ -10,7 +10,13 @@ test("diag: why are seeded pins not placed", async () => {
     await w.evaluate(() => {
       const view = (window as any).app.workspace.getLeavesOfType("geode-artifact")[0].view;
       const bridge = view.bridge;
-      const log: any = ((window as any).__diag = { sent: [], res: [], rects: [] });
+      const log: any = ((window as any).__diag = { sent: [], res: [], rects: [], errors: [], layerCalls: [], railCalls: 0 });
+      window.addEventListener("error", (e) => log.errors.push("error: " + e.message + " @" + (e.error?.stack ?? "").slice(0, 400)));
+      window.addEventListener("unhandledrejection", (e) => log.errors.push("rejection: " + String((e.reason && e.reason.stack) || e.reason).slice(0, 600)));
+      const layer = view.pinLayer; const lr = layer.render.bind(layer);
+      layer.render = (b: any, o: any) => { log.layerCalls.push([b.length, o.busy]); try { return lr(b, o); } catch (err: any) { log.errors.push("layer.render threw: " + err.stack); throw err; } };
+      const rail = view.railEl; const rr = rail.render.bind(rail);
+      rail.render = (v: any) => { log.railCalls++; try { return rr(v); } catch (err: any) { log.errors.push("rail.render threw: " + err.stack); throw err; } };
       const wv = bridge.webview;
       const orig = wv.send.bind(wv);
       wv.send = (c: string, ...a: unknown[]) => { log.sent.push([c, JSON.stringify(a[0]).slice(0, 400)]); return orig(c, ...a); };
