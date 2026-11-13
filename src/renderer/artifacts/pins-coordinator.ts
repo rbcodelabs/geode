@@ -149,6 +149,7 @@ export function createPinsCoordinator(deps: PinsCoordinatorDeps): PinsCoordinato
   const keyToId = new Map<string, string>();
   const idToKey = new Map<string, string>();
   let signature: string | null = null;
+  let idSignature = "";
   let epoch = 0;
   let busy = false;
   /** The guest did not answer in time: placed pins are drawn as unconfirmed until the next answer. */
@@ -280,8 +281,23 @@ export function createPinsCoordinator(deps: PinsCoordinatorDeps): PinsCoordinato
       textAnchor: { tag: c.anchor.textAnchor.tag, text: c.anchor.textAnchor.text },
       landmark: c.anchor.landmark,
     }));
-    const next = JSON.stringify(list.map((c, i) => [c.id, queries[i]!.route, queries[i]!.tag, queries[i]!.selector, queries[i]!.alternates, queries[i]!.textAnchor, queries[i]!.landmark]));
-    if (next === (signature ?? "[]")) { signature = next; return; }
+    const next = JSON.stringify(queries.map((q) => [q.route, q.tag, q.selector, q.alternates, q.textAnchor, q.landmark]));
+    const ids = list.map((c) => c.id).join(",");
+    if (next === (signature ?? "[]")) {
+      signature = next;
+      if (ids !== idSignature) {
+        // The same anchor set under different comments (one was replaced by another in one change): the guest keeps its
+        // answers under the same keys, so only the key -> comment mapping and the placements move; nothing is re-sent.
+        const previous = new Map(keyToId);
+        const carried = new Map<string, Placement>();
+        for (const [key, oldId] of previous) { const p = placements.get(oldId); if (p) carried.set(key, p); }
+        keyToId.clear(); idToKey.clear(); placements.clear();
+        list.forEach((c, i) => { keyToId.set(`a${i}`, c.id); idToKey.set(c.id, `a${i}`); const p = carried.get(`a${i}`); if (p) placements.set(c.id, p); });
+        idSignature = ids;
+      }
+      return;
+    }
+    idSignature = ids;
     signature = next;
     keyToId.clear();
     idToKey.clear();

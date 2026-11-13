@@ -126,7 +126,7 @@ export class ArtifactView implements View, ReloadableView {
   private lastFocusRefresh = 0;
   /** Re-lists when the window regains focus, for the visible, active view only (a background tab does nothing), at most once a second. */
   private readonly onWindowFocus = (): void => {
-    if (document.visibilityState === "hidden" || this.containerEl.getClientRects().length === 0) return;
+    if (this.containerEl.getClientRects().length === 0) return; // not the active tab: nothing to refresh
     const now = Date.now();
     if (now - this.lastFocusRefresh < 1000) return;
     this.lastFocusRefresh = now;

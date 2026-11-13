@@ -128,7 +128,9 @@ export class PickController {
     const token = ++this.token;
     this.set({ ...this.current, submit: "pending", action, outcome: null });
     // A host that rejects (it should not) must not leave the popover pending for ever.
-    const settled = Promise.resolve().then(() => run(this.host)).catch((error): ArtifactFeedbackOutcome => {
+    let started: Promise<ArtifactFeedbackOutcome>;
+    try { started = run(this.host); } catch (error) { started = Promise.reject(error); } // the host call itself stays synchronous
+    const settled = started.catch((error): ArtifactFeedbackOutcome => {
       console.warn("[artifact-feedback] a popover action failed", error);
       return { status: "rejected", reason: "failed", message: "That could not be completed.", source: "handler" };
     });
