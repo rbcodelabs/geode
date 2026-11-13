@@ -20,6 +20,7 @@ import {
   intersectsStage,
   type BoxRect,
   type FrameOrigin,
+  type GuestViewport,
   type PlacedPin,
 } from "./pin-collapse";
 import type { PinBadgeView } from "./pin-overlay";
@@ -167,6 +168,8 @@ export function createPinsCoordinator(deps: PinsCoordinatorDeps): PinsCoordinato
   let assignment: ReadonlyMap<string, string> | null = null;
   let lastBadges: readonly PinBadgeView[] = [];
   let lastPinnedId: string | null = null;
+  /** The guest's own viewport size, as its last anchor message said (S2): with the webview content box it gives the scale. */
+  let guestViewport: GuestViewport | null = null;
 
   let cancelFrame: (() => void) | null = null;
   let railDirty = false;
@@ -225,7 +228,7 @@ export function createPinsCoordinator(deps: PinsCoordinatorDeps): PinsCoordinato
         if (c.kind !== "pin" || !showsOnCanvas(c)) continue;
         const p = placements.get(c.id);
         if (!p || p.rect === null || !p.visible || !PLACED.has(p.state)) continue;
-        const box = guestRectToStage(p.rect, geometry.frame, geometry.stage);
+        const box = guestRectToStage(p.rect, geometry.frame, geometry.stage, guestViewport);
         if (!intersectsStage(box, geometry.stage)) continue;
         const point = badgeAnchorPoint(box, geometry.stage);
         placed.push({ id: c.id, ordinal: c.ordinal, status: c.status, x: point.x, y: point.y, approximate: p.state === "approximate" || unconfirmed || c.provenance === "foreign" });
@@ -396,6 +399,7 @@ export function createPinsCoordinator(deps: PinsCoordinatorDeps): PinsCoordinato
 
   function onAnchorResults(message: InspectAnchorResultsMessage): void {
     if (disposed || message.epoch !== epoch) return;
+    if (message.viewport) guestViewport = message.viewport;
     for (const r of message.results) {
       const id = keyToId.get(r.key);
       if (!id) continue;
@@ -442,6 +446,7 @@ export function createPinsCoordinator(deps: PinsCoordinatorDeps): PinsCoordinato
 
   function onAnchorRects(message: InspectAnchorRectsMessage): void {
     if (disposed || message.epoch !== epoch) return;
+    if (message.viewport) guestViewport = message.viewport;
     let stateChanged = false;
     for (const r of message.rects) {
       const id = keyToId.get(r.key);

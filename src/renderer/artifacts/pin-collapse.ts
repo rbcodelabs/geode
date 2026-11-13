@@ -5,8 +5,10 @@ import type { ArtifactCommentStatus } from "../../artifacts/feedback-contract-v2
  * at most 100 pins an artifact tracks.
  *
  * `guestRectToStage` and `badgeAnchorPoint` are the ONE replaceable mapping unit between what the guest measures and
- * where the embedder draws a badge. Spike S2 (overlay mapping on a real Retina Mac) decides whether this mapping needs
- * a correction at DPR 2; until it has run there, nothing here is claimed verified at DPR 2.
+ * where the embedder draws a badge OR the selection box. Spike S2 (Retina MacBook, DPR 2) measured the old mapping
+ * (rounded, origin at the webview border box) off by up to 1.6 css px under viewport presets and app zoom, and the
+ * unrounded, border-corrected, guest-to-embedder-scaled mapping below within 0.625 css px everywhere. Nothing here is
+ * claimed verified at DPR 2 until the orchestrator re-runs S2 on the Mac.
  */
 
 export const PIN_BADGE = {
@@ -31,20 +33,62 @@ export interface FrameOrigin {
   /** The webview's border widths (clientLeft/clientTop): guest content starts inside the border (S2). Never hard-coded. */
   readonly clientLeft: number;
   readonly clientTop: number;
+  /** The webview's content box size in embedder css px (clientWidth/clientHeight); with the guest viewport it gives the scale. */
+  readonly clientWidth?: number;
+  readonly clientHeight?: number;
+}
+/** The guest's window.innerWidth/innerHeight in its own css px, as the guest reports it. */
+export interface GuestViewport { readonly width: number; readonly height: number }
+
+/** A ratio outside this range is a broken measurement (a hidden or half-laid-out webview), not a zoom level. */
+const SCALE_MIN = 0.1;
+const SCALE_MAX = 10;
+const MAX_VIEWPORT = 1e6;
+
+/**
+ * Guest css px to embedder css px, per axis: the webview content box over the guest viewport (S2 'scaled'). It is 1 when
+ * nothing differs, and also 1 whenever an input is missing or implausible, so a bad report never throws a badge off screen.
+ */
+export function guestScale(frame: FrameOrigin, viewport: GuestViewport | null | undefined): { x: number; y: number } {
+  const axis = (client: number | undefined, guest: number | undefined): number => {
+    if (client === undefined || guest === undefined) return 1;
+    if (!(Number.isFinite(client) && client > 0 && Number.isFinite(guest) && guest > 0 && guest <= MAX_VIEWPORT)) return 1;
+    const k = client / guest;
+    return k >= SCALE_MIN && k <= SCALE_MAX ? k : 1;
+  };
+  return { x: axis(frame.clientWidth, viewport?.width), y: axis(frame.clientHeight, viewport?.height) };
 }
 
 /**
- * Guest viewport CSS px to stage-relative px. Unrounded and border-corrected (S2 mechanics check: the webview's
- * bounding rect includes its border while guest content starts inside it; Math.round adds up to 1 css px of error).
- * Guest rects are already in embedder CSS px under app zoom, so there is no scale factor here.
+ * Guest viewport CSS px to stage-relative embedder px. Unrounded, border-corrected (the webview's bounding rect
+ * includes its border while guest content starts inside it) and scaled by the guest-to-embedder ratio (S2: app zoom and
+ * viewport presets make the guest's css px differ from the embedder's; the old mapping assumed 1 and missed by up to
+ * 1.6 css px). Without a `viewport` the scale is 1.
  */
-export function guestRectToStage(rect: BoxRect, frame: FrameOrigin, stage: { readonly left: number; readonly top: number }): BoxRect {
+export function guestRectToStage(
+  rect: BoxRect,
+  frame: FrameOrigin,
+  stage: { readonly left: number; readonly top: number },
+  viewport?: GuestViewport | null,
+): BoxRect {
+  const k = guestScale(frame, viewport);
   return {
-    x: frame.left + frame.clientLeft - stage.left + rect.x,
-    y: frame.top + frame.clientTop - stage.top + rect.y,
-    width: rect.width,
-    height: rect.height,
+    x: frame.left + frame.clientLeft - stage.left + rect.x * k.x,
+    y: frame.top + frame.clientTop - stage.top + rect.y * k.y,
+    width: rect.width * k.x,
+    height: rect.height * k.y,
   };
+}
+
+/** The selection box: the same mapping as the pins, unrounded, and never thinner than 2 px so it stays visible. */
+export function selectionBoxToStage(
+  rect: BoxRect,
+  frame: FrameOrigin,
+  stage: { readonly left: number; readonly top: number },
+  viewport?: GuestViewport | null,
+): { left: number; top: number; width: number; height: number } {
+  const box = guestRectToStage(rect, frame, stage, viewport);
+  return { left: box.x, top: box.y, width: Math.max(2, box.width), height: Math.max(2, box.height) };
 }
 
 /** Whether a stage-relative box intersects the visible stage at all (a webview larger than the pane clips). */

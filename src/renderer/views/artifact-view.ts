@@ -25,9 +25,10 @@ import { createRectCoalescer, type RectCoalescer } from "../artifacts/rect-coale
 import type { ArtifactCommentsClient } from "../artifacts/comments-client";
 import { CommentsRail } from "../artifacts/comments-rail";
 import { PinOverlay } from "../artifacts/pin-overlay";
-import { createPinsCoordinator, type PinsCoordinator } from "../artifacts/pins-coordinator";
+import { createPinsCoordinator, type PinsCoordinator, type PinsGeometry } from "../artifacts/pins-coordinator";
 import { PinsUiStateHolder } from "../artifacts/pins-ui-state";
 import type { InspectRectMessage } from "../../artifacts/inspector-protocol";
+import { selectionBoxToStage, type GuestViewport } from "../artifacts/pin-collapse";
 
 /**
  * Next animation frame, or 100 ms from now when the page is not visible (a hidden or occluded window never runs
@@ -98,6 +99,9 @@ export class ArtifactView implements View, ReloadableView {
   /** The selected element's CURRENT viewport rect (Phase 2a), reported by the guest; null until it moves. */
   private liveRect: { x: number; y: number; width: number; height: number } | null = null;
   private liveRectFor: PickState["snapshot"] = null;
+  /** The guest viewport the live rect was measured in (S2 scale), and the one that arrived with the newest pushed rect. */
+  private liveViewport: GuestViewport | null = null;
+  private pendingViewport: GuestViewport | null = null;
   /** A selected rect that arrived after the select but before the popover opened (the screenshot await); applied on open. */
   private earlyRect: { x: number; y: number; width: number; height: number } | null = null;
   private rectCoalescer: RectCoalescer<{ x: number; y: number; width: number; height: number }> | null = null;
@@ -464,7 +468,7 @@ export class ArtifactView implements View, ReloadableView {
       schedule: (cb) => window.requestAnimationFrame(cb),
       cancel: (h) => window.cancelAnimationFrame(h),
       apply: (box) => {
-        if (this.pick?.state.phase === "popover") { this.liveRect = box; this.repositionPick("rect"); } else this.earlyRect = box;
+        if (this.pick?.state.phase === "popover") { this.liveRect = box; this.liveViewport = this.pendingViewport; this.repositionPick("rect"); } else this.earlyRect = box;
       },
     });
     // Do not slide the popover from under the pointer or the caret because the page moved the element (review A4).
@@ -513,6 +517,8 @@ export class ArtifactView implements View, ReloadableView {
     this.popover?.dispose();
     this.popover?.el.remove();
     this.liveRect = null;
+    this.liveViewport = null;
+    this.pendingViewport = null;
     this.liveRectFor = null;
     this.lastHover = null;
     this.pick = null;
@@ -647,14 +653,14 @@ export class ArtifactView implements View, ReloadableView {
   }
 
   /** The two rects the pin mapping needs, read in one place (reads before writes). Null while the view is not showing. */
-  private pinGeometry(): { frame: { left: number; top: number; clientLeft: number; clientTop: number }; stage: { left: number; top: number; width: number; height: number } } | null {
+  private pinGeometry(): PinsGeometry | null {
     const frame = this.webview;
     if (!frame) return null;
     const stage = this.stageEl.getBoundingClientRect();
     if (stage.width <= 0 || stage.height <= 0 || this.containerEl.getClientRects().length === 0) return null;
     const box = frame.getBoundingClientRect();
     return {
-      frame: { left: box.left, top: box.top, clientLeft: frame.clientLeft, clientTop: frame.clientTop },
+      frame: { left: box.left, top: box.top, clientLeft: frame.clientLeft, clientTop: frame.clientTop, clientWidth: frame.clientWidth, clientHeight: frame.clientHeight },
       stage: { left: stage.left, top: stage.top, width: stage.width, height: stage.height },
     };
   }
@@ -693,6 +699,8 @@ export class ArtifactView implements View, ReloadableView {
       this.liveRectFor = state.snapshot;
       // A rect the guest reported between the select and the popover is this selection's current position: keep it.
       this.liveRect = state.snapshot ? this.earlyRect : null;
+      // An early rect keeps the viewport it arrived with; with no live rect the select snapshot's own viewport applies.
+      this.liveViewport = this.liveRect ? this.pendingViewport : null;
       this.earlyRect = null;
       this.rectCoalescer?.reset();
       this.offscreen = false;
@@ -736,6 +744,7 @@ export class ArtifactView implements View, ReloadableView {
     if (!report.connected || !report.rect) { this.pick?.elementChanged(); return; }
     // The same node is connected again (the page re-attached it): the gone state clears.
     this.pick?.elementReturned();
+    this.pendingViewport = report.viewport ?? null;
     this.rectCoalescer?.push(report.rect);
   }
 
@@ -764,16 +773,18 @@ export class ArtifactView implements View, ReloadableView {
     const box = this.liveRect ?? snapshot.selection.boundingBox.viewport;
     // The selected element stays visibly marked while the popover is open (the guest's own highlight is hidden so it
     // cannot appear in the screenshot). Non-interactive, clipped to the stage by the overlay.
-    const ax = frame.left - stage.left + box.x;
-    const ay = frame.top - stage.top + box.y;
-    this.selectionBoxEl.style.left = `${Math.round(ax)}px`;
-    this.selectionBoxEl.style.top = `${Math.round(ay)}px`;
-    this.selectionBoxEl.style.width = `${Math.max(2, Math.round(box.width))}px`;
-    this.selectionBoxEl.style.height = `${Math.max(2, Math.round(box.height))}px`;
+    // Same mapping as the pin badges (S2): unrounded, inside the webview border, scaled guest px to embedder px.
+    const origin = { left: frame.left, top: frame.top, clientLeft: this.webview.clientLeft, clientTop: this.webview.clientTop, clientWidth: this.webview.clientWidth, clientHeight: this.webview.clientHeight };
+    const guestViewport = (this.liveRect ? this.liveViewport : null) ?? snapshot.selection.viewport;
+    const mapped = selectionBoxToStage(box, origin, stage, guestViewport);
+    this.selectionBoxEl.style.left = `${mapped.left}px`;
+    this.selectionBoxEl.style.top = `${mapped.top}px`;
+    this.selectionBoxEl.style.width = `${mapped.width}px`;
+    this.selectionBoxEl.style.height = `${mapped.height}px`;
 
     // A small cue when the element is scrolled out of view; the popover stays usable (QA C1).
     const offscreen = !state.elementGone && isElementOffscreen(
-      { left: frame.left + box.x, top: frame.top + box.y, right: frame.left + box.x + box.width, bottom: frame.top + box.y + box.height },
+      { left: stage.left + mapped.left, top: stage.top + mapped.top, right: stage.left + mapped.left + mapped.width, bottom: stage.top + mapped.top + mapped.height },
       { left: stage.left, top: stage.top, right: stage.right, bottom: stage.bottom },
     );
     if (offscreen !== this.offscreen) {
@@ -788,7 +799,7 @@ export class ArtifactView implements View, ReloadableView {
     popover.el.style.maxHeight = `${popoverMaxHeight(bounds)}px`;
     const size = { width: popover.el.offsetWidth, height: Math.min(popover.el.offsetHeight, popoverMaxHeight(bounds)) };
     const placed = popoverPosition(
-      { x: frame.left + box.x - bounds.left, y: frame.top + box.y - bounds.top, width: box.width, height: box.height },
+      { x: stage.left + mapped.left - bounds.left, y: stage.top + mapped.top - bounds.top, width: mapped.width, height: mapped.height },
       size,
       { width: bounds.width, height: bounds.height },
     );
