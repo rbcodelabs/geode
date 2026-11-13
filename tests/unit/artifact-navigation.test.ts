@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { ArtifactNavigation, type NavigationState, type NavigationWebview } from "../../src/renderer/artifacts/artifact-navigation";
+import { ArtifactNavigation, leavesPage, type NavigationState, type NavigationWebview } from "../../src/renderer/artifacts/artifact-navigation";
 
 /** Back / forward / home for an artifact tab: a pure controller over the guest webview's own navigation history. */
 
@@ -146,5 +146,29 @@ describe("ArtifactNavigation lifecycle", () => {
     first.nav.dispose();
     const second = rig();
     expect(second.nav.state).toEqual({ canGoBack: false, canGoForward: false, canGoHome: false, url: ENTRY });
+  });
+});
+
+/**
+ * A reload (the live-reload that follows an edit of the artifact's own files) starts a navigation to the page the guest is
+ * already on. It is not leaving that page, so what was resolved on it (the pins) must stay drawn rather than be dropped and
+ * rebuilt, which would also drop the keyboard focus of a focused badge.
+ */
+describe("leavesPage", () => {
+  it("is false for a reload of the current page", () => {
+    expect(leavesPage(SUB, SUB)).toBe(false);
+  });
+  it("ignores the hash and trailing-slash spelling of the same page", () => {
+    expect(leavesPage(`${SUB}#plans`, SUB)).toBe(false);
+    expect(leavesPage("http://localhost:3000", "http://localhost:3000/")).toBe(false);
+  });
+  it("is true for another page, including the board and a different query", () => {
+    expect(leavesPage(ENTRY, SUB)).toBe(true);
+    expect(leavesPage(SUB, ENTRY)).toBe(true);
+    expect(leavesPage(`${SUB}?v=1`, `${SUB}?v=2`)).toBe(true);
+  });
+  it("is true when either side is unknown, so a doubtful case drops pins as before rather than showing stale ones", () => {
+    expect(leavesPage("", SUB)).toBe(true);
+    expect(leavesPage(SUB, "")).toBe(true);
   });
 });

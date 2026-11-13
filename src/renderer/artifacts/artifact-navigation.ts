@@ -115,3 +115,25 @@ export class ArtifactNavigation {
     this.onChange(next);
   }
 }
+
+/** The page identity for "is the guest leaving this page": the URL without its fragment, or null when it is not a URL. */
+function pageKey(url: string): string | null {
+  try {
+    const parsed = new URL(url);
+    parsed.hash = "";
+    return parsed.href;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * True when a navigation from `currentUrl` to `nextUrl` leaves the page the guest is on. A reload (the live reload after an
+ * edit of the artifact's own files) navigates to the same page, so it does not: what was resolved on that page stays
+ * drawn. An unknown URL on either side counts as leaving, the safe answer (stale pins are never shown over another page).
+ */
+export function leavesPage(currentUrl: string, nextUrl: string): boolean {
+  const current = pageKey(currentUrl);
+  const next = pageKey(nextUrl);
+  return current === null || next === null || current !== next;
+}

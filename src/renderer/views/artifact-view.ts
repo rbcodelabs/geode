@@ -29,7 +29,7 @@ import { createPinsCoordinator, type PinsCoordinator, type PinsGeometry } from "
 import { PinsUiStateHolder } from "../artifacts/pins-ui-state";
 import type { InspectRectMessage } from "../../artifacts/inspector-protocol";
 import { selectionBoxToStage, type GuestViewport } from "../artifacts/pin-collapse";
-import { ArtifactNavigation, type NavigationState, type NavigationWebview } from "../artifacts/artifact-navigation";
+import { ArtifactNavigation, leavesPage, type NavigationState, type NavigationWebview } from "../artifacts/artifact-navigation";
 import { displayHotkey, legacyHotkeyToBinding } from "../../shared/hotkey";
 
 /**
@@ -401,8 +401,13 @@ export class ArtifactView implements View, ReloadableView {
       this.renderNavigation(this.navigation.state);
       // What was resolved or picked belongs to the page the guest is leaving; it must not show over the next one.
       frame.addEventListener("did-start-navigation", (event) => {
-        const detail = event as unknown as { isMainFrame?: boolean; isInPlace?: boolean };
+        const detail = event as unknown as { isMainFrame?: boolean; isInPlace?: boolean; url?: string };
         if (detail.isMainFrame === false || detail.isInPlace === true) return;
+        // A reload (the live reload after an edit) targets the page already shown: its pins stay and are refreshed by the
+        // normal rect/answer updates, so a focused badge is not torn down and re-created.
+        let current = "";
+        try { current = frame.getURL(); } catch { /* before dom-ready: unknown, treated as leaving */ }
+        if (!leavesPage(current, detail.url ?? "")) return;
         this.pins?.pageNavigating();
       });
       frame.addEventListener("did-stop-loading", () => this.pins?.pageSettled());
