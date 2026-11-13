@@ -346,8 +346,7 @@ export class FileExplorerView implements View {
         this.app.notify(`"${item.name}" already exists in this folder`);
         return;
       }
-      if (item.kind === "file") await this.app.renameFileWithLinkUpdate(item, destination);
-      else await this.app.vault.rename(item, destination);
+      await this.app.moveVaultPath(source, destination);
       if (folder) this.expanded.add(folder);
       if (this.activePath === source || this.activePath?.startsWith(source + "/")) {
         this.activePath = destination + this.activePath.slice(source.length);

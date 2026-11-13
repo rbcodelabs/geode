@@ -1,4 +1,4 @@
-import type { App } from "./app";
+import type { App, VaultMoveResult } from "./app";
 import { patchFrontmatter } from "./frontmatter-io";
 import { isTFile, type TAbstractFile, type TFile, type TFolder } from "./types";
 import type { DataWriteOptions, Vault } from "./vault";
@@ -22,9 +22,18 @@ function queueFor(vault: Vault): Map<string, Promise<void>> {
 export class FileManager {
   constructor(private app: App) {}
 
+  /** Obsidian-compatible: moves/renames a file or folder, updating links in other notes. */
   async renameFile(file: TAbstractFile, newPath: string): Promise<void> {
-    if (isTFile(file)) await this.app.renameFileWithLinkUpdate(file, newPath);
-    else await this.app.vault.rename(file as TFolder, newPath);
+    await this.moveWithLinkUpdate(file.path, newPath);
+  }
+
+  /**
+   * Move or rename a vault file or folder by vault-relative path with link
+   * updating, returning what happened. Not part of Obsidian's API; exposed so
+   * plugin tools can report which notes were rewritten.
+   */
+  async moveWithLinkUpdate(path: string, newPath: string): Promise<VaultMoveResult> {
+    return this.app.moveVaultPath(path, newPath);
   }
 
   async trashFile(file: TAbstractFile): Promise<void> {
