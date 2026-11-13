@@ -354,7 +354,9 @@ async function applyState(ctx: Ctx, state: State, targets: Array<{ id: string; i
   const preset = state.preset ?? "fill";
   const current = await embedder(ctx, `window.__s2.layout().preset`);
   if (current !== preset) await ctx.win.locator(`[data-viewport="${preset}"]`).click();
-  await sleep(120);
+  // Park the pointer on empty ribbon space: a lingering toolbar tooltip would cover the page in the capture.
+  await ctx.win.mouse.move(22, 400);
+  await sleep(250);
   await ctx.win.evaluate((px: number) => { const s = document.querySelector(".artifact-view-stage") as HTMLElement; s.scrollTop = px; s.scrollLeft = 0; }, state.stageScroll ?? 0);
   await guestEval(ctx, `(() => { window.scrollTo(0, ${state.scene?.page ?? 0}); const b = document.getElementById("box"); if (b) b.scrollTop = ${state.scene?.inner ?? 0}; return true; })()`);
   void targets;
