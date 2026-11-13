@@ -48,8 +48,9 @@ async function launch(userDataDir: string, log: string[]) {
   return { app, win };
 }
 const pm = (win: Page, id: string) => win.evaluate((pid) => {
-  const m = (window as any).app.pluginManager;
-  return { enabled: m.isEnabled(pid), loadError: m.getLoadError(pid) ?? null, manifest: m.getManifest(pid) ? { id: m.getManifest(pid).id, name: m.getManifest(pid).name, version: m.getManifest(pid).version } : null };
+  const m = (window as any).app?.pluginManager;
+  if (!m) return { enabled: false, loadError: null, manifest: null, managerReady: false };
+  return { managerReady: true, enabled: m.isEnabled(pid), loadError: m.getLoadError(pid) ?? null, manifest: m.getManifest(pid) ? { id: m.getManifest(pid).id, name: m.getManifest(pid).name, version: m.getManifest(pid).version } : null };
 }, id);
 const dump = (label: string, log: string[]) => console.log(`=== ${label}: console warnings/errors (${log.length}) ===\n${log.join("\n") || "(none)"}`);
 
@@ -88,7 +89,7 @@ test("T2 negative: new manifest inside old folder name threads-design is rejecte
   const log: string[] = [];
   const { app, win } = await launch(userDataDir, log);
   try {
-    await expect.poll(() => pm(win, "threads-design").then((s) => s.loadError), { timeout: 30_000 }).not.toBeNull();
+    await expect.poll(() => pm(win, "threads-design").then((s) => s.managerReady && s.loadError), { timeout: 30_000 }).toBeTruthy();
     const old = await pm(win, "threads-design");
     const neu = await pm(win, "threads-artifacts");
     console.log("T2 state[threads-design]:", JSON.stringify(old));
@@ -110,8 +111,9 @@ test("T3 migration with real Agent Threads: design made by old threads-design bu
   install(vaultDir, "threads-design", "old");
   enable(vaultDir, ["claude-threads", "threads-design"]);
   const ready = (win: Page, id: string) => win.evaluate((pid) => {
-    const p = (window as any).app.pluginManager.getPlugin("claude-threads");
-    return !!p?.api?.v1 && (window as any).app.pluginManager.isEnabled(pid);
+    const m = (window as any).app?.pluginManager;
+    const p = m?.getPlugin("claude-threads");
+    return !!p?.api?.v1 && m.isEnabled(pid);
   }, id);
   const log1: string[] = [];
   let threadId = ""; let artifactId = "legacy-design-0001"; let root = "";
