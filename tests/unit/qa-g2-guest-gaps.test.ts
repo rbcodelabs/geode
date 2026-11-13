@@ -81,7 +81,7 @@ describe("QA G2 guest: the flash outline is the guest's own and does not feed ba
   // delivered, so isOwnNode() no longer recognizes it and the guest's own removal is treated as a page mutation: one extra
   // resolve pass (debounced) after EVERY flash. Results are unchanged so nothing is sent; the cost is one pass of DOM queries.
   // Remove .fails when the removal record is ignored.
-  it.fails("removing the flash host after 1.2 s triggers no re-resolve", async () => {
+  it("removing the flash host after 1.2 s triggers no re-resolve", async () => {
     const { h, calls, epoch } = flashSetup();
     h.deliver(INSPECT_CHANNEL.anchorFocus, { epoch, key: "a0", behavior: "flash" });
     await settle();

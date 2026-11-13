@@ -102,7 +102,7 @@ export type InspectAnchorMatch = "selector" | "text" | "landmark" | "detached" |
 export interface InspectAnchorResult {
   readonly key: string;
   readonly match: InspectAnchorMatch;
-  /** true when a selector hit was corroborated by the text anchor, or there is no text anchor to compare (redacted); also true for a text match. */
+  /** true when a selector hit was corroborated by the text anchor, or there is no text anchor to compare (redacted); true for a text match from a complete scan, false when the scan was truncated or interrupted. */
   readonly agrees: boolean;
   /** Guest viewport CSS px; null exactly when `match` is `detached` or `other-route`. */
   readonly rect: Rect | null;
@@ -198,7 +198,7 @@ export const INSPECTOR_CAPS = {
   anchorRectsPerSecond: 120,
   /** Selector grammar (the restricted subset the guest will execute). */
   anchorSelectorCompounds: 12,
-  anchorAttributeValueUnits: 120,
+  anchorAttributeValueUnits: 128,
   /** Guest: elements of one tag examined for a text anchor, per pass. */
   anchorTextScan: 5000,
   /** Guest: elements read per time-sliced step of a text index build. */
@@ -213,6 +213,13 @@ export const INSPECTOR_CAPS = {
   anchorSlowFloorMillis: 1000,
   anchorStormCallbacksPerSecond: 50,
   anchorStormFloorMillis: 2000,
+  /**
+   * Guest: minimum spacing between `anchor-results` sends (150 ms keeps any 1 s window at 7 messages, under the embedder's 8)
+   * with a trailing send of the latest state, and the minimum gap between the end of one resolve pass and the start of the next
+   * (so the immediate triggers, a removed node or a history event, cannot run passes back to back).
+   */
+  anchorResultsSpacingMillis: 150,
+  anchorMinPassGapMillis: 250,
   /** Guest: how long the jump-to flash outline stays. */
   anchorFlashMillis: 1200,
 } as const;

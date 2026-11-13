@@ -120,6 +120,8 @@ describe("B1: results never exceed the embedder budget, and the final state is d
       h.flush(3);
     }
     expect(results(h).length - first).toBeLessThanOrEqual(1); // not one send per pass inside the spacing window
+    h.advance(INSPECTOR_CAPS.anchorMinPassGapMillis + INSPECTOR_CAPS.anchorResultsSpacingMillis + 50);
+    h.flush(3);
     h.advance(INSPECTOR_CAPS.anchorResultsSpacingMillis + 5);
     h.flush(2);
     expect(lastResults(h)!.results[0].rect.y).toBe(30);

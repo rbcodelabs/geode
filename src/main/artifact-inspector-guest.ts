@@ -11,6 +11,7 @@ import {
   type InspectMode,
   type InspectRectMessage,
 } from "../artifacts/inspector-protocol";
+import { isRestrictedSelector } from "../artifacts/anchor-selector";
 import { createAnchorTracker } from "./artifact-inspector-anchors";
 
 /**
@@ -282,7 +283,9 @@ export function startInspector(env: InspectorGuestEnv): InspectorGuest | null {
       () => uniqueId(el),
       () => {
         const classes = [...el.classList].filter((c) => c.length <= INSPECTOR_CAPS.ancestorClassUnits).slice(0, 2);
-        return classes.length > 0 ? `${selectorTag(el)}${classes.map((c) => `.${cssEscapeIdent(c)}`).join("")}` : null;
+        // A name the grammar's tag cannot spell (a custom element with "_" or non-ASCII letters) is matched by `*`; the tracker checks the tag itself.
+        const tagName = selectorTag(el);
+        return classes.length > 0 ? `${/^[A-Za-z][A-Za-z0-9-]*$/.test(tagName) ? tagName : "*"}${classes.map((c) => `.${cssEscapeIdent(c)}`).join("")}` : null;
       },
       () => structuralPath(el, "of-type"),
       () => structuralPath(el, "child"),
@@ -294,7 +297,8 @@ export function startInspector(env: InspectorGuestEnv): InspectorGuest | null {
       if (verified.length > INSPECTOR_CAPS.selectorAlternates) break;
       let selector: string | null = null;
       try { selector = candidate(); } catch { selector = null; }
-      if (!selector || selector.length > INSPECTOR_CAPS.selectorUnits || verified.includes(selector)) continue;
+      // Only selectors the anchor tracker's grammar will execute later (a selector it would refuse is no anchor at all).
+      if (!selector || selector.length > INSPECTOR_CAPS.selectorUnits || verified.includes(selector) || !isRestrictedSelector(selector)) continue;
       if (resolvesTo(selector, el)) verified.push(selector);
     }
     return { selector: verified[0] ?? "", alternates: verified.slice(1, 1 + INSPECTOR_CAPS.selectorAlternates) };

@@ -349,6 +349,8 @@ describe("messages the guest accepts", () => {
     epochCounter = 0;
     const epoch = setAnchors(h, [q({ selector: "#gone", textAnchor: { tag: "button", text: "" } })], { epoch: 6 });
     h.flush(3);
+    h.advance(INSPECTOR_CAPS.anchorResultsSpacingMillis + 1); // the previous send is inside the spacing window
+    h.flush(3);
     expect(lastResults(h)).toMatchObject({ epoch, results: [{ match: "detached" }] });
   });
 
@@ -423,7 +425,7 @@ describe("chunking and time slicing (S1 budgets)", () => {
     const query = (key: string, i: number) => q({ key, tag: "span", selector: "#gone", textAnchor: { tag: "span", text: `row ${i}` } });
     setAnchors(h, [query("a0", 3), query("a1", n - 1)]);
     h.flush(400);
-    expect(byKey(h, "a0")?.match).toBe("text");
+    expect(byKey(h, "a0")).toMatchObject({ match: "text", agrees: false }); // unique in a truncated window only
     expect(byKey(h, "a1")?.match).toBe("detached"); // beyond the examined window: never guessed
   });
 
@@ -633,14 +635,19 @@ describe("rect reporting", () => {
     expect(h.last(INSPECT_CHANNEL.anchorRects)!.payload.rects[0]).toMatchObject({ key: "a0", rect: R.buy });
   });
 
-  it("does not re-send identical results", () => {
+  it("does not re-send identical results from a pass; only the 1 s re-assertion re-sends the cache (B1)", () => {
     const h = fresh();
     setAnchors(h, [q()]);
     h.flush(3);
     expect(results(h)).toHaveLength(1);
-    h.tick();
+    h.win.dispatchEvent(new h.win.HashChangeEvent("hashchange"));
+    h.advance(1000);
     h.flush(3);
-    expect(results(h)).toHaveLength(1);
+    expect(results(h)).toHaveLength(1); // a pass with an identical outcome sends nothing
+    h.tick();
+    h.advance(200);
+    h.flush(3);
+    expect(results(h)).toHaveLength(2); // the re-assertion heals a possibly dropped message
   });
 });
 

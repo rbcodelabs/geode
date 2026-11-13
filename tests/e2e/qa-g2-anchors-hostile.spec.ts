@@ -109,7 +109,6 @@ test.describe("QA G2 hostile page", () => {
   // Real routers mutate the DOM right after pushState, so this heals itself within ~250 ms; a router that changes the URL without
   // touching id/class/data-testid/data-variation/text does not. Remove test.fail() when the route is re-checked (e.g. by the 1 s re-assertion).
   test("pushState-only navigation flips the pin to other-route", async () => {
-    test.fail();
     const s = await session(ANCHORS_ARTIFACT);
     try {
       const r = await route(s.window);

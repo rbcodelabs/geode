@@ -38,9 +38,11 @@ export function sanitizeAnchorQuery(raw: unknown): InspectAnchorQuery | null {
   if (typeof key !== "string" || !INSPECTOR_CAPS.anchorKeyPattern.test(key)) return null;
   if (route === null || t === null || selector === null || anchorTag === null || anchorText === null) return null;
   if (rawLandmark === undefined || (rawLandmark !== null && landmark === null)) return null;
-  if (!Array.isArray(rawAlternates) || rawAlternates.length > INSPECTOR_CAPS.selectorAlternates) return null;
+  // One bounded read of the (untrusted) array: copy at most cap + 1 entries, then only ever look at the copy.
+  const copy = Array.isArray(rawAlternates) ? rawAlternates.slice(0, INSPECTOR_CAPS.selectorAlternates + 1) : null;
+  if (!copy || copy.length > INSPECTOR_CAPS.selectorAlternates) return null;
   const alternates: string[] = [];
-  for (const alt of rawAlternates) {
+  for (const alt of copy) {
     const s = str(alt, INSPECTOR_CAPS.selectorUnits);
     if (s === null) return null;
     alternates.push(s);

@@ -96,7 +96,7 @@ const rejected: Array<[string, string]> = [
   ["dangling escape", "a\\"],
   ["escape only", "\\"],
   ["comment", "div p /* c */"],
-  ["value over 120 units", `div[data-x="${"a".repeat(121)}"]`],
+  ["value over 128 units", `div[data-x="${"a".repeat(129)}"]`],
   ["13 compounds", Array.from({ length: 13 }, () => "div").join(" > ")],
   ["over 512 units", `${"a".repeat(INSPECTOR_CAPS.selectorUnits + 1)}`],
   ["bracket injection", "div[data-x=\"a\"][b=c]"],

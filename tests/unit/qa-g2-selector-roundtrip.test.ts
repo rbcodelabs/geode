@@ -117,7 +117,7 @@ describe("QA G2: every selector the picker generates is accepted by the guest gr
   // DEFECT QA-G2-1 (Medium-Low): the generator emits [data-testid="..."] for values up to 128 chars, the grammar caps a value at
   // 120 units, so a legitimate primary selector for a testid of 121..128 chars is rejected (it falls to alternates/text).
   // Remove `.fails` when the caps agree.
-  it.fails("a data-testid of 121 to 128 characters (the generator allows 128) is accepted (the grammar value cap is 120)", () => {
+  it("a data-testid of 121 to 128 characters (the generator allows 128) is accepted (the grammar value cap is 120)", () => {
     const { picked } = selectAll(weirdPage());
     const long = picked.filter((p) => /^t{121,128}$/.test(p.el.getAttribute("data-testid") ?? ""));
     expect(long.length).toBe(2);
@@ -147,7 +147,7 @@ describe("QA G2: every selector the picker generates is accepted by the guest gr
   // DEFECT QA-G2-2 (Low): the class candidate writes the raw localName (selectorTag) but the grammar's tag is ASCII letters, digits
   // and "-" only, so `my_el.c` and `x-föö.u1` (elements the parser accepts; the anchor tag is sanitized to my-el / x-f--) are
   // rejected and the anchor degrades to the text step ("moved") instead of an exact selector hit.
-  it.fails("a custom element with a non-ASCII or underscore name still gets a selector the grammar accepts", () => {
+  it("a custom element with a non-ASCII or underscore name still gets a selector the grammar accepts", () => {
     const html = `<body><x-föö class="u1">1</x-föö><x-föö class="a b">2</x-föö><my_el class="c">3</my_el><a-b.c class="d">4</a-b.c></body>`;
     const { picked } = selectAll(html);
     expect(picked.length).toBe(4);
@@ -179,7 +179,7 @@ describe("QA G2: the tracker finds every generated selection again through the S
   });
 
   it("units note: the cap used by the grammar and the generator are what this test assumes", () => {
-    expect(INSPECTOR_CAPS.anchorAttributeValueUnits).toBe(120);
+    expect(INSPECTOR_CAPS.anchorAttributeValueUnits).toBe(128);
     expect(INSPECTOR_CAPS.selectorUnits).toBe(512);
     expect(INSPECTOR_CAPS.anchorSelectorCompounds).toBe(12);
   });

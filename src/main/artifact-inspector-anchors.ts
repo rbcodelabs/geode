@@ -65,6 +65,11 @@ export interface AnchorTracker {
 
 interface Placed { readonly result: InspectAnchorResult; readonly el: Element | null }
 interface Entry { el: Element; lastKey: string }
+interface TextIndex {
+  readonly byText: Map<string, Element[]>;
+  /** The scan hit the per-tag cap or was interrupted: a unique hit proves nothing about the elements never read. */
+  truncated: boolean;
+}
 interface Pass {
   readonly epoch: number;
   readonly redact: boolean;
@@ -74,7 +79,7 @@ interface Pass {
   readonly placed: Array<{ key: string; el: Element; result: InspectAnchorResult }>;
   readonly results: InspectAnchorResult[];
   /** tag -> normalized text -> elements (capped), shared by every anchor of the pass. */
-  readonly textIndex: Map<string, Map<string, Element[]>>;
+  readonly textIndex: Map<string, TextIndex>;
   work: number;
 }
 
@@ -99,8 +104,14 @@ export function createAnchorTracker(deps: AnchorTrackerDeps): AnchorTracker {
   let pass: Pass | null = null;
   let frameScheduled = false;
   let measureScheduled = false;
-  let lastResultsJson = "";
+  // results are throttled and cached so a dropped message heals and the embedder budget is never exceeded
+  let latestResults: { epoch: number; results: InspectAnchorResult[]; json: string } | null = null;
+  let sentResultsJson = "";
+  let lastResultsSentAt = Number.NEGATIVE_INFINITY;
+  let resultsTimer: number | null = null;
+  let passRoute = "";
   let disposed = false;
+  const ownNodes = new WeakSet<Node>();
   let watching = false;
   let observer: MutationObserver | null = null;
   let intervalHandle: number | null = null;
@@ -118,9 +129,17 @@ export function createAnchorTracker(deps: AnchorTrackerDeps): AnchorTracker {
   let flashKey: string | null = null;
   let flashTimer: number | null = null;
 
-  const isOwnNode = (node: Node): boolean => deps.isGuestHost(node) || (flashHost !== null && node === flashHost);
+  // Remembered after removal too: the observer reports a removal AFTER removeFlash() has forgotten the host.
+  const isOwnNode = (node: Node): boolean => deps.isGuestHost(node) || ownNodes.has(node);
 
   // ---- geometry ----
+  const MAGNITUDE = INSPECTOR_CAPS.numberMagnitude;
+  const clamp = (v: number, min: number): number => Math.min(MAGNITUDE, Math.max(min, v));
+  /** One element with an absurd rect (a 1e12 px offset) must not make the embedder drop a whole message. */
+  const rectOf = (el: Element): Rect => {
+    const r = deps.rectOf(el);
+    return { x: clamp(r.x, -MAGNITUDE), y: clamp(r.y, -MAGNITUDE), width: clamp(r.width, 0), height: clamp(r.height, 0) };
+  };
   const intersectsViewport = (r: Rect): boolean =>
     r.width > 0 && r.height > 0 && r.x < win.innerWidth && r.y < win.innerHeight && r.x + r.width > 0 && r.y + r.height > 0;
   const rectKey = (r: Rect | null, visible: boolean): string => (r ? `${r.x}|${r.y}|${r.width}|${r.height}|${visible}` : "gone");
@@ -132,7 +151,7 @@ export function createAnchorTracker(deps: AnchorTrackerDeps): AnchorTracker {
   const unplaced = (key: string, match: "detached" | "other-route"): Placed =>
     ({ result: { key, match, agrees: false, rect: null, visible: false }, el: null });
   const placed = (key: string, match: "selector" | "text" | "landmark", agrees: boolean, el: Element): Placed => {
-    const rect = deps.rectOf(el);
+    const rect = rectOf(el);
     return { result: { key, match, agrees, rect, visible: intersectsViewport(rect) }, el };
   };
 
@@ -143,27 +162,35 @@ export function createAnchorTracker(deps: AnchorTrackerDeps): AnchorTracker {
     return anchor.length >= PREFIX_MIN_UNITS && text.length >= PREFIX_MIN_UNITS && (text.startsWith(anchor) || anchor.startsWith(text));
   };
 
-  function* textIndexFor(p: Pass, tag: string): Generator<void, Map<string, Element[]>, undefined> {
+  function* textIndexFor(p: Pass, tag: string): Generator<void, TextIndex, undefined> {
     const cached = p.textIndex.get(tag);
     if (cached) return cached;
-    const index = new Map<string, Element[]>();
-    const all = deps.elementsByTag(tag);
-    yield;
-    if (all) {
-      const limit = Math.min(all.length, INSPECTOR_CAPS.anchorTextScan);
-      for (let i = 0; i < limit && i < all.length; i++) {
-        const el = all[i];
-        if (el && deps.isElement(el)) {
-          const text = deps.textOf(el, INSPECTOR_CAPS.textAnchorUnits);
-          if (text !== "") {
-            const bucket = index.get(text);
-            if (bucket) bucket.push(el); else index.set(text, [el]);
+    const index: TextIndex = { byText: new Map(), truncated: false };
+    let completed = false;
+    try {
+      const all = deps.elementsByTag(tag);
+      yield;
+      if (all) {
+        const limit = Math.min(all.length, INSPECTOR_CAPS.anchorTextScan);
+        index.truncated = all.length > INSPECTOR_CAPS.anchorTextScan;
+        for (let i = 0; i < limit && i < all.length; i++) {
+          const el = all[i];
+          if (el && deps.isElement(el)) {
+            const text = deps.textOf(el, INSPECTOR_CAPS.textAnchorUnits);
+            if (text !== "") {
+              const bucket = index.byText.get(text);
+              if (bucket) bucket.push(el); else index.byText.set(text, [el]);
+            }
           }
+          if ((i + 1) % INSPECTOR_CAPS.anchorScanStep === 0) yield;
         }
-        if ((i + 1) % INSPECTOR_CAPS.anchorScanStep === 0) yield;
       }
+      completed = true;
+    } finally {
+      // A text read that threw leaves what was read so far for the later anchors of the pass, marked incomplete.
+      if (!completed) index.truncated = true;
+      p.textIndex.set(tag, index);
     }
-    p.textIndex.set(tag, index);
     return index;
   }
 
@@ -235,9 +262,10 @@ export function createAnchorTracker(deps: AnchorTrackerDeps): AnchorTracker {
 
     if (text !== "") {
       const index = yield* textIndexFor(p, q.textAnchor.tag);
-      const hits = index.get(text);
+      const hits = index.byText.get(text);
       const only = hits && hits.length === 1 ? hits[0] : undefined;
-      if (only) return placed(q.key, "text", true, only);
+      // Unique within what was read; only a complete scan proves it is unique on the page.
+      if (only) return placed(q.key, "text", !index.truncated, only);
     }
 
     if (weak?.isConnected) return placed(q.key, "selector", false, weak);
@@ -259,6 +287,7 @@ export function createAnchorTracker(deps: AnchorTrackerDeps): AnchorTracker {
   function startPass(): void {
     if (disposed || queries.length === 0) return;
     pass = { epoch, redact, queries, index: 0, gen: null, placed: [], results: [], textIndex: new Map(), work: 0 };
+    passRoute = currentRoute(redact);
     dirtySince = null;
     scheduleFrame();
   }
@@ -302,12 +331,27 @@ export function createAnchorTracker(deps: AnchorTrackerDeps): AnchorTracker {
     lastPassEnd = deps.now();
     lastPassWork = p.work;
     resolved = new Map(p.placed.map(({ key, el, result }) => [key, { el, lastKey: rectKey(result.rect, result.visible) }]));
-    const json = JSON.stringify(p.results);
-    if (json !== lastResultsJson) {
-      lastResultsJson = json;
-      deps.send(INSPECT_CHANNEL.anchorResults, { epoch: p.epoch, results: p.results });
-    }
+    latestResults = { epoch: p.epoch, results: p.results, json: JSON.stringify(p.results) };
+    emitResults();
     if (dirtySince !== null) { burstStart = dirtySince; dirtySince = null; scheduleResolve(false); }
+  }
+
+  /**
+   * Sends the newest completed results at most once per `anchorResultsSpacingMillis` (the embedder drops anything over
+   * 8 per second, and a dropped final state would strand stale pins), with a trailing send of the LATEST state. Identical
+   * results are not re-sent, except by the 1 s re-assertion which clears `sentResultsJson` so a dropped message heals.
+   */
+  function emitResults(): void {
+    const latest = latestResults;
+    if (disposed || !latest || latest.epoch !== epoch || latest.json === sentResultsJson) return;
+    const wait = lastResultsSentAt + INSPECTOR_CAPS.anchorResultsSpacingMillis - deps.now();
+    if (wait > 0) {
+      if (resultsTimer === null) resultsTimer = deps.setTimeout(() => { resultsTimer = null; emitResults(); }, wait);
+      return;
+    }
+    sentResultsJson = latest.json;
+    lastResultsSentAt = deps.now();
+    deps.send(INSPECT_CHANNEL.anchorResults, { epoch: latest.epoch, results: latest.results });
   }
 
   // ---- rect reporting ----
@@ -327,7 +371,7 @@ export function createAnchorTracker(deps: AnchorTrackerDeps): AnchorTracker {
       let rect: Rect | null = null;
       let visible = false;
       if (entry.el.isConnected) {
-        rect = deps.rectOf(entry.el);
+        rect = rectOf(entry.el);
         visible = intersectsViewport(rect);
       } else {
         gone = true;
@@ -348,7 +392,11 @@ export function createAnchorTracker(deps: AnchorTrackerDeps): AnchorTracker {
     const t = deps.now();
     callbackTimes = callbackTimes.filter((at) => t - at < 1000);
     const stormy = callbackTimes.length > INSPECTOR_CAPS.anchorStormCallbacksPerSecond;
-    const floor = stormy ? INSPECTOR_CAPS.anchorStormFloorMillis : lastPassWork > INSPECTOR_CAPS.anchorSlowPassMillis ? INSPECTOR_CAPS.anchorSlowFloorMillis : 0;
+    // Every trigger, the immediate ones included, waits at least anchorMinPassGapMillis after the previous pass ended.
+    const floor = Math.max(
+      INSPECTOR_CAPS.anchorMinPassGapMillis,
+      stormy ? INSPECTOR_CAPS.anchorStormFloorMillis : lastPassWork > INSPECTOR_CAPS.anchorSlowPassMillis ? INSPECTOR_CAPS.anchorSlowFloorMillis : 0,
+    );
     const base = immediate ? t : Math.min(lastMutation + INSPECTOR_CAPS.anchorDebounceMillis, burstStart + INSPECTOR_CAPS.anchorMaxDelayMillis);
     const at = Math.max(base, lastPassEnd + floor, t);
     if (resolveTimer !== null) deps.clearTimeout(resolveTimer);
@@ -357,19 +405,22 @@ export function createAnchorTracker(deps: AnchorTrackerDeps): AnchorTracker {
 
   function onMutations(records: MutationRecord[]): void {
     if (disposed) return;
+    const allOwn = (list: NodeList): boolean => {
+      for (let i = 0; i < list.length; i++) if (!isOwnNode(list[i]!)) return false;
+      return true;
+    };
     let foreign = false;
     for (const record of records) {
       if (isOwnNode(record.target)) continue;
-      if (record.type === "childList") {
-        const moved = [...Array.from(record.addedNodes), ...Array.from(record.removedNodes)];
-        if (moved.length > 0 && moved.every(isOwnNode)) continue;
-      }
+      // Walks the node lists in place and stops at the first page node: nothing is materialised from a 50k-node insertion.
+      if (record.type === "childList" && record.addedNodes.length + record.removedNodes.length > 0 && allOwn(record.addedNodes) && allOwn(record.removedNodes)) continue;
       foreign = true;
       break;
     }
     if (!foreign) return;
     const t = deps.now();
     callbackTimes.push(t);
+    if (callbackTimes.length > INSPECTOR_CAPS.anchorStormCallbacksPerSecond + 1) callbackTimes.splice(0, callbackTimes.length - (INSPECTOR_CAPS.anchorStormCallbacksPerSecond + 1));
     lastMutation = t;
     if (pass) { if (dirtySince === null) dirtySince = t; return; }
     if (resolveTimer === null) burstStart = t;
@@ -408,6 +459,11 @@ export function createAnchorTracker(deps: AnchorTrackerDeps): AnchorTracker {
     // Forget what was last reported so the current state is sent again (a dropped report never strands the embedder).
     for (const entry of resolved.values()) entry.lastKey = "";
     scheduleMeasure();
+    // A dropped results message must not strand stale pins: send the cached results again (throttled like any other).
+    sentResultsJson = "";
+    emitResults();
+    // history.pushState/replaceState fire no event the isolated world can see; the route is re-checked here.
+    if (!pass && queries.length > 0 && currentRoute(redact) !== passRoute) scheduleResolve(true);
   }
   function startWatching(): void {
     if (watching) return;
@@ -427,6 +483,7 @@ export function createAnchorTracker(deps: AnchorTrackerDeps): AnchorTracker {
   function cancelWork(): void {
     pass = null;
     if (resolveTimer !== null) { deps.clearTimeout(resolveTimer); resolveTimer = null; }
+    if (resultsTimer !== null) { deps.clearTimeout(resultsTimer); resultsTimer = null; }
     dirtySince = null;
     callbackTimes = [];
     removeFlash();
@@ -462,7 +519,8 @@ export function createAnchorTracker(deps: AnchorTrackerDeps): AnchorTracker {
     queries = message.anchors;
     keys = new Set(queries.map((q) => q.key));
     resolved = new Map();
-    lastResultsJson = "";
+    latestResults = null;
+    sentResultsJson = "";
     if (queries.length === 0) { stopWatching(); return; }
     startWatching();
     startPass();
@@ -485,6 +543,7 @@ export function createAnchorTracker(deps: AnchorTrackerDeps): AnchorTracker {
         shadow.appendChild(box);
         flashHost = created;
         flashSheet = sheet;
+        ownNodes.add(created);
       } catch {
         flashHost = null;
         flashSheet = null;
@@ -499,7 +558,7 @@ export function createAnchorTracker(deps: AnchorTrackerDeps): AnchorTracker {
     if (flashKey === null || !flashSheet) return;
     const entry = resolved.get(flashKey);
     if (!entry || !entry.el.isConnected) { removeFlash(); return; }
-    const r = deps.rectOf(entry.el);
+    const r = rectOf(entry.el);
     try {
       flashSheet.replaceSync(`:host{all:initial}.b{position:fixed;box-sizing:border-box;pointer-events:none;outline:2px solid ${FLASH_COLOR};outline-offset:2px;left:${r.x}px;top:${r.y}px;width:${r.width}px;height:${r.height}px;z-index:2147483647}`);
     } catch { removeFlash(); }

@@ -28,15 +28,44 @@ export async function session(spec: ArtifactSpec, options: { size?: [number, num
   await window.evaluate((r) => (window as any).app.openArtifact(r), root);
   await expect(window.locator(".artifact-view-frame")).toBeVisible();
   await expect(window.locator(".artifact-view-pick-btn")).toBeVisible();
-  await expect.poll(() => inView(window, (p: any) => p !== null && typeof p.setAnchors === "function"), { timeout: 30_000 }).toBe(true);
+  await expect.poll(() => installProbe(window), { timeout: 30_000 }).toBe(true);
   return { app, window, env, root, cleanup: async () => { await app.close().catch(() => {}); fs.rmSync(env.temp, { recursive: true, force: true }); } };
 }
 
 export const frameOf = (w: Page): Locator => w.locator(".artifact-view-frame");
 export const guestEval = <T = unknown>(w: Page, code: string): Promise<T> => frameOf(w).evaluate((g, c) => (g as any).executeJavaScript(c), code) as Promise<T>;
 
+/**
+ * The anchors have no UI yet, so the test drives the view's bridge directly (there is no production hook): this installs
+ * `view.anchorProbe` on the live view instance, wrapping `bridge.setAnchors` / `focusAnchor` and recording the validated
+ * guest messages through the bridge's own callbacks. Re-installed when the view re-attaches its inspector (a new bridge).
+ */
+export function installProbe(w: Page): Promise<boolean> {
+  return w.evaluate(() => {
+    const view = (window as any).app.workspace.getLeavesOfType("geode-artifact")[0]?.view;
+    const bridge = view?.bridge;
+    if (!bridge) return false;
+    if (view.anchorProbe?.bridge === bridge) return true;
+    let results: any[] = [];
+    let rects: any[] = [];
+    let resultCount = 0;
+    let rectCount = 0;
+    bridge.options.callbacks.onAnchorResults = (m: any) => { resultCount++; results = [...results, m].slice(-50); };
+    bridge.options.callbacks.onAnchorRects = (m: any) => { rectCount++; rects = [...rects, m].slice(-50); };
+    view.anchorProbe = {
+      bridge,
+      setAnchors: (q: unknown[]) => bridge.setAnchors(q),
+      focus: (key: string, behavior: string) => bridge.focusAnchor(key, behavior),
+      snapshot: () => ({ epoch: bridge.anchorEpoch, results: results.slice(), rects: rects.slice(), resultCount, rectCount }),
+      clear() { results = []; rects = []; resultCount = 0; rectCount = 0; },
+    };
+    return true;
+  });
+}
+
 /** Runs `fn(probe, view, arg)` in the renderer, where `probe` is the view's anchorProbe. `fn` must be self-contained. */
-export function inView<T, A = undefined>(w: Page, fn: (probe: any, view: any, arg: A) => T, arg?: A): Promise<Awaited<T>> {
+export async function inView<T, A = undefined>(w: Page, fn: (probe: any, view: any, arg: A) => T, arg?: A): Promise<Awaited<T>> {
+  await installProbe(w);
   return w.evaluate(({ src, arg: a }) => {
     const view = (window as any).app.workspace.getLeavesOfType("geode-artifact")[0].view;
     return new Function("probe", "view", "arg", `return (${src})(probe, view, arg)`)(view.anchorProbe, view, a);

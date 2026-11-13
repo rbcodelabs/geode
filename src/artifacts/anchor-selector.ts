@@ -11,7 +11,7 @@ import { INSPECTOR_CAPS } from "./inspector-protocol";
  *                            | :nth-child(int) | :nth-of-type(int)
  *                            | :first-child | :last-child | :first-of-type | :last-of-type )*
  *
- * with attr `[A-Za-z_:][-A-Za-z0-9_:.]*`, a double-quoted value of at most 120 units in which only `\"` and `\\` are
+ * with attr `[A-Za-z_:][-A-Za-z0-9_:.]*`, a double-quoted value of at most 128 units (the generator's data-testid limit) in which only `\"` and `\\` are
  * escapes, idents that may contain CSS escapes, and a total length of at most 512. Everything else (`:has`, `:is`,
  * `:where`, `:not`, pseudo-elements, sibling combinators, namespaces, lists, case flags, comments) is rejected, which
  * bounds a query to a linear scan and removes selector-list and `:has` blowups.
