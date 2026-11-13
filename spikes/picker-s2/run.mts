@@ -142,7 +142,8 @@ const EMBEDDER_SCRIPT = `(() => {
         left = ox + b.x * kx; top = oy + b.y * ky; width = b.width * kx; height = b.height * ky;
       }
       const m = document.createElement("div");
-      m.style.cssText = "position:absolute;box-sizing:border-box;border:3px solid " + colors[it.i] + ";background:transparent;left:" + left + "px;top:" + top + "px;width:" + width + "px;height:" + height + "px";
+      const solid = Math.min(width, height) < 8; // too small for a visible ring: a solid block of exactly the mapped size
+      m.style.cssText = "position:absolute;box-sizing:border-box;" + (solid ? "background:" + colors[it.i] : "border:3px solid " + colors[it.i] + ";background:transparent") + ";left:" + left + "px;top:" + top + "px;width:" + width + "px;height:" + height + "px";
       layer.appendChild(m);
     }
     document.querySelector(".artifact-view-overlay").appendChild(layer);
@@ -173,15 +174,17 @@ const EMBEDDER_SCRIPT = `(() => {
 
 // ------------------------------------------------------------------------------------------------------- electron side
 /** Runs in the Electron MAIN process. Self-contained: no outer references. */
-const mainCapture = async ({ BrowserWindow }: any, arg: { detectSrc: string; palette: number[][] }) => {
+const mainCapture = async ({ BrowserWindow }: any, arg: { detectSrc: string; palette: number[][]; regionCss: { left: number; top: number; right: number; bottom: number }; innerWidth: number; png: boolean }) => {
   const win = BrowserWindow.getAllWindows().find((w: any) => !w.isDestroyed());
   const image = await win.webContents.capturePage();
   const size = image.getSize();
   const bitmap = image.toBitmap();
   const detect = new Function(`return (${arg.detectSrc})`)();
   const t0 = Date.now();
-  const boxes = detect(bitmap, size.width, size.height, arg.palette);
-  return { width: size.width, height: size.height, boxes, analysisMs: Date.now() - t0, content: win.getContentBounds() };
+  const k = size.width / arg.innerWidth;
+  const region = { x0: arg.regionCss.left * k, y0: arg.regionCss.top * k, x1: arg.regionCss.right * k, y1: arg.regionCss.bottom * k };
+  const boxes = detect(bitmap, size.width, size.height, arg.palette, region);
+  return { width: size.width, height: size.height, boxes, analysisMs: Date.now() - t0, content: win.getContentBounds(), png: arg.png ? image.toPNG().toString("base64") : null };
 };
 const mainWindow = async ({ BrowserWindow, screen, app: electronApp }: any, op: any) => {
   const win = BrowserWindow.getAllWindows().find((w: any) => !w.isDestroyed());
@@ -381,7 +384,13 @@ async function settle(ctx: Ctx, targets: Array<{ id: string; i: number }>) {
   return { settleMs: Date.now() - t0, timedOut, initialTrackerErrorCssPx: round(firstErr ?? 0) };
 }
 
-const capture = async (): Promise<any> => app.evaluate(mainCapture, { detectSrc: detectBoxes.toString(), palette: PALETTE });
+const dumpDir = process.env.S2_DUMP;
+const capture = async (regionCss: { left: number; top: number; right: number; bottom: number }, innerWidth: number, name: string): Promise<any> => {
+  const r = await app.evaluate(mainCapture, { detectSrc: detectBoxes.toString(), palette: PALETTE, regionCss, innerWidth, png: !!dumpDir });
+  if (dumpDir && r.png) { fs.mkdirSync(dumpDir, { recursive: true }); fs.writeFileSync(path.join(dumpDir, `${name.replace(/[^A-Za-z0-9._-]/g, "_")}.png`), Buffer.from(r.png, "base64")); }
+  r.png = null;
+  return r;
+};
 
 /** css rect of the on-screen area where the guest can show anything (stage clip ∩ webview content box). */
 function clipRectCss(L: any) {
@@ -401,7 +410,9 @@ async function measureState(ctx: Ctx, fx: (typeof FIXTURES)[number], state: Stat
 
   await embedder(ctx, `window.__s2.clearMarkers()`);
   await embedder(ctx, `window.__s2.twoFrames()`);
-  const capT = await capture();
+  const clip = clipRectCss(layout);
+  const stageRegion = { left: layout.stage.left, top: layout.stage.top, right: layout.stage.right, bottom: layout.stage.bottom };
+  const capT = await capture(clip, layout.innerWidth, `${fx.id}-${state.id}-targets`);
   const pxPerCss = capT.width / layout.innerWidth;
   await guestEval(ctx, `(() => { for (const e of document.querySelectorAll("[data-s2]")) e.style.setProperty("visibility", "hidden", "important"); return true; })()`);
   const markerBoxes: Record<string, any[]> = {};
@@ -412,14 +423,13 @@ async function measureState(ctx: Ctx, fx: (typeof FIXTURES)[number], state: Stat
       });
       await embedder(ctx, `window.__s2.twoFrames()`);
       await sleep(30);
-      markerBoxes[mapping] = (await capture()).boxes;
+      markerBoxes[mapping] = (await capture(stageRegion, layout.innerWidth, `${fx.id}-${state.id}-${mapping}`)).boxes;
     }
   } finally {
     await embedder(ctx, `window.__s2.clearMarkers()`).catch(() => {});
     await guestEval(ctx, `(() => { for (const e of document.querySelectorAll("[data-s2]")) e.style.removeProperty("visibility"); return true; })()`).catch(() => {});
   }
 
-  const clip = clipRectCss(layout);
   const cases = targets.map((t) => {
     const it = items.find((x) => x.i === t.i)!;
     const truth = guest.rects.find((r: any) => r.id === t.id);
@@ -440,7 +450,14 @@ async function measureState(ctx: Ctx, fx: (typeof FIXTURES)[number], state: Stat
     c.cutEdges = cut;
     for (const mapping of MAPPINGS) {
       const mb = markerBoxes[mapping]![t.i];
-      if (!tb?.found || !mb?.found) { c.mappings[mapping] = { error: !tb?.found && !mb?.found ? (it.visible ? "neither found" : "offscreen") : !tb?.found ? "target not found" : "marker not found" }; continue; }
+      if (!tb?.found || !mb?.found) {
+        const inClip = intended.right > clip.left && intended.left < clip.right && intended.bottom > clip.top && intended.top < clip.bottom;
+        const error = !tb?.found && !mb?.found
+          ? (!it.visible ? "offscreen" : !inClip ? "outside-pane-clip" : "phantom: reported visible, nothing on screen (an ancestor clips it)")
+          : !tb?.found ? "target not found, marker drawn" : "marker not found, target drawn";
+        c.mappings[mapping] = { error };
+        continue;
+      }
       const eL = mb.left - tb.left, eT = mb.top - tb.top, eR = mb.right - tb.right, eB = mb.bottom - tb.bottom;
       const phys: any = {};
       if (!cut.l) phys.dx = eL;
@@ -574,6 +591,10 @@ function findings(result: any): string[] {
   }
   const slow = result.states.filter((s: any) => s.settle.timedOut).map((s: any) => `${s.fixture}/${s.condition}`);
   if (slow.length) out.push(`tracker rects never converged to the guest's own within 6 s in: ${slow.slice(0, 8).join(", ")}${slow.length > 8 ? " ..." : ""}`);
+  const phantom = result.states.flatMap((s: any) => s.cases.filter((c: any) => String(c.mappings.existing?.error ?? "").startsWith("phantom") || String(c.mappings.existing?.error ?? "").startsWith("target not found")).map((c: any) => `${s.fixture}/${s.condition}/${c.target}`));
+  if (phantom.length) out.push(`the tracker reports visible=true for elements that are not on screen (clipped by an ancestor scroller / overflow): a badge would float over unrelated content. ${phantom.length} cases, e.g. ${phantom.slice(0, 4).join(", ")}`);
+  const paneClipped = result.states.flatMap((s: any) => s.cases.filter((c: any) => c.mappings.existing?.error === "outside-pane-clip").map((c: any) => `${s.fixture}/${s.condition}/${c.target}`));
+  if (paneClipped.length) out.push(`reported visible (inside the guest viewport) but outside the visible pane (webview larger than the stage): the overlay clips it correctly but a badge list must not count it as on screen. ${paneClipped.length} cases.`);
   const noRect = result.states.flatMap((s: any) => s.cases.filter((c: any) => c.targetFound && c.reportedVisible === false).map((c: any) => `${s.fixture}/${s.condition}/${c.target}`));
   if (noRect.length) out.push(`target visible on screen while the tracker said not visible: ${noRect.slice(0, 6).join(", ")}`);
   return out;

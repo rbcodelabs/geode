@@ -9,12 +9,14 @@
  *
  *   data     BGRA bytes (Electron NativeImage.toBitmap(), little endian)
  *   palette  [[r, g, b], ...]  saturated colours that do not occur anywhere else in the page
+ *   region   only pixels inside [x0, x1) x [y0, y1) count (the app chrome has accent colours of its own)
  */
 export function detectBoxes(
   data: Uint8Array,
   width: number,
   height: number,
   palette: number[][],
+  region?: { x0: number; y0: number; x1: number; y1: number },
 ): Array<{ found: boolean; count: number; left: number; top: number; right: number; bottom: number }> {
   const n = palette.length;
   const RESIDUAL = 30;
@@ -34,9 +36,11 @@ export function detectBoxes(
     return a > 1 ? 1 : a;
   };
 
-  for (let y = 0; y < height; y++) {
+  const rx0 = region ? Math.max(0, Math.floor(region.x0)) : 0, rx1 = region ? Math.min(width, Math.ceil(region.x1)) : width;
+  const ry0 = region ? Math.max(0, Math.floor(region.y0)) : 0, ry1 = region ? Math.min(height, Math.ceil(region.y1)) : height;
+  for (let y = ry0; y < ry1; y++) {
     const row = y * width * 4;
-    for (let x = 0; x < width; x++) {
+    for (let x = rx0; x < rx1; x++) {
       const i = row + x * 4;
       if (data[i]! > 245 && data[i + 1]! > 245 && data[i + 2]! > 245) continue;
       for (let c = 0; c < n; c++) {
@@ -56,8 +60,7 @@ export function detectBoxes(
   const edges = (c: number, vertical: boolean): [number, number] => {
     const lo = vertical ? minY[c]! : minX[c]!, hi = vertical ? maxY[c]! : maxX[c]!;
     const fixed = vertical ? Math.floor((minX[c]! + maxX[c]!) / 2) : Math.floor((minY[c]! + maxY[c]!) / 2);
-    const max = vertical ? height - 1 : width - 1;
-    const from = Math.max(0, lo - 4), to = Math.min(max, hi + 4);
+    const from = Math.max(vertical ? ry0 : rx0, lo - 4), to = Math.min(vertical ? ry1 - 1 : rx1 - 1, hi + 4);
     const alpha: number[] = [];
     for (let k = from; k <= to; k++) {
       const i = vertical ? (k * width + fixed) * 4 : (fixed * width + k) * 4;
