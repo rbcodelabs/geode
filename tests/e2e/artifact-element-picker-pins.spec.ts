@@ -57,7 +57,7 @@ async function expectedCentre(w: Page, selector: string): Promise<{ x: number; y
     const b = f.getBoundingClientRect();
     return { left: b.left + f.clientLeft - st.left, top: b.top + f.clientTop - st.top, width: st.width, height: st.height };
   });
-  const clamp = (v: number, max: number) => Math.min(Math.max(2, v), Math.max(2, max - 2));
+  const clamp = (v: number, max: number) => Math.min(Math.max(12, v), Math.max(12, max - 12));
   return { x: clamp(frame.left + r.right - 4, frame.width), y: clamp(frame.top + r.top + 4, frame.height) };
 }
 const badgeCentre = (w: Page, text: string) => w.evaluate((t) => {

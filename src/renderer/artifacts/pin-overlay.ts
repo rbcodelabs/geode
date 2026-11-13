@@ -131,8 +131,7 @@ export class PinOverlay {
     if (check) {
       const mark = this.doc.createElement("span");
       mark.className = "pin-badge-check";
-      mark.setAttribute("aria-hidden", "true");
-      mark.textContent = "✓";
+      mark.setAttribute("aria-hidden", "true"); // drawn in CSS: no glyph to go missing in a font
       node.append(mark);
     }
   }

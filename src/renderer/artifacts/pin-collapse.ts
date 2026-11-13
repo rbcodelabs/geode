@@ -55,10 +55,13 @@ export function intersectsStage(box: BoxRect, stage: { readonly width: number; r
 
 const finite = (n: number, fallback: number): number => (Number.isFinite(n) ? n : fallback);
 
-/** The badge point for an element's stage-relative box: its top-right, offset (-4, +4), clamped 2 px inside the stage. */
+/**
+ * The badge centre for an element's stage-relative box: its top-right, offset (-4, +4), clamped so the WHOLE badge stays
+ * `edgeMargin` px inside the stage (a centre on the edge would leave half the badge clipped by the overlay).
+ */
 export function badgeAnchorPoint(box: BoxRect, stage: { readonly width: number; readonly height: number }): { x: number; y: number } {
-  const m = PIN_BADGE.edgeMargin;
-  const clamp = (v: number, max: number): number => Math.min(Math.max(m, v), Math.max(m, max - m));
+  const inset = PIN_BADGE.edgeMargin + PIN_BADGE.diameter / 2;
+  const clamp = (v: number, max: number): number => Math.min(Math.max(inset, v), Math.max(inset, max - inset));
   return {
     x: clamp(finite(box.x, 0) + finite(box.width, 0) + PIN_BADGE.offsetX, finite(stage.width, 0)),
     y: clamp(finite(box.y, 0) + PIN_BADGE.offsetY, finite(stage.height, 0)),

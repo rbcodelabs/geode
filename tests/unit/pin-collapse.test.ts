@@ -144,9 +144,14 @@ describe("guestRectToStage and badgeAnchorPoint (the one replaceable mapping uni
     expect(badgeAnchorPoint({ x: 100, y: 200, width: 160, height: 48 }, { width: 900, height: 600 })).toEqual({ x: 256, y: 204 });
   });
 
-  it("clamps the point 2 px inside the stage", () => {
-    expect(badgeAnchorPoint({ x: 880, y: -30, width: 100, height: 20 }, { width: 900, height: 600 })).toEqual({ x: 898, y: 2 });
-    expect(badgeAnchorPoint({ x: -500, y: 900, width: 10, height: 10 }, { width: 900, height: 600 })).toEqual({ x: 2, y: 598 });
+  it("clamps so the whole 20 px badge stays 2 px inside the stage (centre 12 px from every edge)", () => {
+    expect(badgeAnchorPoint({ x: 880, y: -30, width: 100, height: 20 }, { width: 900, height: 600 })).toEqual({ x: 888, y: 12 });
+    expect(badgeAnchorPoint({ x: -500, y: 900, width: 10, height: 10 }, { width: 900, height: 600 })).toEqual({ x: 12, y: 588 });
+  });
+
+  it("a stage smaller than a badge still gives a finite point", () => {
+    const p = badgeAnchorPoint({ x: 0, y: 0, width: 5, height: 5 }, { width: 10, height: 10 });
+    expect(Number.isFinite(p.x) && Number.isFinite(p.y)).toBe(true);
   });
 
   it("never produces NaN for non-finite input", () => {

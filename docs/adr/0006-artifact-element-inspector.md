@@ -1464,7 +1464,7 @@ content size is never hard-coded (the S2 harness measured tablet content at 766x
 
 **Clipping.** A badge is drawn only when the element's stage-relative box intersects the visible stage
 (`intersectsStage`), so an element the tracker calls visible but that lies outside the pane (a preset webview larger than the
-stage) gets no badge; a partly visible element gets one, clamped 2 px inside the stage. The tracker cannot know clipping by an
+stage) gets no badge; a partly visible element gets one, clamped so the whole 20 px badge stays 2 px inside the stage (a centre on the stage edge, as the design note literally says, left half the badge clipped in the first screenshots). The tracker cannot know clipping by an
 inner scroller's `overflow`; a pin on such an element can be drawn where it is not visible. That is a known limitation
 (rect-based, no per-ancestor clip walk) and is listed as NOT VERIFIED for real pages with inner scrollers.
 
