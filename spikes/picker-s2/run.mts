@@ -239,11 +239,14 @@ let captureWarned = false;
 let app: any = null;
 let appPid: number | undefined;
 let tempRoot: string | null = null;
-let closing = false;
+let closing: Promise<void> | null = null;
 
-async function shutdown(): Promise<void> {
-  if (closing) return;
-  closing = true;
+function shutdown(): Promise<void> {
+  // One shared promise: a signal handler and the main flow's finally must both wait for the same cleanup.
+  closing ??= closeEverything();
+  return closing;
+}
+async function closeEverything(): Promise<void> {
   if (app) {
     await Promise.race([app.close().catch(() => {}), sleep(15_000)]);
     // Only the child we spawned, never a name match.
