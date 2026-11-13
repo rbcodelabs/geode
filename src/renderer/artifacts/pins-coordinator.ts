@@ -95,6 +95,7 @@ export interface PinsCoordinator {
   readonly pinAvailable: boolean;
   readonly railAvailable: boolean;
   readonly railOpen: boolean;
+  debug(): unknown;
   start(): Promise<void>;
   refresh(): Promise<void>;
   openRail(options?: { focus?: { readonly type: "heading" } | { readonly type: "row"; readonly id: string } }): Promise<void>;
@@ -446,6 +447,7 @@ export function createPinsCoordinator(deps: PinsCoordinatorDeps): PinsCoordinato
     get pinAvailable() { return pinAvailable; },
     get railAvailable() { return railAvailable; },
     get railOpen() { return railOpen; },
+    debug: () => ({ epoch, busy, keys: [...keyToId.entries()], placements: [...placements.entries()], disposed, frame: cancelFrame !== null, railDirty, signature }),
 
     start: async () => {
       await list();

@@ -37,6 +37,7 @@ test("diag: why are seeded pins not placed", async () => {
         hasPins: !!view.pins, hasClient: !!view.commentsClient, commentsRoute: view.commentsRoute,
         railOpen: view.pins?.railOpen, pinAvailable: view.pins?.pinAvailable,
         geometry: view.pinGeometry(),
+        coord: view.pins?.debug(),
         layer: document.querySelector(".pin-layer")?.outerHTML.slice(0, 600),
         route: view.webview ? null : null,
       };
