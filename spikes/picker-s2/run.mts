@@ -177,14 +177,22 @@ const EMBEDDER_SCRIPT = `(() => {
 const mainCapture = async ({ BrowserWindow }: any, arg: { detectSrc: string; palette: number[][]; regionCss: { left: number; top: number; right: number; bottom: number }; innerWidth: number; png: boolean }) => {
   const win = BrowserWindow.getAllWindows().find((w: any) => !w.isDestroyed());
   const image = await win.webContents.capturePage();
-  const size = image.getSize();
-  const bitmap = image.toBitmap();
+  // toBitmap() defaults to scaleFactor 1: on a Retina display ask for the image's own (highest) representation, then
+  // find the pixel size that matches the byte length, so a physical-pixel bitmap is never silently a downsample.
+  const factors: number[] = image.getScaleFactors();
+  const sf = Math.max(1, ...factors);
+  const bitmap = image.toBitmap({ scaleFactor: sf });
+  const dip = image.getSize();
+  const bySf = image.getSize(sf);
+  const candidates = [bySf, dip, { width: Math.round(dip.width * sf), height: Math.round(dip.height * sf) }];
+  const size = candidates.find((c: any) => c.width * c.height * 4 === bitmap.length);
+  if (!size) throw new Error(`capture size mismatch: bitmap ${bitmap.length} bytes, getSize ${JSON.stringify(dip)}, getSize(sf) ${JSON.stringify(bySf)}, scaleFactors ${JSON.stringify(factors)}`);
   const detect = new Function(`return (${arg.detectSrc})`)();
   const t0 = Date.now();
   const k = size.width / arg.innerWidth;
   const region = { x0: arg.regionCss.left * k, y0: arg.regionCss.top * k, x1: arg.regionCss.right * k, y1: arg.regionCss.bottom * k };
   const boxes = detect(bitmap, size.width, size.height, arg.palette, region);
-  return { width: size.width, height: size.height, boxes, analysisMs: Date.now() - t0, content: win.getContentBounds(), png: arg.png ? image.toPNG().toString("base64") : null };
+  return { width: size.width, height: size.height, boxes, analysisMs: Date.now() - t0, content: win.getContentBounds(), imageInfo: { scaleFactors: factors, dip, bySf, used: size }, png: arg.png ? image.toPNG().toString("base64") : null };
 };
 const mainWindow = async ({ BrowserWindow, screen, app: electronApp }: any, op: any) => {
   const win = BrowserWindow.getAllWindows().find((w: any) => !w.isDestroyed());
@@ -227,6 +235,7 @@ const round = (n: number, d = 3): number => Math.round(n * 10 ** d) / 10 ** d;
 const cssList = (s: string) => `rgb(${s})`;
 
 const harnessErrors: string[] = [];
+let captureWarned = false;
 let app: any = null;
 let appPid: number | undefined;
 let tempRoot: string | null = null;
@@ -416,6 +425,10 @@ async function measureState(ctx: Ctx, fx: (typeof FIXTURES)[number], state: Stat
   const stageRegion = { left: layout.stage.left, top: layout.stage.top, right: layout.stage.right, bottom: layout.stage.bottom };
   const capT = await capture(clip, layout.innerWidth, `${fx.id}-${state.id}-targets`);
   const pxPerCss = capT.width / layout.innerWidth;
+  if (Math.abs(pxPerCss - layout.dpr) / layout.dpr > 0.02 && !captureWarned) {
+    captureWarned = true;
+    harnessErrors.push(`capture resolution is ${round(pxPerCss, 3)} px per css px but the embedder reports devicePixelRatio ${round(layout.dpr, 3)}: the screenshot is not at physical resolution, errors below are quantized (${JSON.stringify(capT.imageInfo)})`);
+  }
   await guestEval(ctx, `(() => { for (const e of document.querySelectorAll("[data-s2]")) e.style.setProperty("visibility", "hidden", "important"); return true; })()`);
   const markerBoxes: Record<string, any[]> = {};
   try {
@@ -475,7 +488,7 @@ async function measureState(ctx: Ctx, fx: (typeof FIXTURES)[number], state: Stat
 
   return {
     fixture: fx.id, condition: state.id, group: state.group, spec: state, settle: settled,
-    pxPerCss: round(pxPerCss, 4), bitmap: { width: capT.width, height: capT.height, contentDip: capT.content, analysisMs: capT.analysisMs },
+    pxPerCss: round(pxPerCss, 4), bitmap: { width: capT.width, height: capT.height, contentDip: capT.content, analysisMs: capT.analysisMs, imageInfo: capT.imageInfo },
     layout, guest: { ...guest, rects: undefined }, clipCss: clip, cases,
   };
 }
@@ -551,7 +564,11 @@ function buildSummary(states: any[]) {
   return {
     toleranceCssPx: TOLERANCE_CSS,
     verdictRule: "PASS: every case within 1 css px; WARN: p95 within 1 css px but some case beyond; FAIL: p95 beyond 1 css px. css px = embedder css px at the current app zoom.",
-    perCondition: conditions.map((id) => ({ condition: id, group: states.find((s) => s.condition === id).group, ...aggregate((r) => r.condition === id) })),
+    perCondition: conditions.map((id) => ({
+      condition: id, group: states.find((s) => s.condition === id).group,
+      onePhysicalPxInCss: round(1 / (states.find((s) => s.condition === id).pxPerCss || 1)),
+      ...aggregate((r) => r.condition === id),
+    })),
     perGroup: groups.map((g) => ({ group: g, ...aggregate((r) => r.group === g) })),
     perFixture: [...new Set(states.map((s) => s.fixture))].map((f) => ({ fixture: f, ...aggregate((r) => r.fixture === f) })),
     overall: aggregate(() => true),
@@ -571,8 +588,9 @@ function printSummary(result: any) {
   if (result.reportLag) L.push(`report lag  tracker rect vs a guest scrollTo (includes automation round trip): p50 ${result.reportLag.p50} ms  p95 ${result.reportLag.p95} ms  max ${result.reportLag.max} ms  (n ${result.reportLag.n})`);
   L.push("", "Verdict per condition, error in embedder css px (worst of dx dy dw dh per case: p50 / p95 / max). Production mapping = 'existing'.");
   const cell = (a: any) => a && a.cases ? `${a.verdict.padEnd(7)} ${String(a.worstCss.p50).padStart(5)} /${String(a.worstCss.p95).padStart(5)} /${String(a.worstCss.max).padStart(5)} (n ${a.cases})` : "no data";
-  L.push(`${"condition".padEnd(34)}${"existing".padEnd(36)}${"border".padEnd(36)}scaled`);
-  for (const c of result.summary.perCondition) L.push(`${c.condition.padEnd(34)}${cell(c.existing).padEnd(36)}${cell(c.border).padEnd(36)}${cell(c.scaled)}`);
+  L.push("(q = what ONE physical pixel is in css px at that condition: the screenshot cannot resolve less, so on a DPR 1 machine q >= 1 makes PASS unreachable)");
+  L.push(`${"condition".padEnd(34)}${"q".padEnd(6)}${"existing".padEnd(36)}${"border".padEnd(36)}scaled`);
+  for (const c of result.summary.perCondition) L.push(`${c.condition.padEnd(34)}${String(c.onePhysicalPxInCss).padEnd(6)}${cell(c.existing).padEnd(36)}${cell(c.border).padEnd(36)}${cell(c.scaled)}`);
   L.push("", "Per group (existing mapping):");
   for (const g of result.summary.perGroup) L.push(`  ${g.group.padEnd(16)} ${cell(g.existing)}   signed median dx ${g.existing.signedMedian.dx.median} dy ${g.existing.signedMedian.dy.median} dw ${g.existing.signedMedian.dw.median} dh ${g.existing.signedMedian.dh.median}`);
   L.push("", "Overall:");

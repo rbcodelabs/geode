@@ -42,7 +42,9 @@ export function detectBoxes(
     const row = y * width * 4;
     for (let x = rx0; x < rx1; x++) {
       const i = row + x * 4;
-      if (data[i]! > 245 && data[i + 1]! > 245 && data[i + 2]! > 245) continue;
+      // A pixel at least half covered by any palette colour has a channel spread of >= 85 (the least saturated entry spans 200).
+      const b0 = data[i]!, g0 = data[i + 1]!, r0 = data[i + 2]!;
+      if (Math.max(r0, g0, b0) - Math.min(r0, g0, b0) < 80) continue;
       for (let c = 0; c < n; c++) {
         if (alphaAt(i, c) >= 0.5) {
           count[c]!++;
