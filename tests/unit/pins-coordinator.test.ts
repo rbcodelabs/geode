@@ -269,7 +269,11 @@ describe("anchor results and rects drive pin and rail state", () => {
     expect(r.lastPins().badges.map((b) => b.text)).toEqual(["2"]);
     r.coordinator.setFilter("resolved");
     r.runFrames();
-    expect(r.lastPins().badges.map((b) => b.text)).toEqual(["1"]);
+    // live pins always show; the matching terminal ones join them (anchor keys: live comments first, so a0 is comment 2)
+    expect(r.lastPins().badges.map((b) => b.text)).toEqual(["2", "1"]);
+    r.coordinator.setFilter("dismissed");
+    r.runFrames();
+    expect(r.lastPins().badges.map((b) => b.text)).toEqual(["2"]);
   });
 
   it("overlapping pins collapse into a count badge", async () => {

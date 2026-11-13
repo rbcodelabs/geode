@@ -241,7 +241,6 @@ export class PickPopover {
     this.send.type = "button";
     this.pin = make("button", "pick-popover-pin");
     this.pin.type = "button";
-    this.pin.textContent = "Pin";
     this.pin.hidden = true;
     this.repick = make("button", "mod-cta pick-popover-repick");
     this.repick.type = "button";
@@ -332,7 +331,8 @@ export class PickPopover {
     const empty = state.comment.trim().length === 0;
     this.send.disabled = pending || state.handlerGone || state.elementGone || empty;
     this.pin.hidden = accepted || gone || state.pinAvailable !== true;
-    this.pin.textContent = pending && lastPin ? "Pinning…" : state.submit === "rejected" && lastPin ? "Retry pin" : "Pin";
+    // A hidden Pin button carries no text at all, so a popover for a v1 handler has no Pin anywhere in its content.
+    this.pin.textContent = this.pin.hidden ? "" : pending && lastPin ? "Pinning…" : state.submit === "rejected" && lastPin ? "Retry pin" : "Pin";
     this.pin.disabled = pending || state.handlerGone || state.elementGone || empty;
     this.cancel.disabled = pending;
     if (gone && !wasGone && focusWasInside) this.repick.focus();
