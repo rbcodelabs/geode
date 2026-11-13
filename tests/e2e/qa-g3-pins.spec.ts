@@ -91,9 +91,9 @@ test.describe("QA G3 pins and rail (independent)", () => {
     const w = s.window;
     try {
       await commentsToggle(w).focus();
-      await w.keyboard.press("Control+Shift+Enter");
+      await w.keyboard.press("ControlOrMeta+Shift+Enter");
       await expect.poll(() => focusPaneOn(w)).toBe(true);
-      await w.keyboard.press("Control+Shift+Enter");
+      await w.keyboard.press("ControlOrMeta+Shift+Enter");
       await expect.poll(() => focusPaneOn(w)).toBe(false);
     } finally { await s.cleanup(); }
   });
@@ -132,7 +132,7 @@ test.describe("QA G3 pins and rail (independent)", () => {
       await expect(popover(w)).toBeVisible();
       await expect(popover(w).getByRole("button", { name: "Pin" })).toBeHidden();
       await w.locator(".pick-popover-comment").focus();
-      await w.keyboard.press("Control+Shift+Enter");
+      await w.keyboard.press("ControlOrMeta+Shift+Enter");
       await expect.poll(() => focusPaneOn(w), { timeout: 3_000 }).toBe(true);
       await resetFocusPane(w);
     } finally { await s.cleanup(); }
