@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { INSPECT_CHANNEL, INSPECTOR_CAPS, type InspectAnchorQuery } from "../../src/artifacts/inspector-protocol";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { createAnchorTracker } from "../../src/main/artifact-inspector-anchors";
 import { boot, type GuestHarness } from "../helpers/inspector-guest-harness";
 
 vi.setConfig({ testTimeout: 120_000 });
@@ -53,9 +56,11 @@ const maxInAnyWindow = (times: number[]): number => {
 };
 
 /** Steps a harness by `ms` in 5 ms ticks, flushing frames and mutation records, recording the time of every new message of a channel. */
+const tickPhase = new WeakMap<GuestHarness, number>();
 async function run(h: GuestHarness, ms: number, channel: string, times: number[], each?: (t: number) => void, tickEveryMs = 1000): Promise<void> {
   let seen = h.all(channel).length;
-  let sinceTick = 0;
+  // The guest's re-assertion is ONE interval started with the tracker: its phase must survive across run() segments.
+  let sinceTick = tickPhase.get(h) ?? 0;
   for (let t = 0; t < ms; t += 5) {
     each?.(t);
     h.advance(5);
@@ -63,6 +68,7 @@ async function run(h: GuestHarness, ms: number, channel: string, times: number[]
     await settle();
     sinceTick += 5;
     if (sinceTick >= tickEveryMs) { sinceTick = 0; h.tick(); h.flush(1); await settle(); }
+    tickPhase.set(h, sinceTick);
     const now = h.all(channel).length;
     for (let i = seen; i < now; i++) times.push(h.now());
     seen = now;
@@ -79,10 +85,10 @@ describe("QA G2 fix pass: result messages vs the embedder's 8/s window, long run
       n++;
       const b = h.doc.querySelector("button");
       if (t % 40 === 0 && b) { const c = b.cloneNode(true) as Element; c.textContent = n % 2 ? "Buy now" : "Zzzz"; b.replaceWith(c); h.setRect(c, R); }
-      if (t % 60 === 0) h.win.location.hash = n % 2 ? "#frag" : "#other";
+      if (t % 60 === 0) { h.win.location.hash = n % 2 ? "#frag" : "#other"; h.fire("hashchange", {}, h.win as never); } // jsdom fires hashchange on a real timer: dispatch it ourselves
     });
     expect(times.length).toBeGreaterThan(40);
-    for (let i = 1; i < times.length; i++) expect(times[i]! - times[i - 1]!, `gap ${i}`).toBeGreaterThanOrEqual(INSPECTOR_CAPS.anchorResultsSpacingMillis);
+    for (let i = 1; i < times.length; i++) expect(times[i]! - times[i - 1]!, `gap ${i}`).toBeGreaterThanOrEqual(150);
     expect(maxInAnyWindow(times)).toBeLessThanOrEqual(7);
     expect(dropped(times, INSPECTOR_CAPS.anchorResultsPerSecond)).toBe(0);
   });
@@ -95,11 +101,13 @@ describe("QA G2 fix pass: result messages vs the embedder's 8/s window, long run
       const b = h.doc.querySelector("button");
       if (t % 100 === 0 && b) b.textContent = (t / 100) % 2 ? "Buy now" : "Zzzz";
     });
+    await run(h, 2000, INSPECT_CHANNEL.anchorResults, times); // the page goes quiet: the pass after the last flip needs its 250 ms debounce
     const burst = (i: number) => -(times[i]! % 400);          // every 400 ms window of arrivals collapses to its start
     expect(dropped(times, INSPECTOR_CAPS.anchorResultsPerSecond, burst)).toBeLessThanOrEqual(Math.ceil(times.length / 8));
     expect(lastResults(h)!.results[0]!.agrees).toBe(h.doc.querySelector("button")!.textContent === "Buy now");
   });
 
+  // Design: a dropped message self-heals "within about a second": the re-assertion interval is 1 s, plus the 150 ms result spacing.
   it("a dropped (lost) results message is repeated within ~1.2 s with the latest state", async () => {
     const h = fresh();
     setAnchors(h, [q()]);
@@ -154,7 +162,9 @@ describe("QA G2 fix pass: rect reports vs the 120/s window", () => {
       const last = h.last(INSPECT_CHANNEL.anchorRects)!.payload.rects[0].rect;
       expect(last.y).toBe(y);               // healed by the re-assertion within the quiet period
       if (hz === 60) expect(drops).toBe(0);
-      else expect(drops).toBeLessThanOrEqual(12); // at most about one per second at 120 Hz
+      // At 120 Hz the guest sends one rects message per frame, which IS the embedder's 120/s limit, plus the 1 s re-assertion's extra one: expect
+      // the embedder to shed about 1 to 2 per second (intermediate scroll positions; the last position heals within a second, asserted above).
+      else expect(drops).toBeLessThanOrEqual(20);
     });
   }
 });
@@ -174,19 +184,30 @@ describe("QA G2 fix pass: route re-check (QA-G2-5)", () => {
     expect(lastResults(h)!.results[0]!.match).toBe("selector");
   });
 
-  it("a redacted artifact re-checks by path only: a hash replaceState does not trigger a pass", async () => {
-    const h = fresh();
+  it("a redacted artifact re-checks by path only: a hash replaceState does not start a pass", async () => {
+    const { h, calls } = spied();
     setAnchors(h, [q({ route: "/page.html", textAnchor: { tag: "button", text: "" } })], true);
-    const times: number[] = [];
-    await run(h, 800, INSPECT_CHANNEL.anchorResults, times);
-    const passes = () => h.all(INSPECT_CHANNEL.anchorResults).length;
-    const before = passes();
+    await run(h, 800, INSPECT_CHANNEL.anchorResults, []);
+    calls.length = 0;
     h.win.history.replaceState({}, "", "/page.html#/note/Secret");
-    await run(h, 3000, INSPECT_CHANNEL.anchorResults, times);
+    await run(h, 3000, INSPECT_CHANNEL.anchorResults, []);
     expect(lastResults(h)!.results[0]!.match).toBe("selector");
-    expect(passes() - before).toBeLessThanOrEqual(3); // only the 1 s identical-results re-sends
+    expect(calls).toEqual([]);
   });
 });
+
+/** A harness whose querySelectorAll spy is installed BEFORE the guest starts (the guest captures natives at start). */
+function spied(html = PAGE) {
+  epochCounter = 0;
+  const h = boot(html, { start: false });
+  const calls: Array<{ selector: string; at: number }> = [];
+  const real = h.win.Document.prototype.querySelectorAll;
+  h.win.Document.prototype.querySelectorAll = function (this: Document, selector: string) { calls.push({ selector, at: h.now() }); return real.call(this, selector); } as typeof real;
+  h.start();
+  const b = h.doc.querySelector("button");
+  if (b) h.setRect(b, R);
+  return { h, calls: calls as unknown as string[] & Array<{ selector: string; at: number }>, raw: calls };
+}
 
 describe("QA G2 fix pass: clamp (A2)", () => {
   const cases: Array<[string, { x: number; y: number; width: number; height: number }, { x: number; y: number; width: number; height: number }]> = [
@@ -208,13 +229,17 @@ describe("QA G2 fix pass: clamp (A2)", () => {
     if (rects) expect(Math.abs(rects.x)).toBeLessThanOrEqual(1e6);
   });
 
-  it("a huge element that really covers the viewport is still reported visible (Info if not: clamping moves its edges)", async () => {
+  // BUG QA-G2-7 (Info): visibility is computed from the CLAMPED rect, so an element 1e7 px wide that really covers the viewport
+  // (x -5e6) is clamped to x -1e6, width 1e6 (right edge 0) and reported visible:false. Fix in artifact-inspector-anchors.ts placed()/measure():
+  // compute intersectsViewport from deps.rectOf(el) (unclamped) and clamp only what is sent. Remove .fails when fixed.
+  it.fails("BUG: a huge element that really covers the viewport is reported visible", async () => {
     const h = fresh();
     h.setRect(h.doc.querySelector("button")!, { x: -5e6, y: -5e6, width: 1e7, height: 1e7 });
     setAnchors(h, [q()]);
     await run(h, 400, INSPECT_CHANNEL.anchorResults, []);
     console.log("QA-G2 giant overlay visible=" + lastResults(h)!.results[0]!.visible + " rect=" + JSON.stringify(lastResults(h)!.results[0]!.rect));
     expect(lastResults(h)!.results[0]!.match).toBe("selector");
+    expect(lastResults(h)!.results[0]!.visible).toBe(true);
   });
 });
 
@@ -254,16 +279,41 @@ describe("QA G2 fix pass: truncated text index (A1)", () => {
   });
 });
 
-describe("QA G2 fix pass: reassert interplay", () => {
-  it("re-assertion resends results and rects at most once a second each and does not start a pass when nothing changed", async () => {
-    const h = fresh();
-    const calls: string[] = [];
+describe("QA G2 fix pass: reassert interplay and spacing", () => {
+  it("steady state: the re-assertion starts no resolve pass when nothing changed", async () => {
+    const { h, raw } = spied();
     setAnchors(h, [q()]);
     await run(h, 500, INSPECT_CHANNEL.anchorResults, []);
-    const realQsa = h.win.Document.prototype.querySelectorAll;
-    h.win.Document.prototype.querySelectorAll = function (this: Document, s: string) { calls.push(s); return realQsa.call(this, s); } as typeof realQsa;
+    raw.length = 0;
     await run(h, 5000, INSPECT_CHANNEL.anchorResults, []);
-    expect(calls).toEqual([]);
+    expect(raw).toEqual([]);
+  });
+
+  it("F1: a re-assertion right after a pass-completion send is held back so two results are never closer than 150 ms", async () => {
+    const h = fresh();
+    setAnchors(h, [q()]);
+    const times: number[] = [];
+    await run(h, 60, INSPECT_CHANNEL.anchorResults, times); // the first results went out within the first frames
+    expect(times).toHaveLength(1);
+    h.tick(); h.flush(1); await settle();                    // the 1 s re-assertion fires 'now', a few ms after that send
+    expect(h.all(INSPECT_CHANNEL.anchorResults)).toHaveLength(1); // held back, not sent immediately
+    await run(h, 400, INSPECT_CHANNEL.anchorResults, times);
+    expect(times).toHaveLength(2);
+    // literals on purpose: 150 ms spacing is what keeps any 1 s window at 7 results, under the embedder's 8
+    expect(times[1]! - times[0]!).toBeGreaterThanOrEqual(150);
+    expect(times[1]! - times[0]!).toBeLessThanOrEqual(170);
+    expect(Math.ceil(1000 / INSPECTOR_CAPS.anchorResultsSpacingMillis)).toBeLessThanOrEqual(INSPECTOR_CAPS.anchorResultsPerSecond - 1);
+  });
+
+  it("F4: passes started by the immediate triggers (hash flips) are at least 250 ms apart", async () => {
+    const { h, raw } = spied();
+    setAnchors(h, [q()]);
+    await run(h, 400, INSPECT_CHANNEL.anchorResults, []);
+    raw.length = 0;
+    await run(h, 5000, INSPECT_CHANNEL.anchorResults, [], (t) => { if (t % 20 === 0) { h.win.location.hash = (t / 20) % 2 ? "#frag" : "#other"; h.fire("hashchange", {}, h.win as never); } });
+    const starts = raw.map((c) => c.at).filter((t, i, all) => i === 0 || t - all[i - 1]! > 5); // one start per pass (a pass makes one query here)
+    expect(starts.length).toBeGreaterThan(5);
+    for (let i = 1; i < starts.length; i++) expect(starts[i]! - starts[i - 1]!, `pass ${i}`).toBeGreaterThanOrEqual(250);
   });
 
   it("an anchors message mid-throttle cancels the pending trailing send of the old epoch", async () => {
@@ -278,5 +328,101 @@ describe("QA G2 fix pass: reassert interplay", () => {
     expect(Math.max(...epochs)).toBe(e1);
     expect(e2).toBeGreaterThan(e1);
     expect(epochs.filter((e) => e === e2)).toEqual([]);
+  });
+});
+
+describe("QA G2 fix pass: generator and grammar agree for custom elements (QA-G2-2)", () => {
+  it("elements with non-ASCII or underscore names keep an EXACT selector hit through the tracker, not a fallback", async () => {
+    const h = fresh(`<body><x-f\u00f6\u00f6 class="u1">one</x-f\u00f6\u00f6><x-f\u00f6\u00f6 class="a">two</x-f\u00f6\u00f6><my_el class="c">three</my_el></body>`);
+    const picked: Array<{ selector: string; alternates: string[]; tag: string; textAnchor: any; route: string; landmark: string | null }> = [];
+    for (const el of [...h.doc.body.querySelectorAll("*")]) {
+      h.deliver(INSPECT_CHANNEL.mode, { mode: "pick", redactText: false });
+      h.pointAt(el); h.sent.length = 0; h.fire("click", { clientX: 1, clientY: 1, button: 0 }, el); h.flush(3);
+      const m = h.last(INSPECT_CHANNEL.select)!.payload;
+      picked.push({ selector: m.selector, alternates: m.selectorAlternates, tag: m.tag, textAnchor: m.textAnchor, route: m.route, landmark: m.landmark });
+    }
+    expect(picked).toHaveLength(3);
+    for (const p of picked) expect(p.selector, "a primary selector must exist").not.toBe("");
+    h.sent.length = 0;
+    setAnchors(h, picked.map((p, i) => ({ key: `a${i}`, route: p.route, tag: p.tag, selector: p.selector, alternates: p.alternates, textAnchor: p.textAnchor, landmark: p.landmark })));
+    await run(h, 600, INSPECT_CHANNEL.anchorResults, []);
+    expect(lastResults(h)!.results.map((r) => [r.match, r.agrees])).toEqual([["selector", true], ["selector", true], ["selector", true]]);
+  });
+});
+
+describe("QA G2 fix pass: advisories from review (BUG: tests, src fixes needed)", () => {
+  // BUG QA-G2-8: rect messages have no spacing and no trailing send. On a >120 Hz display (or with jitter) the guest sends more than
+  // the embedder's 120/s window accepts, so the embedder sheds intermediate AND possibly the final rect; the pin is stale until the
+  // 1 s re-assertion. Fix: space rects (>= 9 ms) with a trailing send of the latest, like the results. Remove .fails when fixed.
+  it.fails("BUG: at 144 Hz the guest never sends more than 120 rects messages in any 1 s window", async () => {
+    const h = fresh();
+    setAnchors(h, [q()]);
+    await run(h, 600, INSPECT_CHANNEL.anchorRects, []);
+    const times: number[] = [];
+    const frame = 1000 / 144;
+    let y = 0;
+    let seen = h.all(INSPECT_CHANNEL.anchorRects).length;
+    for (let f = 0; f < 144 * 5; f++) {
+      y += 3;
+      h.setRect(h.doc.querySelector("button")!, { ...R, y });
+      h.fire("scroll", {}, h.win as never);
+      h.advance(frame);
+      h.flush(1);
+      const now = h.all(INSPECT_CHANNEL.anchorRects).length;
+      for (let i = seen; i < now; i++) times.push(h.now());
+      seen = now;
+    }
+    expect(maxInAnyWindow(times)).toBeLessThanOrEqual(INSPECTOR_CAPS.anchorRectsPerSecond);
+  });
+
+  it("at 120 Hz (rAF-coalesced, the re-assertion inside a scroll frame) the guest stays within the 120/s window", async () => {
+    const h = fresh();
+    setAnchors(h, [q()]);
+    await run(h, 600, INSPECT_CHANNEL.anchorRects, []);
+    const times: number[] = [];
+    let y = 0;
+    let seen = h.all(INSPECT_CHANNEL.anchorRects).length;
+    for (let f = 0; f < 120 * 8; f++) {
+      y += 3;
+      h.setRect(h.doc.querySelector("button")!, { ...R, y });
+      if (f % 120 === 119) h.tick();             // the interval fires inside the frame; its measure coalesces with the scroll's
+      h.fire("scroll", {}, h.win as never);
+      h.advance(1000 / 120);
+      h.flush(1);
+      const now = h.all(INSPECT_CHANNEL.anchorRects).length;
+      for (let i = seen; i < now; i++) times.push(Math.round(h.now()));
+      seen = now;
+    }
+    expect(maxInAnyWindow(times)).toBeLessThanOrEqual(INSPECTOR_CAPS.anchorRectsPerSecond);
+    expect(dropped(times, INSPECTOR_CAPS.anchorRectsPerSecond)).toBe(0);
+  });
+
+  // BUG QA-G2-9 (defense in depth, unreachable today because the guest's own rectOf maps NaN to 0): the tracker's clamp passes NaN
+  // through (Math.min/Math.max propagate it), and one NaN rect makes the embedder drop the whole message. Fix: clamp(v) = Number.isFinite(v) ? ... : 0.
+  it.fails("BUG: the tracker's clamp turns a NaN rect from its dependency into a finite number", () => {
+    const h = fresh();
+    const sent: Array<{ channel: string; payload: any }> = [];
+    const frames: Array<() => void> = [];
+    const tracker = createAnchorTracker({
+      win: h.win, doc: h.doc, send: (channel, payload) => sent.push({ channel, payload }), now: () => 1000,
+      requestFrame: (cb) => frames.push(cb), setInterval: () => 1, clearInterval: () => {}, setTimeout: () => 1, clearTimeout: () => {},
+      addListener: () => {}, removeListener: () => {},
+      queryAll: (sel) => h.doc.querySelectorAll(sel), elementsByTag: (t) => h.doc.getElementsByTagName(t),
+      rectOf: () => ({ x: Number.NaN, y: 0, width: Number.NaN, height: 5 }),
+      textOf: (el) => (el.textContent ?? "").trim(), tagOf: (el) => el.localName, isElement: (v): v is Element => typeof v === "object" && v !== null && (v as Node).nodeType === 1,
+      isGuestHost: () => false, attachShadow: (el, init) => el.attachShadow(init), scrollIntoView: undefined,
+    });
+    tracker.onAnchors({ epoch: 1, redactText: false, anchors: [q()] });
+    for (let i = 0; i < 5; i++) { const run = frames.splice(0); for (const f of run) f(); }
+    const rect = sent.find((m) => m.channel === INSPECT_CHANNEL.anchorResults)!.payload.results[0].rect;
+    expect(Number.isFinite(rect.x) && Number.isFinite(rect.width)).toBe(true);
+    tracker.dispose();
+  });
+
+  // BUG QA-G2-10 (Low): the generator's data-testid limit is a literal 128 in artifact-inspector-guest.ts, duplicating
+  // INSPECTOR_CAPS.anchorAttributeValueUnits, so the two can drift apart again (that was QA-G2-1). Fix: use the constant.
+  it.fails("BUG: the generator's data-testid length limit comes from INSPECTOR_CAPS.anchorAttributeValueUnits, not a literal", () => {
+    const src = fs.readFileSync(path.join(__dirname, "..", "..", "src", "main", "artifact-inspector-guest.ts"), "utf8");
+    expect(src).not.toMatch(/value\.length <= 128/);
   });
 });

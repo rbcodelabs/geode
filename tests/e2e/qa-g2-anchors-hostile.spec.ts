@@ -138,6 +138,35 @@ test.describe("QA G2 hostile page", () => {
     } finally { await s.cleanup(); }
   });
 
+  // The perf spec's scroll-run assertion counts messages AFTER the embedder gate (the probe callbacks), so it can never see a guest that
+  // oversends. This counts the raw ipc-message events the webview receives from the guest, before any gate.
+  test("scroll every frame with 100 anchors: what the GUEST sends per second stays inside the embedder windows (raw ipc count)", async () => {
+    const s = await session(anchorPerfArtifact(5000));
+    try {
+      await expect.poll(() => guestEval(s.window, `document.querySelectorAll("div.row").length`), { timeout: 60_000 }).toBe(5000);
+      const r = await route(s.window);
+      const sent = await set(s.window, Array.from({ length: 100 }, (_, k) => query(`a${k}`, r, { selector: `#r${(k * 37 + 11) % 5000}`, textAnchor: { tag: "div", text: "" } })));
+      await waitEpoch(s.window, sent.epoch);
+      await s.window.evaluate(() => {
+        const view = (window as any).app.workspace.getLeavesOfType("geode-artifact")[0].view;
+        const frame = view.containerEl.querySelector("webview");
+        const log: Array<{ c: string; t: number }> = ((window as any).__raw = []);
+        frame.addEventListener("ipc-message", (e: any) => { if (String(e.channel).includes("anchor-")) log.push({ c: String(e.channel).split(":").pop()!, t: performance.now() }); });
+      });
+      await guestEval(s.window, `window.__perf.start(); (() => { let y = 0; const step = () => { if (!window.__perf.running) return; y += 7; window.scrollTo(0, y % 20000); requestAnimationFrame(step); }; requestAnimationFrame(step); })()`);
+      await s.window.waitForTimeout(4000);
+      const deltas = await guestEval<number[]>(s.window, `window.__perf.stop()`);
+      await s.window.waitForTimeout(1500);
+      const raw = await s.window.evaluate(() => (window as any).__raw as Array<{ c: string; t: number }>);
+      const worst = (c: string) => { const ts = raw.filter((x) => x.c === c).map((x) => x.t); let best = 0; for (let i = 0; i < ts.length; i++) { let n = 0; for (let j = i; j < ts.length && ts[j]! - ts[i]! < 1000; j++) n++; best = Math.max(best, n); } return best; };
+      const summary = { frames: deltas.length, rectsTotal: raw.filter((x) => x.c === "anchor-rects").length, rectsWorstWindow: worst("anchor-rects"), resultsWorstWindow: worst("anchor-results") };
+      console.log("QA-G2 raw guest sends " + JSON.stringify(summary));
+      expect(summary.rectsTotal).toBeGreaterThan(20);
+      expect(summary.rectsWorstWindow).toBeLessThanOrEqual(120);
+      expect(summary.resultsWorstWindow).toBeLessThanOrEqual(7);
+    } finally { await s.cleanup(); }
+  });
+
   test("reserved directory: comments.json and variants are never served to the page over the real protocol", async () => {
     const s = await session(ANCHORS_ARTIFACT, {
       prepare: (root) => {
