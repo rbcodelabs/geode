@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createPinsCoordinator, type PinsUi } from "../../src/renderer/artifacts/pins-coordinator";
 import { ArtifactFeedbackService } from "../../src/renderer/artifacts/feedback-registry";
+import { PinsUiStateHolder } from "../../src/renderer/artifacts/pins-ui-state";
 import { buildRailView, cutByCodePoints, pinAccessibleName } from "../../src/renderer/artifacts/rail-model";
 import type { PinBadgeView } from "../../src/renderer/artifacts/pin-overlay";
 import type { RailView } from "../../src/renderer/artifacts/rail-model";
@@ -126,23 +127,56 @@ describe("notices Geode words itself", () => {
   });
 });
 
-describe("a reloaded handler keeps the rail state and the Retry (same requestId)", () => {
-  it("clientChanged re-subscribes the new client and the timed-out click is retried with its own id", async () => {
+describe("a plugin reload keeps the UI state (exportUi / restoreUi) and the Retry requestId", () => {
+  it("a new coordinator restored from the old one's state retries the timed-out click with its own id", async () => {
     const r = rig(snapshot([comment(1), comment(2)]));
     r.client.sendBatch.mockResolvedValueOnce(rej("failed", "No response from Design in 15 s.") as never);
     await r.coordinator.start();
     r.coordinator.setFilter("open");
+    r.coordinator.toggleSelect(idOf(2), false);
     await r.coordinator.sendSelected();
-    expect(r.lastRail().retry).toBe(true);
+    const state = r.coordinator.exportUi();
+    expect(state).toMatchObject({ filter: "open", lastSend: { ids: [idOf(1)] } });
     const first = (r.client.sendBatch.mock.calls[0]![0] as { requestId: string }).requestId;
-    const fresh = r.swapClient();
-    await r.coordinator.clientChanged();
-    expect(fresh.onDidChange).toHaveBeenCalledTimes(1);
-    expect(r.lastRail().filter).toBe("open");
-    expect(r.lastRail().retry).toBe(true);
-    await r.coordinator.retryLastSend();
-    expect((fresh.sendBatch.mock.calls[0]![0] as { requestId: string }).requestId).toBe(first);
-    expect(r.bridge.setAnchors).toHaveBeenCalledTimes(1); // pins were not torn down and re-sent
+    const r2 = rig(snapshot([comment(1), comment(2)]));
+    r2.coordinator.restoreUi(state);
+    await r2.coordinator.start();
+    expect(r2.lastRail().filter).toBe("open");
+    expect(r2.lastRail().retry).toBe(true);
+    await r2.coordinator.retryLastSend();
+    expect((r2.client.sendBatch.mock.calls[0]![0] as { requestId: string }).requestId).toBe(first);
+  });
+  it("exports no comment data", async () => {
+    const r = rig(snapshot([comment(1, { text: "SECRET" })]));
+    await r.coordinator.start();
+    expect(JSON.stringify(r.coordinator.exportUi())).not.toContain("SECRET");
+  });
+});
+
+describe("PinsUiStateHolder", () => {
+  const state = { railOpen: true, filter: "open" as const, clusterIds: null, selected: null, resultsLine: null, lastSend: { requestId: "req_" + "a".repeat(32), ids: ["x"], resend: false } };
+  it("hands the state back once to the same owner within the grace window", () => {
+    const h = new PinsUiStateHolder(10_000);
+    h.save("design", state, 1000);
+    expect(h.take("design", 9000)).toBe(state);
+    expect(h.take("design", 9001)).toBeNull(); // consumed
+  });
+  it("expires after the grace window", () => {
+    const h = new PinsUiStateHolder(10_000);
+    h.save("design", state, 1000);
+    expect(h.take("design", 11_001)).toBeNull();
+  });
+  it("discards the state when a different owner registers (and does not keep it for later)", () => {
+    const h = new PinsUiStateHolder(10_000);
+    h.save("design", state, 1000);
+    expect(h.take("other", 1500)).toBeNull();
+    expect(h.take("design", 1600)).toBeNull();
+  });
+  it("clear (the view is disposed) drops it", () => {
+    const h = new PinsUiStateHolder(10_000);
+    h.save("design", state, 1000);
+    h.clear();
+    expect(h.take("design", 1001)).toBeNull();
   });
 });
 
@@ -152,6 +186,11 @@ describe("registry routeInstance", () => {
     capabilities: { pins: true, batchSend: true, textEdit: false },
     list: async () => rej("failed"), get: async () => rej("failed"), save: async () => rej("failed"), update: async () => rej("failed"),
     remove: async () => rej("failed"), adopt: async () => rej("failed"), subscribe: () => ({ dispose() {} }), sendBatch: async () => rej("failed"),
+  });
+  it("routeOwnerId names the plugin that would receive a submission", () => {
+    const service = new ArtifactFeedbackService();
+    service.register({ pluginId: "design", displayName: "Design" }, { contractVersion: 2 as const, submit: async () => ({ status: "accepted" as const }), comments: provider() as never });
+    expect(service.routeOwnerId(target)).toBe("design");
   });
   it("is stable while the handler lives, changes when it is re-registered, and is null with no handler", () => {
     const service = new ArtifactFeedbackService();

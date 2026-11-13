@@ -26,6 +26,7 @@ import type { ArtifactCommentsClient } from "../artifacts/comments-client";
 import { CommentsRail } from "../artifacts/comments-rail";
 import { PinOverlay } from "../artifacts/pin-overlay";
 import { createPinsCoordinator, type PinsCoordinator } from "../artifacts/pins-coordinator";
+import { PinsUiStateHolder } from "../artifacts/pins-ui-state";
 import type { InspectRectMessage } from "../../artifacts/inspector-protocol";
 
 /**
@@ -122,6 +123,8 @@ export class ArtifactView implements View, ReloadableView {
   private pins: PinsCoordinator | null = null;
   private commentsClient: (ArtifactCommentsClient & { dispose(): void }) | null = null;
   private commentsRoute = "";
+  private commentsOwner = "";
+  private readonly uiHolder = new PinsUiStateHolder();
   private static nextRailId = 0;
   private focusRefreshing = false;
   /** Re-lists when the window regains focus, for the visible, active view only (a background tab does nothing), one at a time. */
@@ -491,6 +494,7 @@ export class ArtifactView implements View, ReloadableView {
     this.unsubscribeFeedback?.();
     this.unsubscribeFeedback = undefined;
     this.teardownComments();
+    this.uiHolder.clear(); // the view itself is going away: nothing is restored
     window.removeEventListener("focus", this.onWindowFocus);
     this.stageEl.removeEventListener("scroll", this.onStageScroll);
     try { this.unsubscribeActiveLeaf?.(); } catch { /* the workspace is going away */ }
@@ -582,24 +586,15 @@ export class ArtifactView implements View, ReloadableView {
     const route = available && target ? service.describeRoute(target) : null;
     const key = route && route.contractVersion === 2 ? `${route.displayName}#${target ? service.routeInstance(target) : ""}` : "";
     if (key === this.commentsRoute) return;
-    // The same plugin registered again (a reload): keep the coordinator and replace only its client.
-    const rebuildClientOnly = key !== "" && this.pins !== null && this.commentsRoute !== "" && key.split("#")[0] === this.commentsRoute.split("#")[0];
-    if (rebuildClientOnly && target && this.pins) {
-      const client = service.commentsFor(target);
-      if (client) {
-        const old = this.commentsClient;
-        this.commentsClient = client;
-        this.commentsRoute = key;
-        old?.dispose();
-        void this.pins.clientChanged();
-        return;
-      }
-    }
-    this.teardownComments();
+    this.teardownComments(true);
     this.commentsRoute = key;
     if (!key || !target || !this.bridge) { this.pick?.setPinAvailable(false); return; }
     const client = service.commentsFor(target);
     if (!client) { this.commentsRoute = ""; this.pick?.setPinAvailable(false); return; }
+    const ownerId = service.routeOwnerId(target) ?? "";
+    this.commentsOwner = ownerId;
+    // A plugin reload (dispose, then register) parks the UI state; the same owner gets it back within the grace window.
+    const restored = this.uiHolder.take(ownerId, Date.now());
     this.commentsClient = client;
     const bridge = this.bridge;
     const rail = this.railEl;
@@ -631,11 +626,13 @@ export class ArtifactView implements View, ReloadableView {
       },
     });
     this.pins = coordinator;
+    if (restored) coordinator.restoreUi(restored);
     this.layoutPins();
-    void coordinator.start();
+    void coordinator.start().then(() => { if (restored?.railOpen) void coordinator.openRail({ focus: null }); });
   }
 
-  private teardownComments(): void {
+  private teardownComments(keepUi = false): void {
+    if (keepUi && this.pins) this.uiHolder.save(this.commentsOwner, this.pins.exportUi(), Date.now());
     this.pins?.dispose();
     this.pins = null;
     this.commentsClient?.dispose();

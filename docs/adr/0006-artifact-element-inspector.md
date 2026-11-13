@@ -1491,9 +1491,11 @@ state (a v1 popover with no Pin, an empty comment, a pending or accepted submiss
 still works; everywhere outside the popover it is unchanged. The popover's Pin button works without any shortcut.
 
 **QA fixes (independent QA gate, G3).** The routed handler's registration number (`routeInstance`) lets the view tell a reloaded
-handler from an unrelated registry change: an unrelated change does nothing, a reload replaces only the comments client and keeps
-the rail, filter, selection and a pending Retry (so a timed-out send is retried with the same requestId, never re-sent under a
-fresh one). The stage scroll re-lays out the pins at once. A focused badge keeps focus across reorders; a row checkbox keeps focus
+handler from an unrelated registry change: an unrelated change does nothing, a plugin reload (the registry notifies on dispose, BEFORE the plugin registers
+again) parks the view's UI state (rail open, filter, cluster filter, selection, results line, a pending Retry with its requestId;
+never comment data) in a per-view holder for 10 s and restores it only to the SAME owner plugin id (QA-G3-12). A different
+owner, an expired state or a disposed view discards it, and the first list after the re-register is authoritative, so a
+timed-out send is retried with the same requestId, never re-sent under a fresh one. The stage scroll re-lays out the pins at once. A focused badge keeps focus across reorders; a row checkbox keeps focus
 after a toggle. A Delete or Cancel-send confirmation is tied to the row version it was opened on and is dropped when the row
 changes or stops offering the action; the action carries that version. `busy` times out at 5 s (pins then show as unconfirmed);
 the results line goes stale when a later snapshot arrives (unless Retry is offered); foreign pins are drawn hollow with a dotted ring

@@ -37,8 +37,7 @@ test("reportAnchors in the real app: nothing for an unchanged page, one state-on
 
 // BUG (QA-G3-12): the view-level "keep the coordinator, replace the client" branch is unreachable: the registry notifies on dispose,
 // before the plugin registers again, so the view tears down first. Expected to fail until the reload keeps its state (or the claim and code go).
-test("BUG: a reloaded handler (dispose then register) keeps the rail, the filter and the Retry for a timed-out send with the same requestId", async () => {
-  test.fail();
+test("a reloaded handler (dispose then register) keeps the rail, the filter and the Retry for a timed-out send with the same requestId", async () => {
   test.setTimeout(240_000);
   const s = await session(BASIC_ARTIFACT, { register: "v2", probe: false });
   const w = s.window;

@@ -206,6 +206,11 @@ export class ArtifactFeedbackService implements ArtifactFeedbackRegistry {
     return entry ? { displayName: entry.owner.displayName, contractVersion: entry.contractVersion } : null;
   }
 
+  /** The plugin id that would receive a submission for this target, or null. */
+  routeOwnerId(target: ArtifactFeedbackTarget): string | null {
+    return this.resolve(target)?.owner.pluginId ?? null;
+  }
+
   /** Which registration would receive a submission for this target (changes when that handler is reloaded), or null. */
   routeInstance(target: ArtifactFeedbackTarget): number | null {
     return this.resolve(target)?.instance ?? null;

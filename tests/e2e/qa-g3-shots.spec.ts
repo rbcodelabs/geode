@@ -11,6 +11,9 @@ async function shot(s: Session, name: string): Promise<void> {
   await s.window.waitForTimeout(700);
   const png = await s.app.evaluate(async ({ BrowserWindow }) => (await BrowserWindow.getAllWindows()[0]!.webContents.capturePage()).toPNG().toString("base64"));
   fs.writeFileSync(path.join(SHOT_DIR, `${name}.png`), Buffer.from(png, "base64"));
+  // Pixels are NOT inspected by this spec: only the capture's size is printed (the reviewer checks computed styles in qa-g3-extra).
+  const bytes = Buffer.from(png, "base64");
+  console.log(`SHOT ${name} bytes=${bytes.length} png=${bytes.readUInt32BE(16)}x${bytes.readUInt32BE(20)}`);
 }
 const badges = (w: Page): Locator => w.locator(".pin-badge");
 const rail = (w: Page): Locator => w.locator(".comments-rail");

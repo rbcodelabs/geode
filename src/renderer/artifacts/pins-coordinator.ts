@@ -23,6 +23,7 @@ import {
   type PlacedPin,
 } from "./pin-collapse";
 import type { PinBadgeView } from "./pin-overlay";
+import type { PinsUiState } from "./pins-ui-state";
 import {
   anchorStateFromResult,
   buildRailView,
@@ -104,7 +105,7 @@ export interface PinsCoordinator {
   readonly railOpen: boolean;
   start(): Promise<void>;
   refresh(): Promise<void>;
-  openRail(options?: { focus?: { readonly type: "heading" } | { readonly type: "row"; readonly id: string } }): Promise<void>;
+  openRail(options?: { focus?: { readonly type: "heading" } | { readonly type: "row"; readonly id: string } | null }): Promise<void>;
   closeRail(): void;
   toggleRail(): Promise<void>;
   escapeRail(): "cluster" | "closed" | "none";
@@ -124,8 +125,10 @@ export interface PinsCoordinator {
   adoptAll(): Promise<void>;
   pinned(selectionId: string): Promise<void>;
   focusTargetAfterPin(): { readonly type: "badge"; readonly id: string } | { readonly type: "toggle" };
-  /** The routed handler was reloaded: re-subscribe to the new client and list again, keeping the rail state and any pending Retry. */
-  clientChanged(): Promise<void>;
+  /** The UI state worth keeping across a plugin reload (never comment data). */
+  exportUi(): PinsUiState;
+  /** Restores it before `start()`; the first list after that is authoritative. */
+  restoreUi(state: PinsUiState): void;
   dispose(): void;
 }
 
@@ -457,7 +460,7 @@ export function createPinsCoordinator(deps: PinsCoordinatorDeps): PinsCoordinato
 
   // ---- the rail ----
 
-  async function openRail(options?: { focus?: { type: "heading" } | { type: "row"; id: string } }): Promise<void> {
+  async function openRail(options?: { focus?: { type: "heading" } | { type: "row"; id: string } | null }): Promise<void> {
     if (disposed || client() === null) return;
     const wasOpen = railOpen;
     railOpen = true;
@@ -467,7 +470,7 @@ export function createPinsCoordinator(deps: PinsCoordinatorDeps): PinsCoordinato
       await list();
     }
     if (disposed) return;
-    ui.focusRail(options?.focus ?? { type: "heading" });
+    if (options?.focus !== null) ui.focusRail(options?.focus ?? { type: "heading" });
   }
 
   function closeRail(): void {
@@ -678,14 +681,13 @@ export function createPinsCoordinator(deps: PinsCoordinatorDeps): PinsCoordinato
       await list();
     },
 
-    async clientChanged() {
-      if (disposed) return;
-      unsubscribeNow();
-      liveNotice = false;
-      lastReported.clear();
-      if (client() === null) { afterData(); return; }
-      subscribe();
-      await list();
+    exportUi: () => ({ railOpen, filter, clusterIds, selected: selected === null ? null : [...selected], resultsLine, lastSend }),
+    restoreUi(state) {
+      filter = state.filter;
+      clusterIds = state.clusterIds === null ? null : [...state.clusterIds];
+      selected = state.selected === null ? null : new Set(state.selected);
+      resultsLine = state.resultsLine;
+      lastSend = state.lastSend;
     },
 
     async pinned(selectionId) {
