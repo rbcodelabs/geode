@@ -4,6 +4,7 @@ import { INSPECTOR_SCREENSHOT } from "../../artifacts/inspector-protocol";
 import type { PickState } from "./pick-controller";
 import type { InspectHoverMessage } from "../../artifacts/inspector-protocol";
 import type { SelectionSnapshot } from "../views/artifact-inspector-bridge";
+import { cutByCodePoints } from "./rail-model";
 
 /**
  * The comment popover (ADR 0006 D8): plain embedder DOM, non-modal, rendered from
@@ -91,6 +92,8 @@ export function hoverChipText(hover: InspectHoverMessage): string {
 export interface PopoverCallbacks {
   onComment(text: string): void;
   onSend(): void;
+  /** Phase 2b-i: save the comment as a pin (Pin button, Cmd/Ctrl+Shift+Enter). Absent for a host that cannot pin. */
+  onPin?(): void;
   onCancel(): void;
   onDone(): void;
   onEscape(): void;
@@ -123,8 +126,9 @@ export function popoverPosition(
 export function popoverStatus(state: PickState, displayName: string, extra?: { offscreen?: boolean }): { text: string; alert: boolean } {
   let text = "";
   let alert = false;
-  if (state.submit === "pending") text = `Sending to ${displayName}…`;
-  else if (state.submit === "accepted") text = state.outcome?.message || "Sent.";
+  const pinning = state.action === "pin";
+  if (state.submit === "pending") text = pinning ? `Pinning to ${displayName}…` : `Sending to ${displayName}…`;
+  else if (state.submit === "accepted") text = state.outcome?.message || (pinning ? "Pinned." : "Sent.");
   else if (state.handlerGone && state.submit === "rejected" && state.outcome?.source === "disposed") {
     // Disposed while the send was in flight: show the registry's neutral message, not "cannot be sent".
     text = state.outcome.message ?? "";
@@ -191,10 +195,12 @@ export class PickPopover {
   private readonly statusIcon: HTMLElement;
   private readonly statusLine: HTMLElement;
   private readonly send: HTMLButtonElement;
+  private readonly pin: HTMLButtonElement;
   private readonly cancel: HTMLButtonElement;
   private readonly repick: HTMLButtonElement;
   private readonly done: HTMLButtonElement;
   private renderedComment = "";
+  private readonly onWindowKeydown: (event: KeyboardEvent) => void;
 
   constructor(private readonly doc: Document, private readonly callbacks: PopoverCallbacks) {
     const make = <K extends keyof HTMLElementTagNameMap>(tag: K, className?: string): HTMLElementTagNameMap[K] => {
@@ -235,6 +241,9 @@ export class PickPopover {
     this.cancel.textContent = "Cancel";
     this.send = make("button", "mod-cta pick-popover-send");
     this.send.type = "button";
+    this.pin = make("button", "pick-popover-pin");
+    this.pin.type = "button";
+    this.pin.hidden = true;
     this.repick = make("button", "mod-cta pick-popover-repick");
     this.repick.type = "button";
     this.repick.textContent = "Pick again";
@@ -243,7 +252,7 @@ export class PickPopover {
     this.done.type = "button";
     this.done.textContent = "Done";
     // DOM order is tab order (primary first); CSS lays the row out reversed.
-    actions.append(this.repick, this.send, this.cancel, this.done);
+    actions.append(this.repick, this.send, this.pin, this.cancel, this.done);
 
     this.el.append(this.heading, this.target, this.area, details, this.statusLine, actions);
 
@@ -252,11 +261,25 @@ export class PickPopover {
       this.callbacks.onComment(this.area.value);
     });
     this.area.addEventListener("keydown", (event) => {
-      if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+      // Cmd/Ctrl+Enter sends (design 3.7). Cmd/Ctrl+Shift+Enter (Pin) is taken earlier, by the window capture listener below.
+      if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && !event.shiftKey) {
         event.preventDefault();
         if (!this.send.disabled && !this.send.hidden) this.callbacks.onSend();
       }
     });
+    // Mod+Shift+Enter is also the global "Toggle focus on active pane" command, which the app dispatches from a document
+    // capture listener. While focus is inside this popover AND Pin can actually fire, the combo is Pin (design 3.7, A4
+    // collision check): a window capture listener runs first and keeps the global command from also firing. In every other
+    // state (v1 handler, empty comment, pending, accepted) the event is left alone, so the global command still works.
+    this.onWindowKeydown = (event) => {
+      if (event.key !== "Enter" || !event.shiftKey || event.altKey || !(event.metaKey || event.ctrlKey)) return;
+      if (event.isComposing || !this.el.contains(event.target as Node)) return;
+      if (this.pin.disabled || this.pin.hidden) return;
+      event.preventDefault();
+      event.stopPropagation();
+      this.callbacks.onPin?.();
+    };
+    doc.defaultView?.addEventListener("keydown", this.onWindowKeydown, true);
     // Esc anywhere in the popover is the user's, not the page's.
     this.el.addEventListener("keydown", (event) => {
       if (event.key !== "Escape") return;
@@ -267,6 +290,7 @@ export class PickPopover {
       this.callbacks.onEscape();
     });
     this.send.addEventListener("click", () => this.callbacks.onSend());
+    this.pin.addEventListener("click", () => this.callbacks.onPin?.());
     this.cancel.addEventListener("click", () => this.callbacks.onCancel());
     this.done.addEventListener("click", () => this.callbacks.onDone());
     this.repick.addEventListener("click", () => this.callbacks.onRepick());
@@ -315,11 +339,20 @@ export class PickPopover {
     this.send.hidden = accepted || gone; // in the gone state "Pick again" replaces Send
     this.cancel.hidden = accepted;
     this.done.hidden = !accepted;
-    this.send.textContent = pending ? "Sending…" : state.submit === "rejected" ? "Retry" : "Send";
-    this.send.disabled = pending || state.handlerGone || state.elementGone || state.comment.trim().length === 0;
+    const lastPin = state.action === "pin";
+    this.send.textContent = pending && !lastPin ? "Sending…" : state.submit === "rejected" && !lastPin ? "Retry" : "Send";
+    const empty = state.comment.trim().length === 0;
+    this.send.disabled = pending || state.handlerGone || state.elementGone || empty;
+    this.pin.hidden = accepted || gone || state.pinAvailable !== true;
+    // A hidden Pin button carries no text at all, so a popover for a v1 handler has no Pin anywhere in its content.
+    this.pin.textContent = this.pin.hidden ? "" : pending && lastPin ? "Pinning…" : state.submit === "rejected" && lastPin ? "Retry pin" : "Pin";
+    this.pin.disabled = pending || state.handlerGone || state.elementGone || empty;
     this.cancel.disabled = pending;
     if (gone && !wasGone && focusWasInside) this.repick.focus();
   }
+
+  /** Removes the window-level listener; the view calls it when the popover is discarded. */
+  dispose(): void { this.doc.defaultView?.removeEventListener("keydown", this.onWindowKeydown, true); }
 
   focusComment(): void { this.area.focus(); }
   focusDone(): void { this.done.focus(); }
@@ -329,5 +362,5 @@ export class PickPopover {
 function describeTarget(snapshot: SelectionSnapshot): string {
   const s = snapshot.selection;
   const label = s.a11y.name || s.textAnchor.text || s.landmark || "";
-  return label ? `“${label.slice(0, 60)}” · ${s.selector || s.tag}` : s.selector || s.tag;
+  return label ? `“${cutByCodePoints(label, 60)}” · ${s.selector || s.tag}` : s.selector || s.tag;
 }

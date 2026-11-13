@@ -8,7 +8,7 @@ export const repoRoot = path.resolve(__dirname, "..", "..", "..");
 
 export interface Session { app: ElectronApplication; window: Page; env: E2eEnv; root: string; cleanup(): Promise<void> }
 
-export async function session(spec: ArtifactSpec, options: { size?: [number, number]; prepare?: (root: string) => void } = {}): Promise<Session> {
+export async function session(spec: ArtifactSpec, options: { size?: [number, number]; prepare?: (root: string) => void; /** The probe handler to register (default v1, the contract the G2 specs were written against). */ register?: "v1" | "v2"; /** false: leave the view's own anchor callbacks in place (the pins UI needs them); the G2 probe replaces them. */ probe?: boolean } = {}): Promise<Session> {
   const env = makeEnv("geode-anchors-");
   const root = path.join(env.temp, "artifact");
   writeStaticArtifact(root, spec);
@@ -24,11 +24,11 @@ export async function session(spec: ArtifactSpec, options: { size?: [number, num
     for (const sidebar of [a.workspace.leftSidebar, a.workspace.rightSidebar]) if (!sidebar.collapsed) sidebar.toggle();
   });
   await expect.poll(() => window.evaluate(() => typeof (window as any).__feedbackProbe?.register), { timeout: 30_000 }).toBe("function");
-  expect(await window.evaluate(() => (window as any).__feedbackProbe.register())).toBe("registered");
+  expect(await window.evaluate((v) => (window as any).__feedbackProbe[v === "v2" ? "registerV2" : "register"](), options.register ?? "v1")).toBe("registered");
   await window.evaluate((r) => (window as any).app.openArtifact(r), root);
   await expect(window.locator(".artifact-view-frame")).toBeVisible();
   await expect(window.locator(".artifact-view-pick-btn")).toBeVisible();
-  await expect.poll(() => installProbe(window), { timeout: 30_000 }).toBe(true);
+  if (options.probe !== false) await expect.poll(() => installProbe(window), { timeout: 30_000 }).toBe(true);
   return { app, window, env, root, cleanup: async () => { await app.close().catch(() => {}); fs.rmSync(env.temp, { recursive: true, force: true }); } };
 }
 

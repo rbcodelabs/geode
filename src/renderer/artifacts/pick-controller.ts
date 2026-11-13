@@ -15,13 +15,20 @@ import type { SelectionSnapshot } from "../views/artifact-inspector-bridge";
  */
 export type PickPhase = "off" | "pick" | "popover";
 export type PopoverSubmitState = "idle" | "pending" | "accepted" | "rejected";
-export type FocusTarget = "toggle" | "guest" | "comment" | "done";
+/** "pins" (Phase 2b-i): after a saved pin, the pin layer's new badge when it is placed, else the toggle; the view decides. */
+export type FocusTarget = "toggle" | "guest" | "comment" | "done" | "pins";
+/** Which popover action the current submit state belongs to. */
+export type PickAction = "send" | "pin";
 /** Which element held focus when the user picked; where focus returns when the popover is cancelled. */
 export type FocusOrigin = "toggle" | "guest";
 
 export interface PickState {
   readonly phase: PickPhase;
   readonly submit: PopoverSubmitState;
+  /** The action the submit state describes (Retry applies to this one). */
+  readonly action: PickAction;
+  /** The routed handler is v2 and its provider answers list: the popover offers Pin (v1 handlers never do). */
+  readonly pinAvailable: boolean;
   readonly snapshot: SelectionSnapshot | null;
   readonly comment: string;
   readonly outcome: ArtifactFeedbackOutcome | null;
@@ -36,11 +43,13 @@ export interface PickState {
 export interface PickControllerHost {
   setGuestMode(mode: "pick" | "off"): void;
   submit(snapshot: SelectionSnapshot, comment: string): Promise<ArtifactFeedbackOutcome>;
+  /** Phase 2b-i: save the comment as a pin instead of sending it. Absent on a host that cannot pin. */
+  pin?(snapshot: SelectionSnapshot, comment: string): Promise<ArtifactFeedbackOutcome>;
   focus(target: FocusTarget): void;
   changed(state: PickState): void;
 }
 
-const IDLE: PickState = { phase: "off", submit: "idle", snapshot: null, comment: "", outcome: null, stale: false, handlerGone: false, elementGone: false };
+const IDLE: PickState = { phase: "off", submit: "idle", action: "send", pinAvailable: false, snapshot: null, comment: "", outcome: null, stale: false, handlerGone: false, elementGone: false };
 
 export class PickController {
   private current: PickState = IDLE;
@@ -64,7 +73,7 @@ export class PickController {
 
   enter(via: "pointer" | "keyboard"): void {
     if (this.disposed || this.current.phase !== "off") return;
-    this.set({ ...IDLE, phase: "pick", handlerGone: this.current.handlerGone });
+    this.set({ ...IDLE, phase: "pick", handlerGone: this.current.handlerGone, pinAvailable: this.current.pinAvailable });
     this.host.setGuestMode("pick");
     // A keyboard user must land in the page so it receives [ ] Enter Esc natively.
     if (via === "keyboard") this.host.focus("guest");
@@ -78,7 +87,7 @@ export class PickController {
     this.draft = "";
     const gone = this.pendingGone;
     this.pendingGone = false;
-    this.set({ ...IDLE, phase: "popover", snapshot, comment: draft, elementGone: gone });
+    this.set({ ...IDLE, phase: "popover", snapshot, comment: draft, elementGone: gone, pinAvailable: this.current.pinAvailable });
     this.host.focus("comment");
   }
 
@@ -101,9 +110,31 @@ export class PickController {
   send(): void {
     if (this.disposed || !this.canSend()) return;
     const snapshot = this.current.snapshot!;
+    this.begin("send", (host) => host.submit(snapshot, this.current.comment));
+  }
+
+  canPin(): boolean {
+    return this.canSend() && this.current.pinAvailable && typeof this.host.pin === "function";
+  }
+
+  /** Pin (Phase 2b-i): save the comment without sending it. Same state machine as Send; a rejection keeps the typed text. */
+  pin(): void {
+    if (this.disposed || !this.canPin()) return;
+    const snapshot = this.current.snapshot!;
+    this.begin("pin", (host) => host.pin!(snapshot, this.current.comment));
+  }
+
+  private begin(action: PickAction, run: (host: PickControllerHost) => Promise<ArtifactFeedbackOutcome>): void {
     const token = ++this.token;
-    this.set({ ...this.current, submit: "pending", outcome: null });
-    void this.host.submit(snapshot, this.current.comment).then((outcome) => {
+    this.set({ ...this.current, submit: "pending", action, outcome: null });
+    // A host that rejects (it should not) must not leave the popover pending for ever.
+    let started: Promise<ArtifactFeedbackOutcome>;
+    try { started = run(this.host); } catch (error) { started = Promise.reject(error); } // the host call itself stays synchronous
+    const settled = started.catch((error): ArtifactFeedbackOutcome => {
+      console.warn("[artifact-feedback] a popover action failed", error);
+      return { status: "rejected", reason: "failed", message: "That could not be completed.", source: "handler" };
+    });
+    void settled.then((outcome) => {
       if (this.disposed || token !== this.token || this.current.submit !== "pending") return;
       if (outcome.status === "accepted") {
         this.set({ ...this.current, submit: "accepted", outcome });
@@ -113,6 +144,12 @@ export class PickController {
       const gone = outcome.source === "disposed" || outcome.source === "no-handler";
       this.set({ ...this.current, submit: "rejected", outcome, handlerGone: this.current.handlerGone || gone });
     });
+  }
+
+  /** Whether some handler can still pin: the routed handler is v2 and its provider answers list. */
+  setPinAvailable(available: boolean): void {
+    if (this.disposed || this.current.pinAvailable === available) return;
+    this.set({ ...this.current, pinAvailable: available });
   }
 
   /** The guest says the selected element left the document (or was replaced). Keeps the typed comment. */
@@ -139,7 +176,7 @@ export class PickController {
     const origin = this.origin;
     this.token++;
     this.pendingGone = false;
-    this.set({ ...IDLE, phase: "pick", handlerGone: this.current.handlerGone });
+    this.set({ ...IDLE, phase: "pick", handlerGone: this.current.handlerGone, pinAvailable: this.current.pinAvailable });
     this.draft = draft;
     this.host.setGuestMode("pick");
     this.host.focus(origin);
@@ -154,7 +191,7 @@ export class PickController {
     this.draft = "";
     this.pendingGone = false;
     const origin = this.origin;
-    this.set({ ...IDLE, phase: "pick", handlerGone: this.current.handlerGone });
+    this.set({ ...IDLE, phase: "pick", handlerGone: this.current.handlerGone, pinAvailable: this.current.pinAvailable });
     this.host.setGuestMode("pick");
     this.host.focus(origin);
     return true;
@@ -162,7 +199,10 @@ export class PickController {
 
   /** Done after an accepted submission: single-shot, so pick mode ends. */
   done(): void {
-    if (this.current.phase === "popover" && this.current.submit !== "pending") this.exit(this.origin);
+    if (this.current.phase !== "popover" || this.current.submit === "pending") return;
+    // A saved pin hands focus to the pin layer (its new badge when placed, else the toggle); the view decides which.
+    if (this.current.submit === "accepted" && this.current.action === "pin") { this.exit(null); this.host.focus("pins"); return; }
+    this.exit(this.origin);
   }
 
   /**
@@ -216,7 +256,7 @@ export class PickController {
     this.token++;
     this.draft = "";
     this.pendingGone = false;
-    this.set({ ...IDLE, handlerGone: this.current.handlerGone });
+    this.set({ ...IDLE, handlerGone: this.current.handlerGone, pinAvailable: this.current.pinAvailable });
     this.host.setGuestMode("off");
     if (focus) this.host.focus(focus);
   }

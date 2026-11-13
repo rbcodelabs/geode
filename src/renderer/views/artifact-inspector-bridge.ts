@@ -25,6 +25,7 @@ import {
 } from "../../artifacts/inspector-protocol";
 import type { ArtifactRegistration } from "../../main/artifact-runtime";
 import { sanitizeAnchorQuery, validateAnchorRects, validateAnchorResults } from "../artifacts/anchor-validator";
+import type { ArtifactCommentsClient } from "../artifacts/comments-client";
 import { freezePlain, type ArtifactFeedbackOutcome } from "../artifacts/feedback-registry";
 import { messageWithinCap, validateGuestSelect, validateHoverMessage, validateRectMessage } from "../artifacts/selection-validator";
 
@@ -81,6 +82,8 @@ export interface ArtifactInspectorBridgeOptions {
   registration: Pick<ArtifactRegistration, "registrationId" | "artifactId" | "vault">;
   target: ArtifactFeedbackTarget;
   registry: { submit(target: ArtifactFeedbackTarget, request: ArtifactFeedbackRequest): Promise<ArtifactFeedbackOutcome> };
+  /** Phase 2b-i: the comments client of the routed v2 handler, read at call time; null for a v1 handler or none. */
+  comments?: () => ArtifactCommentsClient | null;
   /** The view's last observed runtime revision. */
   getRevision(): number;
   getViewportPreset(): ArtifactViewportPreset;
@@ -94,6 +97,8 @@ export interface ArtifactInspectorBridgeOptions {
     onAnchorResults?(message: InspectAnchorResultsMessage): void;
     /** Phase 2b-i: validated rects of the resolved anchors for the current epoch. */
     onAnchorRects?(message: InspectAnchorRectsMessage): void;
+    /** Phase 2b-i: the anchor set was (re-)sent to the guest under this epoch (a new document re-sends it); results for it are pending. */
+    onAnchorsSent?(epoch: number): void;
   };
   /** Epoch milliseconds; injectable for tests. */
   now?: () => number;
@@ -223,12 +228,52 @@ export class ArtifactInspectorBridge {
    * Retrying with the same snapshot re-uses the same selectionId. Never rejects.
    */
   async submit(snapshot: SelectionSnapshot, comment: string): Promise<ArtifactFeedbackOutcome> {
+    const built = this.buildRequest(snapshot, comment);
+    if ("outcome" in built) return built.outcome;
+    try {
+      return await this.options.registry.submit(this.options.target, built.request);
+    } catch (error) {
+      console.warn("[artifact-feedback] submit failed", error);
+      return { status: "rejected", reason: "failed", message: "The feedback could not be sent.", source: "handler" };
+    }
+  }
+
+  /**
+   * Phase 2b-i: saves the comment as a pin through the routed v2 handler's `comments.save`. The input is the same v1
+   * request Send builds (comment, selection, screenshot, stale), so pixels, redaction and validation are identical.
+   * Retrying with the same snapshot re-uses the same selectionId, which makes the save idempotent. Never rejects.
+   */
+  async pin(snapshot: SelectionSnapshot, comment: string): Promise<ArtifactFeedbackOutcome> {
+    const built = this.buildRequest(snapshot, comment);
+    if ("outcome" in built) return built.outcome;
+    const client = this.options.comments?.() ?? null;
+    if (client === null) {
+      return { status: "rejected", reason: "unavailable", message: "Pinning is not available for this artifact.", source: "no-handler" };
+    }
+    try {
+      const result = await client.save({ request: built.request });
+      if (result.status === "ok") {
+        const n = result.value.comment.ordinal;
+        return { status: "accepted", message: result.value.created ? `Pinned as comment ${n}.` : `Already pinned as comment ${n}.`, source: "handler" };
+      }
+      const reason = result.reason === "busy" ? "busy"
+        : result.reason === "invalid" || result.reason === "limit" ? "invalid"
+        : result.reason === "unavailable" || result.reason === "read-only" ? "unavailable"
+        : "failed";
+      return { status: "rejected", reason, message: result.message, source: "handler" };
+    } catch (error) {
+      console.warn("[artifact-comments] pin failed", error);
+      return { status: "rejected", reason: "failed", message: "The comment could not be pinned.", source: "handler" };
+    }
+  }
+
+  private buildRequest(snapshot: SelectionSnapshot, comment: string): { request: ArtifactFeedbackRequest } | { outcome: ArtifactFeedbackOutcome } {
     const trimmed = typeof comment === "string" ? comment.trim() : "";
     if (trimmed.length === 0 || trimmed.length > COMMENT_MAX_UNITS) {
-      return { status: "rejected", reason: "invalid", message: `Enter a comment of 1 to ${COMMENT_MAX_UNITS} characters.`, source: "invalid-result" };
+      return { outcome: { status: "rejected", reason: "invalid", message: `Enter a comment of 1 to ${COMMENT_MAX_UNITS} characters.`, source: "invalid-result" } };
     }
     if (snapshot.selection.viewSessionId !== this.options.registration.registrationId) {
-      return { status: "rejected", reason: "invalid", message: "This selection belongs to a different preview.", source: "invalid-result" };
+      return { outcome: { status: "rejected", reason: "invalid", message: "This selection belongs to a different preview.", source: "invalid-result" } };
     }
     const generation = this.generationOf.get(snapshot);
     const stale = this.options.getRevision() !== snapshot.selection.artifactRevision
@@ -244,12 +289,7 @@ export class ArtifactInspectorBridge {
       stale,
       submittedAt: new Date(this.now()).toISOString(),
     };
-    try {
-      return await this.options.registry.submit(this.options.target, request);
-    } catch (error) {
-      console.warn("[artifact-feedback] submit failed", error);
-      return { status: "rejected", reason: "failed", message: "The feedback could not be sent.", source: "handler" };
-    }
+    return { request };
   }
 
   dispose(): void {
@@ -478,6 +518,7 @@ export class ArtifactInspectorBridge {
   private sendAnchors(): void {
     // Built field by field: exactly the allowlist, nothing the embedder knows about the comments themselves.
     this.safeSend(INSPECT_CHANNEL.anchors, { epoch: this.epoch, redactText: this.redacted, anchors: this.anchorQueries });
+    try { this.options.callbacks.onAnchorsSent?.(this.epoch); } catch (error) { console.warn("[artifact-comments] onAnchorsSent listener threw", error); }
   }
 
   private safeSend(channel: string, payload: unknown): void {

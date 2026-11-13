@@ -22,7 +22,25 @@ import {
   shouldMovePopover,
 } from "../artifacts/pick-popover";
 import { createRectCoalescer, type RectCoalescer } from "../artifacts/rect-coalescer";
+import type { ArtifactCommentsClient } from "../artifacts/comments-client";
+import { CommentsRail } from "../artifacts/comments-rail";
+import { PinOverlay } from "../artifacts/pin-overlay";
+import { createPinsCoordinator, type PinsCoordinator, type PinsGeometry } from "../artifacts/pins-coordinator";
+import { PinsUiStateHolder } from "../artifacts/pins-ui-state";
 import type { InspectRectMessage } from "../../artifacts/inspector-protocol";
+import { selectionBoxToStage, type GuestViewport } from "../artifacts/pin-collapse";
+
+/**
+ * Next animation frame, or 100 ms from now when the page is not visible (a hidden or occluded window never runs
+ * animation frames, and pins must still settle). Runs the callback exactly once; returns a cancel function.
+ */
+function scheduleFrameOrTimeout(callback: () => void): () => void {
+  let done = false;
+  const run = (): void => { if (done) return; done = true; window.cancelAnimationFrame(frame); window.clearTimeout(timer); callback(); };
+  const frame = window.requestAnimationFrame(run);
+  const timer = window.setTimeout(run, 100);
+  return () => { done = true; window.cancelAnimationFrame(frame); window.clearTimeout(timer); };
+}
 
 type ViewportPreset = "desktop" | "tablet" | "mobile" | "custom" | "fill";
 interface Viewport { preset: ViewportPreset; width: number; height: number }
@@ -81,6 +99,9 @@ export class ArtifactView implements View, ReloadableView {
   /** The selected element's CURRENT viewport rect (Phase 2a), reported by the guest; null until it moves. */
   private liveRect: { x: number; y: number; width: number; height: number } | null = null;
   private liveRectFor: PickState["snapshot"] = null;
+  /** The guest viewport the live rect was measured in (S2 scale), and the one that arrived with the newest pushed rect. */
+  private liveViewport: GuestViewport | null = null;
+  private pendingViewport: GuestViewport | null = null;
   /** A selected rect that arrived after the select but before the popover opened (the screenshot await); applied on open. */
   private earlyRect: { x: number; y: number; width: number; height: number } | null = null;
   private rectCoalescer: RectCoalescer<{ x: number; y: number; width: number; height: number }> | null = null;
@@ -88,7 +109,7 @@ export class ArtifactView implements View, ReloadableView {
   private offscreen = false;
   private lastHover: InspectorHover | null = null;
   private layoutObserver: ResizeObserver | undefined;
-  private readonly onWindowResize = (): void => this.repositionPick("layout");
+  private readonly onWindowResize = (): void => { this.repositionPick("layout"); this.layoutPins(); };
   private bridge: ArtifactInspectorBridge | null = null;
   private pick: PickController | null = null;
   private popover: PickPopover | null = null;
@@ -97,6 +118,27 @@ export class ArtifactView implements View, ReloadableView {
   private handlerName = "the plugin";
   private guestLoaded = false;
   private guestLoadFailed = false;
+  // Pinned comments (Phase 2b-i, ADR 0006 Addendum 1): the pin layer, the rail and their wiring. Present only while the
+  // routed handler is v2; the wiring itself lives in pins-coordinator.ts.
+  private readonly commentsButton = document.createElement("button");
+  private readonly liveEl = document.createElement("div");
+  private readonly railEl: CommentsRail;
+  private pinLayer: PinOverlay | null = null;
+  private pins: PinsCoordinator | null = null;
+  private commentsClient: (ArtifactCommentsClient & { dispose(): void }) | null = null;
+  private commentsRoute = "";
+  private commentsOwner = "";
+  private readonly uiHolder = new PinsUiStateHolder();
+  private static nextRailId = 0;
+  private focusRefreshing = false;
+  /** Re-lists when the window regains focus, for the visible, active view only (a background tab does nothing), one at a time. */
+  private readonly onWindowFocus = (): void => {
+    if (this.containerEl.getClientRects().length === 0 || this.focusRefreshing || !this.pins) return; // not the active tab, or one is already running
+    this.focusRefreshing = true;
+    void this.pins.refresh().finally(() => { this.focusRefreshing = false; });
+  };
+  private readonly onStageScroll = (): void => this.layoutPins();
+  private unsubscribeActiveLeaf: (() => void) | undefined;
 
   constructor(private readonly app: App, private readonly leaf: WorkspaceLeaf) {
     this.containerEl.className = "artifact-view";
@@ -142,6 +184,15 @@ export class ArtifactView implements View, ReloadableView {
     // Enter/Space on the button arrive as a click with detail 0.
     this.pickButton.addEventListener("click", (event) => this.togglePick(event.detail === 0 ? "keyboard" : "pointer"));
     toolbar.append(this.pickButton);
+    this.commentsButton.className = "clickable-icon artifact-view-toolbar-btn artifact-view-comments-btn";
+    this.commentsButton.type = "button";
+    this.commentsButton.title = "Design comments";
+    this.commentsButton.setAttribute("aria-label", "Comments");
+    this.commentsButton.setAttribute("aria-expanded", "false");
+    this.commentsButton.hidden = true; // hidden until the routed handler is v2
+    setIcon(this.commentsButton, "message-square");
+    this.commentsButton.addEventListener("click", () => { void this.toggleComments(); });
+    toolbar.append(this.commentsButton);
     this.diagnosticsButton.className = "artifact-view-diagnostics-btn";
     this.diagnosticsButton.type = "button";
     this.diagnosticsButton.textContent = "Diagnostics 0";
@@ -169,8 +220,25 @@ export class ArtifactView implements View, ReloadableView {
     this.overlayEl.className = "artifact-view-overlay";
     this.selectionBoxEl.className = "artifact-view-selection-box";
     this.selectionBoxEl.hidden = true;
-    this.bodyEl.append(this.stageEl, this.overlayEl);
-    this.containerEl.append(toolbar, this.bodyEl, this.diagnosticsEl);
+    this.railEl = new CommentsRail(document, {
+      onFilter: (filter) => this.pins?.setFilter(filter),
+      onClearCluster: () => this.pins?.clearCluster(),
+      onToggleSelect: (id, selected) => this.pins?.toggleSelect(id, selected),
+      onAction: (id, action, version) => { void this.pins?.runAction(id, action, version); },
+      onSendSelected: () => { void this.pins?.sendSelected(); },
+      onResolveSent: () => { void this.pins?.resolveSent(); },
+      onAdoptAll: () => { void this.pins?.adoptAll(); },
+      onRetry: () => { void this.pins?.retryLastSend(); },
+      onClose: () => { this.pins?.closeRail(); this.commentsButton.focus(); },
+    });
+    this.railEl.el.id = `artifact-comments-rail-${++ArtifactView.nextRailId}`;
+    this.railEl.el.hidden = true;
+    this.commentsButton.setAttribute("aria-controls", this.railEl.el.id);
+    this.liveEl.className = "artifact-view-live";
+    this.liveEl.setAttribute("role", "status");
+    this.liveEl.setAttribute("aria-live", "polite");
+    this.bodyEl.append(this.stageEl, this.railEl.el, this.overlayEl);
+    this.containerEl.append(toolbar, this.bodyEl, this.diagnosticsEl, this.liveEl);
     this.containerEl.addEventListener("keydown", (event) => this.onContainerKeydown(event));
   }
 
@@ -351,6 +419,7 @@ export class ArtifactView implements View, ReloadableView {
       registration,
       target,
       registry,
+      comments: () => this.commentsClient,
       getRevision: () => this.revision,
       getViewportPreset: () => this.viewport?.preset ?? "fill",
       callbacks: {
@@ -358,17 +427,26 @@ export class ArtifactView implements View, ReloadableView {
         onSelect: (snapshot) => this.pick?.selected(snapshot, document.activeElement === frame ? "guest" : "toggle"),
         onCancel: () => { this.pick?.cancelFromGuest(); },
         onRect: (report) => this.onGuestRect(report),
+        onAnchorResults: (message) => this.pins?.onAnchorResults(message),
+        onAnchorRects: (message) => this.pins?.onAnchorRects(message),
+        onAnchorsSent: (epoch) => this.pins?.onAnchorsSent(epoch),
       },
     });
     const controller = new PickController({
       setGuestMode: (mode) => bridge.setMode(mode),
       submit: (snapshot, comment) => bridge.submit(snapshot, comment),
+      pin: async (snapshot, comment) => {
+        const outcome = await bridge.pin(snapshot, comment);
+        if (outcome.status === "accepted") await this.pins?.pinned(snapshot.selection.selectionId);
+        return outcome;
+      },
       focus: (where) => this.focusPick(where),
       changed: (state) => this.renderPick(state),
     });
     const popover = new PickPopover(document, {
       onComment: (text) => controller.setComment(text),
       onSend: () => controller.send(),
+      onPin: () => controller.pin(),
       onCancel: () => { controller.cancel(); },
       onDone: () => controller.done(),
       onEscape: () => { controller.escape(); },
@@ -377,25 +455,36 @@ export class ArtifactView implements View, ReloadableView {
     popover.el.hidden = true;
     // The popover lives on document.body (fixed position), not in the pane: in a very narrow pane it must be free to use
     // the window, and the pane clips and contains anything inside it. It is hidden whenever this view is not showing.
-    this.overlayEl.replaceChildren(this.selectionBoxEl);
+    const pinLayer = new PinOverlay(document, {
+      onActivate: (badge) => this.pins?.activateBadge(badge),
+      onEscape: () => this.focusCommentsToggle(),
+    });
+    this.pinLayer = pinLayer;
+    this.overlayEl.replaceChildren(this.selectionBoxEl, pinLayer.el);
     document.body.appendChild(popover.el);
-    this.layoutObserver = new ResizeObserver(() => this.repositionPick("layout"));
+    this.layoutObserver = new ResizeObserver(() => { this.repositionPick("layout"); this.layoutPins(); });
     // One embedder update per animation frame, however fast the page animates the element (review A3).
     this.rectCoalescer = createRectCoalescer({
       schedule: (cb) => window.requestAnimationFrame(cb),
       cancel: (h) => window.cancelAnimationFrame(h),
       apply: (box) => {
-        if (this.pick?.state.phase === "popover") { this.liveRect = box; this.repositionPick("rect"); } else this.earlyRect = box;
+        if (this.pick?.state.phase === "popover") { this.liveRect = box; this.liveViewport = this.pendingViewport; this.repositionPick("rect"); } else this.earlyRect = box;
       },
     });
     // Do not slide the popover from under the pointer or the caret because the page moved the element (review A4).
     popover.el.addEventListener("mouseenter", () => { this.pointerInPopover = true; });
     popover.el.addEventListener("mouseleave", () => { this.pointerInPopover = false; this.repositionPick("settle"); });
     popover.el.addEventListener("focusout", () => window.setTimeout(() => this.repositionPick("settle"), 0));
+    this.layoutObserver.observe(this.containerEl);
     this.layoutObserver.observe(this.stageEl);
     this.layoutObserver.observe(frame);
     this.layoutObserver.observe(popover.el); // its own height changes (the "what will be sent" disclosure) need a re-fit
     window.addEventListener("resize", this.onWindowResize);
+    // Re-list when the window or this tab becomes active again (changes made while closed or in the background).
+    window.addEventListener("focus", this.onWindowFocus);
+    // The stage itself scrolls (a device preset larger than the pane): the pin layer follows at once, not at the next guest report.
+    this.stageEl.addEventListener("scroll", this.onStageScroll, { passive: true });
+    this.unsubscribeActiveLeaf = this.app.workspace.on("active-leaf-change", (leaf: unknown) => { if (leaf === this.leaf) void this.pins?.refresh(); }) as unknown as (() => void) | undefined;
     this.bridge = bridge;
     this.pick = controller;
     this.popover = popover;
@@ -408,6 +497,13 @@ export class ArtifactView implements View, ReloadableView {
   private detachInspector(): void {
     this.unsubscribeFeedback?.();
     this.unsubscribeFeedback = undefined;
+    this.teardownComments();
+    this.uiHolder.clear(); // the view itself is going away: nothing is restored
+    window.removeEventListener("focus", this.onWindowFocus);
+    this.stageEl.removeEventListener("scroll", this.onStageScroll);
+    try { this.unsubscribeActiveLeaf?.(); } catch { /* the workspace is going away */ }
+    this.unsubscribeActiveLeaf = undefined;
+    this.pinLayer = null;
     this.pick?.dispose();
     this.bridge?.dispose();
     this.layoutObserver?.disconnect();
@@ -418,8 +514,11 @@ export class ArtifactView implements View, ReloadableView {
     this.offscreen = false;
     this.earlyRect = null;
     window.removeEventListener("resize", this.onWindowResize);
+    this.popover?.dispose();
     this.popover?.el.remove();
     this.liveRect = null;
+    this.liveViewport = null;
+    this.pendingViewport = null;
     this.liveRectFor = null;
     this.lastHover = null;
     this.pick = null;
@@ -439,21 +538,137 @@ export class ArtifactView implements View, ReloadableView {
     this.containerEl.classList.remove("is-picking");
   }
 
+  private pickAvailableNow(): boolean {
+    const target = this.pickTarget;
+    return !!target && !!this.webview && this.guestLoaded && !this.guestLoadFailed
+      && isPickAvailable(this.registration, this.app.artifactFeedbackService, target);
+  }
+
   /** Visible iff static + inspector + a handler passes canHandle + the guest is loaded without error. */
   private updatePickAvailability(): void {
     const target = this.pickTarget;
-    const available = !!target && !!this.webview && this.guestLoaded && !this.guestLoadFailed
-      && isPickAvailable(this.registration, this.app.artifactFeedbackService, target);
+    const available = this.pickAvailableNow();
     if (target) this.handlerName = this.app.artifactFeedbackService.describeHandler(target) ?? this.handlerName;
     this.pickButton.hidden = !available;
     this.pick?.setAvailable(available);
+    this.syncComments(available);
   }
 
   private focusPick(where: FocusTarget): void {
     if (where === "toggle") this.pickButton.focus();
     else if (where === "guest") this.webview?.focus();
     else if (where === "comment") this.popover?.focusComment();
-    else this.popover?.focusDone();
+    else if (where === "pins") {
+      // A saved pin: its new badge when it is placed, else the Comments toggle (design 3.7).
+      const target = this.pins?.focusTargetAfterPin();
+      if (target?.type === "badge" && this.pinLayer?.focusBadge(target.id)) return;
+      this.focusCommentsToggle();
+    } else this.popover?.focusDone();
+  }
+
+  // ---- pinned comments (Phase 2b-i) ----
+
+  /** Whether the Comments toggle is offered right now. Also gates the palette command. */
+  canToggleComments(): boolean { return !this.commentsButton.hidden; }
+
+  async toggleComments(): Promise<void> {
+    if (this.canToggleComments()) await this.pins?.toggleRail();
+  }
+
+  private focusCommentsToggle(): void {
+    (this.commentsButton.hidden ? this.pickButton : this.commentsButton).focus();
+  }
+
+  /**
+   * Keeps the comments client and coordinator in step with the routed handler: created when it is v2, dropped when it
+   * is not (Pin and the rail are hidden for a v1 handler). A registry change that does not touch THIS target's routing
+   * does nothing. When the routed handler was reloaded (a new registration), only the client is replaced: the
+   * coordinator keeps the rail, filter, selection and any pending Retry (same requestId), so a timed-out send is never
+   * re-sent under a fresh id. A page load does not rebuild anything, so pins stay in place.
+   */
+  private syncComments(available: boolean): void {
+    const target = this.pickTarget;
+    const service = this.app.artifactFeedbackService;
+    const route = available && target ? service.describeRoute(target) : null;
+    const key = route && route.contractVersion === 2 ? `${route.displayName}#${target ? service.routeInstance(target) : ""}` : "";
+    if (key === this.commentsRoute) return;
+    this.teardownComments(true);
+    this.commentsRoute = key;
+    if (!key || !target || !this.bridge) { this.pick?.setPinAvailable(false); return; }
+    const client = service.commentsFor(target);
+    if (!client) { this.commentsRoute = ""; this.pick?.setPinAvailable(false); return; }
+    const ownerId = service.routeOwnerId(target) ?? "";
+    this.commentsOwner = ownerId;
+    // A plugin reload (dispose, then register) parks the UI state; the same owner gets it back within the grace window.
+    const restored = this.uiHolder.take(ownerId, Date.now());
+    this.commentsClient = client;
+    const bridge = this.bridge;
+    const rail = this.railEl;
+    const coordinator = createPinsCoordinator({
+      getClient: () => this.commentsClient,
+      bridge,
+      scheduleFrame: (callback) => scheduleFrameOrTimeout(callback),
+      newRequestId: () => `req_${[...crypto.getRandomValues(new Uint8Array(16))].map((b) => b.toString(16).padStart(2, "0")).join("")}`,
+      ui: {
+        renderRail: (view) => rail.render(view),
+        renderPins: (badges, busy) => this.pinLayer?.render(badges, { busy }),
+        announce: (text) => { this.liveEl.textContent = ""; this.liveEl.textContent = text; },
+        availability: ({ pin, rail: railAvailable, count }) => {
+          this.commentsButton.hidden = !railAvailable;
+          this.commentsButton.title = `Design comments (${count})`;
+          this.pick?.setPinAvailable(pin);
+        },
+        focusRail: (focus) => { if (focus.type === "heading") rail.focusHeading(); else rail.focusRow(focus.id); },
+        geometry: () => this.pinGeometry(),
+        railOpenChanged: (open) => {
+          // Closing by any route (button, Esc, palette command) while focus is inside the rail returns it to the toggle.
+          const hadFocus = rail.el.contains(document.activeElement);
+          rail.el.hidden = !open;
+          this.commentsButton.setAttribute("aria-expanded", String(open));
+          this.commentsButton.classList.toggle("is-active", open);
+          this.layoutPins();
+          if (!open && hadFocus) this.focusCommentsToggle();
+        },
+      },
+    });
+    this.pins = coordinator;
+    if (restored) coordinator.restoreUi(restored);
+    this.layoutPins();
+    void coordinator.start().then(() => { if (restored?.railOpen) void coordinator.openRail({ focus: null }); });
+  }
+
+  private teardownComments(keepUi = false): void {
+    if (keepUi && this.pins) this.uiHolder.save(this.commentsOwner, this.pins.exportUi(), Date.now());
+    this.pins?.dispose();
+    this.pins = null;
+    this.commentsClient?.dispose();
+    this.commentsClient = null;
+    this.commentsRoute = "";
+    this.railEl.el.hidden = true;
+    this.commentsButton.hidden = true;
+    this.commentsButton.setAttribute("aria-expanded", "false");
+    this.commentsButton.classList.remove("is-active");
+    this.pinLayer?.render([], { busy: false });
+    this.pick?.setPinAvailable(false);
+  }
+
+  /** The two rects the pin mapping needs, read in one place (reads before writes). Null while the view is not showing. */
+  private pinGeometry(): PinsGeometry | null {
+    const frame = this.webview;
+    if (!frame) return null;
+    const stage = this.stageEl.getBoundingClientRect();
+    if (stage.width <= 0 || stage.height <= 0 || this.containerEl.getClientRects().length === 0) return null;
+    const box = frame.getBoundingClientRect();
+    return {
+      frame: { left: box.left, top: box.top, clientLeft: frame.clientLeft, clientTop: frame.clientTop, clientWidth: frame.clientWidth, clientHeight: frame.clientHeight },
+      stage: { left: stage.left, top: stage.top, width: stage.width, height: stage.height },
+    };
+  }
+
+  private layoutPins(): void {
+    const narrow = this.containerEl.clientWidth > 0 && this.containerEl.clientWidth < 560;
+    this.railEl.setNarrow(narrow);
+    this.pins?.layoutChanged();
   }
 
   private showHover(hover: InspectorHover): void {
@@ -484,6 +699,8 @@ export class ArtifactView implements View, ReloadableView {
       this.liveRectFor = state.snapshot;
       // A rect the guest reported between the select and the popover is this selection's current position: keep it.
       this.liveRect = state.snapshot ? this.earlyRect : null;
+      // An early rect keeps the viewport it arrived with; with no live rect the select snapshot's own viewport applies.
+      this.liveViewport = this.liveRect ? this.pendingViewport : null;
       this.earlyRect = null;
       this.rectCoalescer?.reset();
       this.offscreen = false;
@@ -527,6 +744,7 @@ export class ArtifactView implements View, ReloadableView {
     if (!report.connected || !report.rect) { this.pick?.elementChanged(); return; }
     // The same node is connected again (the page re-attached it): the gone state clears.
     this.pick?.elementReturned();
+    this.pendingViewport = report.viewport ?? null;
     this.rectCoalescer?.push(report.rect);
   }
 
@@ -555,16 +773,18 @@ export class ArtifactView implements View, ReloadableView {
     const box = this.liveRect ?? snapshot.selection.boundingBox.viewport;
     // The selected element stays visibly marked while the popover is open (the guest's own highlight is hidden so it
     // cannot appear in the screenshot). Non-interactive, clipped to the stage by the overlay.
-    const ax = frame.left - stage.left + box.x;
-    const ay = frame.top - stage.top + box.y;
-    this.selectionBoxEl.style.left = `${Math.round(ax)}px`;
-    this.selectionBoxEl.style.top = `${Math.round(ay)}px`;
-    this.selectionBoxEl.style.width = `${Math.max(2, Math.round(box.width))}px`;
-    this.selectionBoxEl.style.height = `${Math.max(2, Math.round(box.height))}px`;
+    // Same mapping as the pin badges (S2): unrounded, inside the webview border, scaled guest px to embedder px.
+    const origin = { left: frame.left, top: frame.top, clientLeft: this.webview.clientLeft, clientTop: this.webview.clientTop, clientWidth: this.webview.clientWidth, clientHeight: this.webview.clientHeight };
+    const guestViewport = (this.liveRect ? this.liveViewport : null) ?? snapshot.selection.viewport;
+    const mapped = selectionBoxToStage(box, origin, stage, guestViewport);
+    this.selectionBoxEl.style.left = `${mapped.left}px`;
+    this.selectionBoxEl.style.top = `${mapped.top}px`;
+    this.selectionBoxEl.style.width = `${mapped.width}px`;
+    this.selectionBoxEl.style.height = `${mapped.height}px`;
 
     // A small cue when the element is scrolled out of view; the popover stays usable (QA C1).
     const offscreen = !state.elementGone && isElementOffscreen(
-      { left: frame.left + box.x, top: frame.top + box.y, right: frame.left + box.x + box.width, bottom: frame.top + box.y + box.height },
+      { left: stage.left + mapped.left, top: stage.top + mapped.top, right: stage.left + mapped.left + mapped.width, bottom: stage.top + mapped.top + mapped.height },
       { left: stage.left, top: stage.top, right: stage.right, bottom: stage.bottom },
     );
     if (offscreen !== this.offscreen) {
@@ -579,7 +799,7 @@ export class ArtifactView implements View, ReloadableView {
     popover.el.style.maxHeight = `${popoverMaxHeight(bounds)}px`;
     const size = { width: popover.el.offsetWidth, height: Math.min(popover.el.offsetHeight, popoverMaxHeight(bounds)) };
     const placed = popoverPosition(
-      { x: frame.left + box.x - bounds.left, y: frame.top + box.y - bounds.top, width: box.width, height: box.height },
+      { x: stage.left + mapped.left - bounds.left, y: stage.top + mapped.top - bounds.top, width: mapped.width, height: mapped.height },
       size,
       { width: bounds.width, height: bounds.height },
     );

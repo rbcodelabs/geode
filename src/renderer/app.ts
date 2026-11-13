@@ -5122,6 +5122,14 @@ export class App {
       run: (context) => context.artifact!.togglePick("keyboard"),
     });
     this.actions.register({
+      id: "artifact.toggle-comments",
+      label: "Toggle design comments",
+      icon: "message-square",
+      // Offered only while the Comments toggle is: a static artifact whose routed handler is v2 (Phase 2b-i).
+      isAvailable: (context) => context.artifact?.canToggleComments() === true,
+      run: (context) => { void context.artifact!.toggleComments(); },
+    });
+    this.actions.register({
       id: "web.bookmark-page",
       label: "Bookmark this page",
       icon: "bookmark",
@@ -5203,6 +5211,7 @@ export class App {
     this.commands.add(createActionCommand(this.actions, "web.reload", "Reload page", () => this.activeActionContext(), "Mod+R"));
     // No default hotkey (ADR 0006 D8): users can assign one in Settings > Hotkeys.
     this.commands.add(createActionCommand(this.actions, "artifact.toggle-pick", "Toggle element picker", () => this.activeActionContext()));
+    this.commands.add(createActionCommand(this.actions, "artifact.toggle-comments", "Toggle design comments", () => this.activeActionContext()));
     c("split-right", "Split right", undefined, () => {
       const group = this.workspace.addGroup(this.workspace.activeGroup);
       this.openEmptyTab(group);
