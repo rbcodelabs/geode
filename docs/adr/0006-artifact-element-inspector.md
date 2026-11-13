@@ -953,7 +953,7 @@ the user picks again.
 ## Addendum 2: guest anchors (Phase 2b-i, G2)
 
 Status: implemented in the G2 pull request. No visible UI: pins, the rail and the contract v2 provider arrive in later PRs. Addendum 1
-(contract v2) is a separate pull request and is not referenced here. Source: the Phase 2b-i design note, sections 3, 5 and 7.
+(contract v2) is a separate pull request and is not referenced here.
 
 ### Decision
 
@@ -975,13 +975,23 @@ landmark, `detached`. A selector hit counts when exactly one element matches and
 anchor is empty (redacted) or equals the element's normalized text, or one is a prefix of the other and both are at least 12 units. A text
 anchor matches only when exactly one element of the tag has that text (never a guess among several). A landmark is exactly one
 `[data-variation]` or heading with that text. On redacted artifacts the stored route is path-only, so the route gate compares paths, text
-and heading steps are skipped, and a unique selector hit is accepted.
+and heading steps are skipped, and a unique selector hit is accepted. A consequence worth knowing: a hash-routed page (`#/a`, `#/b`) that is redacted
+loses the route gate, because the hash is deliberately not stored (it can carry note titles); a pin made on one hash route resolves
+once on any route whose DOM contains the same element.
+
+A text scan examines the first 5,000 elements of a tag. A unique hit in a scan that was truncated (or interrupted by a throwing
+text read) is reported as `text` with `agrees: false`, never as an agreeing match, because uniqueness over the unread elements is
+unproven. Rects are clamped to the protocol magnitude (1e6 px) so one element with an absurd box cannot make the embedder drop a
+whole message. The selection generator only emits selectors the grammar accepts (a custom element whose name the grammar's tag
+cannot spell, such as one containing `_` or non-ASCII letters, is selected by `*.class`; the tracker still checks the tag).
 
 **Stored selectors are untrusted input (A2.7).** The guest executes only the grammar its own generator emits
 (`src/artifacts/anchor-selector.ts`): up to 12 compounds joined by a space or ` > `, a tag or `*`, `#ident`, `.ident`, `[attr]`,
-`[attr="value"]` (value at most 120 units, only `\"` and `\\` escapes), `:nth-child(n)`, `:nth-of-type(n)`, `:first/last-child`,
+`[attr="value"]` (value at most 128 units, the selection generator's `data-testid` limit; only `\"` and `\\` escapes), `:nth-child(n)`, `:nth-of-type(n)`, `:first/last-child`,
 `:first/last-of-type`, at most 512 units. Everything else (`:has`, `:is`, `:where`, `:not`, pseudo-elements, lists, sibling combinators,
-namespaces, case flags) is rejected as `detached` without calling the DOM. The parser is a single left-to-right pass.
+namespaces, case flags) is rejected as `detached` without calling the DOM. The parser is a single left-to-right pass. Known
+looseness, no security impact: an unescaped `:` or `.` is accepted inside an attribute name, which is not valid CSS; the DOM then
+throws, the guest catches it and the candidate is simply not a hit.
 
 **Bounded, time-sliced work.** At most 100 anchors. A pass resolves up to 8 anchors per animation frame within a 4 ms slice; each anchor
 is a generator that yields after every native query and every 250 elements of a text scan, so a slice is honoured inside an anchor. A text
@@ -991,7 +1001,11 @@ and attributes `id class data-testid data-variation`) with a 250 ms trailing deb
 used more than 20 ms, and a 2 s floor under more than 50 observer callbacks per second. Scroll and resize only re-measure
 (`getBoundingClientRect` on resolved elements, one frame coalesced) and send `anchor-rects`, in full, only when something changed. A 1 s
 re-assertion (the Phase 2a pattern) re-adds listeners erased by `document.open()` and re-sends current rects. Results are sent only when
-they differ from the last results of the epoch, which keeps the embedder budget free.
+they differ from the last results of the epoch, spaced at least 150 ms apart with a trailing send of the latest state (so any 1 s
+window holds at most 7 messages, under the embedder's 8), and the 1 s re-assertion re-sends the cached results, so a message the
+embedder dropped heals within about a second. Every trigger, the immediate ones too (an anchored node that left the document, a
+history event), waits at least 250 ms after the previous pass ended. `history.pushState` and `replaceState` fire no event the
+isolated world can see, so the route is re-checked by the same 1 s re-assertion (up to about a second of latency).
 
 **Embedder gates (T1).** Sender is this view's webview main frame; the epoch must be current; every key must belong to the set sent in that
 epoch and appear once; the message is rebuilt from an allowlist (`anchor-validator.ts`); a hostile own key, a non-finite or out-of-range
@@ -1002,7 +1016,9 @@ handler re-sends the current set with `epoch + 1` after the mode. `selection-val
 **Jump to.** `anchor-focus` with `scroll` scrolls the resolved element to the middle; `flash` scrolls it into view if needed and draws a
 static outline in a closed shadow root for 1.2 s. Both are instant under `prefers-reduced-motion`; nothing is animated.
 
-**Test hook.** `ArtifactView.anchorProbe` exposes `setAnchors`, `focus` and the validated messages, because no UI exists yet; G3 replaces it.
+**Test access.** There is no production hook: no UI consumes the anchors yet. The end-to-end specs drive the view's bridge
+directly through a probe they install on the live instance (`setAnchors`, `focusAnchor`, and the bridge's own validated callbacks).
+The pin overlay (a later PR) is the first production consumer.
 
 ### Threat model (T1, T2, T3, T7, T9)
 
@@ -1012,9 +1028,9 @@ static outline in a closed shadow root for 1.2 s. Both are instant under `prefer
 | T2 patched `getBoundingClientRect` or queries, decoys | the tracker uses the natives captured at document start in the isolated world; a decoy loses to a unique selector hit and makes a text anchor ambiguous | a lone decoy with the same text, after the original is removed, attracts the pin (visual only) |
 | T3 malicious stored selector | grammar subset, 512 units, 12 compounds, native calls in try/catch, sliced resolve, 100-anchor cap, abandon on new epoch | none known |
 | T7 thousands of pins | 100-anchor cap, text scan cap, shared index, slices, observer backoff | none |
-| T9 page reads or observes comments | `.threads-design/` already 404s; the anchors payload keys equal the allowlist exactly | none |
+| T9 page reads or observes comments | `.threads-design/` already 404s; the anchors payload keys equal the allowlist exactly | the jump-to flash outline is a host element in the page's DOM (closed shadow root, so its content is unreadable, but the page can see that a node was added and removed for 1.2 s), as the Phase 1 highlight host already is; it reveals that a jump happened, not why |
 
-### Spike S1 result (Xvfb software rendering on the homelab, Electron 42, 6 vCPU, not a Retina Mac)
+### Spike S1 result (a Linux Xvfb CI-class host with software rendering, Electron 42, 6 vCPU; not a Retina Mac)
 
 100 anchors, the page's own `requestAnimationFrame` loop measures frame intervals while the guest works. Budgets kept: chunk 8, slice 4 ms.
 
@@ -1032,4 +1048,4 @@ shows as a longer time to results on 50k nodes, not as jank. Not measured: DPR 2
 
 - The guest preload gains a second feature set (a tracker) behind the same document-start capture of natives.
 - A pass costs the embedder nothing between changes; reloads cost one resolve pass.
-- `[data-testid]` values longer than 120 units are rejected by the grammar although the selection generator accepts 128; such a selector falls through to its alternates and the text anchor.
+- The grammar's attribute-value cap (128) equals the generator's `data-testid` limit; the round trip (generator output is always inside the grammar) is covered by tests over report-shaped pages.

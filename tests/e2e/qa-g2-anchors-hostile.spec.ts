@@ -69,7 +69,8 @@ test.describe("QA G2 hostile page", () => {
       const resultsDuring = after.results - before.results;
       console.log(`QA-G2 storm results=${resultsDuring} rects=${after.rects - before.rects} maxFrame=${Math.max(...deltas)} p95=${percentile(deltas, 0.95)}`);
       // the guest floors passes at 2 s under a storm: at most ~4 passes in 6 s, and results are sent only when they CHANGE (here never)
-      expect(resultsDuring).toBeLessThanOrEqual(4);
+      // the 1 s re-assertion re-sends the cached results (B1 self-heal): about one per second, far below the 8/s budget
+      expect(resultsDuring).toBeLessThanOrEqual(8);
       expect(Math.max(...deltas)).toBeLessThan(250);
     } finally { await s.cleanup(); }
   });

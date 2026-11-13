@@ -89,7 +89,8 @@ test.describe("guest anchors (phase 2b-i G2)", () => {
       await guestEval(s.window, `window.__anchorHostile.forge(${set.epoch}, ["a0"]); window.__anchorHostile.forge(${set.epoch + 1}, ["a0", "a1"])`);
       await s.window.waitForTimeout(1500);
       const after = await counts(s.window);
-      expect(after.results).toBe(settled.results);
+      // The real guest re-sends its cached results every second (B1 self-heal), so the count may grow by that, never by the forgeries.
+      expect(after.results - settled.results).toBeLessThanOrEqual(3);
       // The real guest legitimately re-reports rects every second; what must never appear is a forged one.
       const forgedSeen = await inView(s.window, (p: any) => {
         const snap = p.snapshot();

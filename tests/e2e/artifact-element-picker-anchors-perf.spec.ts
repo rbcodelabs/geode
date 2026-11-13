@@ -1,11 +1,12 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { expect, test } from "@playwright/test";
+import { INSPECTOR_CAPS } from "../../src/artifacts/inspector-protocol";
 import { anchorPerfArtifact } from "./helpers/artifact-picker-fixtures";
 import { guestEval, inView, lastResults, percentile, query, repoRoot, route, session } from "./helpers/anchor-e2e";
 
 /**
- * Spike S1 (design note section 7) and the T7 budget: 100 anchors on the 5k and 50k node pages. Measures, in the real
+ * Spike S1 and the T7 budget: 100 anchors on the 5k and 50k node pages. Measures, in the real
  * Electron guest, the time from setAnchors to the results message and the page's frame intervals (a requestAnimationFrame
  * loop in the page shares the main thread with the preload, so a long guest slice shows up as a long frame).
  * Writes test-results/s1-anchors.json; the assertions are the shipped budget.
@@ -14,17 +15,27 @@ import { guestEval, inView, lastResults, percentile, query, repoRoot, route, ses
 type Kind = "selector" | "structural" | "text" | "detached" | "mixed";
 const FRAME_BUDGET_MS = 50; // a frame this long means the guest held the thread far beyond its 4 ms slice
 
+/** The text scan examines the first 5,000 elements of a tag, so text targets are drawn from inside that window (an anchor beyond it is correctly never guessed). */
+const EXPECTED: Record<Kind, Record<string, number>> = {
+  selector: { selector: 100 },
+  structural: { selector: 100 },
+  text: { text: 100 },
+  detached: { detached: 100 },
+  mixed: { selector: 50, text: 25, detached: 25 },
+};
+
 function queries(kind: Kind, n: number, r: string) {
   const out: unknown[] = [];
   for (let k = 0; k < 100; k++) {
     const i = (k * 37 + 11) % n;
+    const indexable = (k * 37 + 11) % Math.min(n, INSPECTOR_CAPS.anchorTextScan - 100);
     const section = Math.floor(i / 50) + 1;
     const rowInSection = (i % 50) + 1; // h3 is the first child, rows are div children: nth-of-type counts divs only
     const which: Kind = kind === "mixed" ? (["selector", "structural", "text", "detached"] as const)[k % 4]! : kind;
     const base = { tag: "div", textAnchor: { tag: "div", text: `Item ${i}` }, landmark: null };
     if (which === "selector") out.push(query(`a${k}`, r, { ...base, selector: `#r${i}` }));
     else if (which === "structural") out.push(query(`a${k}`, r, { ...base, selector: `#big > section:nth-of-type(${section}) > div:nth-of-type(${rowInSection})` }));
-    else if (which === "text") out.push(query(`a${k}`, r, { tag: "span", selector: "#gone", textAnchor: { tag: "span", text: `Item ${i}` } }));
+    else if (which === "text") out.push(query(`a${k}`, r, { tag: "span", selector: "#gone", textAnchor: { tag: "span", text: `Item ${indexable}` } }));
     else out.push(query(`a${k}`, r, { tag: "span", selector: "#gone", textAnchor: { tag: "span", text: `No such ${i}` }, landmark: "No such heading" }));
   }
   return out;
@@ -38,6 +49,23 @@ const summary = (deltas: number[]) => ({
 });
 
 const report: Record<string, unknown> = {};
+
+/** 100 resolved anchors while the page scrolls every frame for 3 s: measure() reads 100 rects per frame (coalesced). */
+async function scrollRun(n: number) {
+  const s = await session(anchorPerfArtifact(n));
+  try {
+    await expect.poll(() => guestEval(s.window, `document.querySelectorAll("div.row").length`), { timeout: 60_000 }).toBe(n);
+    const r = await route(s.window);
+    const set = await inView(s.window, (p: any, _v: any, a: any) => p.setAnchors(a), queries("selector", n, r));
+    await expect.poll(async () => (await lastResults(s.window))?.epoch ?? 0, { timeout: 120_000 }).toBeGreaterThanOrEqual(set.epoch);
+    await guestEval(s.window, `window.__perf.start(); (() => { let y = 0; const step = () => { if (!window.__perf.running) return; y += 7; window.scrollTo(0, y % 20000); requestAnimationFrame(step); }; requestAnimationFrame(step); })()`);
+    const before = await inView(s.window, (p: any) => p.snapshot().rectCount);
+    await s.window.waitForTimeout(3000);
+    const deltas = await guestEval<number[]>(s.window, `window.__perf.stop()`);
+    const rectMessages = (await inView(s.window, (p: any) => p.snapshot().rectCount)) - before;
+    return { frames: summary(deltas), rectMessages };
+  } finally { await s.cleanup(); }
+}
 
 for (const n of [5000, 50000]) {
   test.describe(`S1 ${n} nodes`, () => {
@@ -67,6 +95,7 @@ for (const n of [5000, 50000]) {
           await guestEval(s.window, `window.__stopChurn()`);
           const churn = await guestEval<number[]>(s.window, `window.__perf.stop()`);
 
+          expect(matches).toEqual(EXPECTED[kind]); // an honest case: every anchor resolved the way its kind says
           report[`${n}/${kind}`] = { toResultsMs: toResults, matches, baseline: summary(baseline), duringPass: summary(during), duringChurn: summary(churn) };
           console.log(`S1 ${n} ${kind} ${JSON.stringify(report[`${n}/${kind}`])}`);
           fs.mkdirSync(path.join(repoRoot, "test-results"), { recursive: true });
@@ -76,5 +105,16 @@ for (const n of [5000, 50000]) {
         } finally { await s.cleanup(); }
       });
     }
+  });
+}
+
+for (const n of [5000, 50000]) {
+  test(`S1 ${n} nodes: 100 anchors while the page scrolls every frame`, async () => {
+    test.setTimeout(240_000);
+    const out = await scrollRun(n);
+    console.log(`S1 ${n} scroll ${JSON.stringify(out)}`);
+    expect(out.frames.max).toBeLessThan(FRAME_BUDGET_MS * 2);
+    expect(out.rectMessages).toBeGreaterThan(0);
+    expect(out.rectMessages).toBeLessThanOrEqual(3 * INSPECTOR_CAPS.anchorRectsPerSecond + 20); // the embedder budget holds
   });
 }
