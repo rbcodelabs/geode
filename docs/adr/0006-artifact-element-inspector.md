@@ -1459,7 +1459,7 @@ unrounded. The spike S2 mechanics check on Linux at DPR 1 found the old popover 
 box.x)`) 1 css px up/left in tablet and mobile presets (the webview's bounding rect includes its 1 px border) and Math.round
 adding up to 1 more; the popover and highlight mapping is NOT changed in G3 (their tests are the v1/2a ones), only the pins
 use the corrected variant. Guest rects are already in embedder css px under app zoom, so there is no scale factor. A preset's
-content size is never hard-coded (tablet content measured 766x1022, not 768x1024).
+content size is never hard-coded (the S2 harness measured tablet content at 766x1022, not 768x1024).
 
 **Clipping.** A badge is drawn only when the element's stage-relative box intersects the visible stage
 (`intersectsStage`), so an element the tracker calls visible but that lies outside the pane (a preset webview larger than the
@@ -1478,7 +1478,8 @@ only (a source scan test forbids HTML-string APIs in the rail and the overlay). 
 open; after a row action removes the focused row, the next row, else the previous, else the list; Jump keeps focus in the
 rail; Esc clears a cluster chip first, then closes and returns to the toggle; a saved pin returns focus to its new badge when
 it is placed, else the Comments toggle. Narrow mode (below 560 px of pane width) lays the rail out as a sheet. Reduced motion
-removes the badge and rail transitions; the guest already uses instant scroll and no flash animation under it.
+removes the badge and rail transitions; the guest scroll is already instant under it (the 1.2 s flash outline is not suppressed
+by G3; it is a static outline in the guest host, not an animation).
 
 **Verification status.** Verified: unit tests (Node and jsdom) and Electron e2e on Linux/Xvfb at DPR 1. NOT VERIFIED: DPR 2,
 ProMotion, non-default zoom and a real Retina Mac (spike S2, Rick's harness), a screen-reader pass (spike S6), a real
