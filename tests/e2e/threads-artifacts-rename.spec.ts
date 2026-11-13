@@ -163,6 +163,11 @@ test("T3 migration with real Agent Threads: design made by old threads-design bu
     await expect.poll(() => ready(win, "threads-artifacts"), { timeout: 60_000 }).toBe(true);
     console.log("T3 phase2 state:", JSON.stringify(await pm(win, "threads-artifacts")), JSON.stringify(await pm(win, "threads-design")));
     expect((await pm(win, "threads-artifacts")).loadError).toBeNull();
+    await win.evaluate(async () => {
+      const a = (window as any).app;
+      await new Promise<void>((resolve) => a.workspace.onLayoutReady(resolve));
+      await a.pluginManager.getPlugin("claude-threads").activateView();
+    });
     // Give the new plugin time to register its provider (api-ready) and settle migration.
     await expect.poll(() => win.evaluate(async ({ threadId, artifactId }) => {
       const api = (window as any).app.pluginManager.getPlugin("claude-threads").api.v1;
