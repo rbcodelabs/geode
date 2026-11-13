@@ -5113,6 +5113,29 @@ export class App {
       isAvailable: (context) => !!context.reloadable,
       run: (context) => context.reloadable!.reload(),
     });
+    // Page navigation inside an artifact tab. Offered only while there is somewhere to go, so on every other tab (an
+    // editor, a Web Viewer) the commands are unavailable and their hotkeys fall through (Mod+[ stays the editor's outdent).
+    this.actions.register({
+      id: "artifact.back",
+      label: "Artifact: Go back",
+      icon: "arrow-left",
+      isAvailable: (context) => context.artifact?.canGoBack() === true,
+      run: (context) => context.artifact!.goBack(),
+    });
+    this.actions.register({
+      id: "artifact.forward",
+      label: "Artifact: Go forward",
+      icon: "arrow-right",
+      isAvailable: (context) => context.artifact?.canGoForward() === true,
+      run: (context) => context.artifact!.goForward(),
+    });
+    this.actions.register({
+      id: "artifact.home",
+      label: "Artifact: Back to artifact home",
+      icon: "house",
+      isAvailable: (context) => context.artifact?.canGoHome() === true,
+      run: (context) => context.artifact!.goHome(),
+    });
     this.actions.register({
       id: "artifact.toggle-pick",
       label: "Toggle element picker",
@@ -5209,6 +5232,11 @@ export class App {
     // that have no reload path: there it becomes a silent no-op, which is
     // strictly better than the whole-app reload it used to trigger.
     this.commands.add(createActionCommand(this.actions, "web.reload", "Reload page", () => this.activeActionContext(), "Mod+R"));
+    // Mod+[ / Mod+] are the usual back / forward keys. Unlike Mod+R they are only consumed while an artifact tab can
+    // actually move, so they never shadow the editor's indent keys on a note.
+    this.commands.add(createActionCommand(this.actions, "artifact.back", "Artifact: Go back", () => this.activeActionContext(), "Mod+["));
+    this.commands.add(createActionCommand(this.actions, "artifact.forward", "Artifact: Go forward", () => this.activeActionContext(), "Mod+]"));
+    this.commands.add(createActionCommand(this.actions, "artifact.home", "Artifact: Back to artifact home", () => this.activeActionContext()));
     // No default hotkey (ADR 0006 D8): users can assign one in Settings > Hotkeys.
     this.commands.add(createActionCommand(this.actions, "artifact.toggle-pick", "Toggle element picker", () => this.activeActionContext()));
     this.commands.add(createActionCommand(this.actions, "artifact.toggle-comments", "Toggle design comments", () => this.activeActionContext()));

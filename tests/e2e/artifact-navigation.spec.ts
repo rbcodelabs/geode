@@ -39,8 +39,8 @@ const VARIATIONS: ArtifactSpec = {
 };
 
 const view = (w: Page): Locator => w.locator(".artifact-view");
-const backBtn = (w: Page): Locator => view(w).getByRole("button", { name: "Back" });
-const forwardBtn = (w: Page): Locator => view(w).getByRole("button", { name: "Forward" });
+const backBtn = (w: Page): Locator => view(w).getByRole("button", { name: "Back", exact: true });
+const forwardBtn = (w: Page): Locator => view(w).getByRole("button", { name: "Forward", exact: true });
 const homeBtn = (w: Page): Locator => view(w).getByRole("button", { name: "Back to artifact home" });
 const badges = (w: Page): Locator => w.locator(".pin-badge");
 const guestPath = (w: Page) => guestEval<string>(w, `location.pathname`);

@@ -29,6 +29,8 @@ import { createPinsCoordinator, type PinsCoordinator, type PinsGeometry } from "
 import { PinsUiStateHolder } from "../artifacts/pins-ui-state";
 import type { InspectRectMessage } from "../../artifacts/inspector-protocol";
 import { selectionBoxToStage, type GuestViewport } from "../artifacts/pin-collapse";
+import { ArtifactNavigation, type NavigationState, type NavigationWebview } from "../artifacts/artifact-navigation";
+import { displayHotkey, legacyHotkeyToBinding } from "../../shared/hotkey";
 
 /**
  * Next animation frame, or 100 ms from now when the page is not visible (a hidden or occluded window never runs
@@ -55,6 +57,12 @@ interface ArtifactWebview extends HTMLElement { src: string; reload(): void; sen
 const PICK_STATUS = "Pick mode: click an element, or use [ ] and Enter. Esc exits.";
 interface WebviewIpcMessageEvent extends Event { channel: string; args: unknown[] }
 
+/** The platform's label for a default hotkey (⌘[ on macOS, Ctrl+[ elsewhere), for tooltips. */
+function shortcutLabel(combo: string): string {
+  const binding = legacyHotkeyToBinding(combo);
+  return binding ? displayHotkey(binding) : combo;
+}
+
 const VIEWPORTS: Record<Exclude<ViewportPreset, "custom">, Viewport> = {
   // Width/height are fallbacks for status text; a fill frame sizes to the pane.
   fill: { preset: "fill", width: 1440, height: 900 },
@@ -80,6 +88,12 @@ export class ArtifactView implements View, ReloadableView {
   private readonly diagnosticsButton = document.createElement("button");
   private registration: ArtifactRegistration | null = null;
   private webview: ArtifactWebview | null = null;
+  // Back / forward / home over the guest's own history. One controller per guest webview, so a re-preview, an artifact
+  // change or a failed load starts from a clean history (the old guest and its controller are released together).
+  private navigation: ArtifactNavigation | null = null;
+  private readonly backButton: HTMLButtonElement;
+  private readonly forwardButton: HTMLButtonElement;
+  private readonly homeButton: HTMLButtonElement;
   private root = "";
   private devServerUrl: string | undefined;
   private viewport: Viewport | undefined;
@@ -144,11 +158,17 @@ export class ArtifactView implements View, ReloadableView {
     this.containerEl.className = "artifact-view";
     const toolbar = document.createElement("div");
     toolbar.className = "artifact-view-toolbar";
+    // Page navigation inside the artifact (a variations board links to full pages of its own). Disabled, not hidden,
+    // until the guest has somewhere to go, so the toolbar does not jump; the actions share the same guards.
+    this.backButton = this.iconButton("arrow-left", `Back (${shortcutLabel("Mod+[")})`, () => { this.goBack(); }, "Back");
+    this.forwardButton = this.iconButton("arrow-right", `Forward (${shortcutLabel("Mod+]")})`, () => { this.goForward(); }, "Forward");
+    this.homeButton = this.iconButton("house", "Back to artifact home", () => { this.goHome(); });
+    for (const button of [this.backButton, this.forwardButton, this.homeButton]) button.disabled = true;
     // Routed through the action so the button, Cmd+R and the tab context menu
     // share one implementation.
-    toolbar.append(this.iconButton("rotate-cw", "Reload artifact", () => {
+    toolbar.append(this.backButton, this.forwardButton, this.iconButton("rotate-cw", "Reload artifact", () => {
       void this.app.actions.execute("web.reload", { reloadable: this, leaf: this.leaf });
-    }));
+    }), this.homeButton);
     // One segmented control instead of four loose buttons: icon-only, with the
     // name and size in the tooltip and the active choice exposed via aria-pressed.
     const viewports = document.createElement("div");
@@ -242,12 +262,13 @@ export class ArtifactView implements View, ReloadableView {
     this.containerEl.addEventListener("keydown", (event) => this.onContainerKeydown(event));
   }
 
-  private iconButton(icon: string, label: string, action: () => void): HTMLButtonElement {
+  /** `title` is the tooltip; `ariaLabel` (default: the same text) is the accessible name when the tooltip carries extra, such as a shortcut. */
+  private iconButton(icon: string, label: string, action: () => void, ariaLabel = label): HTMLButtonElement {
     const button = document.createElement("button");
     button.className = "clickable-icon artifact-view-toolbar-btn";
     button.type = "button";
     button.title = label;
-    button.setAttribute("aria-label", label);
+    button.setAttribute("aria-label", ariaLabel);
     setIcon(button, icon);
     button.addEventListener("click", action);
     return button;
@@ -266,6 +287,22 @@ export class ArtifactView implements View, ReloadableView {
   reload(): void {
     if (this.webview) this.webview.reload();
     else void this.load(this.root);
+  }
+
+  // ---- page navigation (back / forward / home) ----
+
+  canGoBack(): boolean { return this.navigation?.state.canGoBack === true; }
+  canGoForward(): boolean { return this.navigation?.state.canGoForward === true; }
+  /** True when the guest is anywhere but the artifact's entry page. */
+  canGoHome(): boolean { return this.navigation?.state.canGoHome === true; }
+  goBack(): void { this.navigation?.back(); }
+  goForward(): void { this.navigation?.forward(); }
+  goHome(): void { this.navigation?.home(); }
+
+  private renderNavigation(state: NavigationState): void {
+    this.backButton.disabled = !state.canGoBack;
+    this.forwardButton.disabled = !state.canGoForward;
+    this.homeButton.disabled = !state.canGoHome;
   }
 
   async setState(state: ArtifactViewState): Promise<void> {
@@ -360,6 +397,17 @@ export class ArtifactView implements View, ReloadableView {
         }
       });
       if (registration.vault) this.attachVaultBridge(frame, registration);
+      this.navigation = new ArtifactNavigation(frame as unknown as NavigationWebview, registration.entryUrl, (state) => this.renderNavigation(state));
+      this.renderNavigation(this.navigation.state);
+      // What was resolved or picked belongs to the page the guest is leaving; it must not show over the next one.
+      frame.addEventListener("did-start-navigation", (event) => {
+        const detail = event as unknown as { isMainFrame?: boolean; isInPlace?: boolean };
+        if (detail.isMainFrame === false || detail.isInPlace === true) return;
+        this.pins?.pageNavigating();
+      });
+      frame.addEventListener("did-stop-loading", () => this.pins?.pageSettled());
+      // A hash or pushState move keeps the document, so dom-ready does not fire: an open popover is still stale.
+      frame.addEventListener("did-navigate-in-page", () => this.pick?.pageReloaded());
       this.webview = frame;
       if (registration.runtime === "static" && registration.inspector) this.attachInspector(frame, registration);
       this.stageEl.appendChild(frame);
@@ -874,6 +922,9 @@ export class ArtifactView implements View, ReloadableView {
     this.unwatchVault = undefined;
     this.vaultBadgeEl.hidden = true;
     this.detachInspector();
+    this.navigation?.dispose();
+    this.navigation = null;
+    this.renderNavigation({ canGoBack: false, canGoForward: false, canGoHome: false, url: "" });
     this.webview?.remove();
     this.webview = null;
     this.revision = 0;

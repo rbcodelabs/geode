@@ -76,7 +76,7 @@ describe("ArtifactNavigation state", () => {
     const { nav, view, states } = rig({ ready: false });
     expect(nav.state).toEqual({ canGoBack: false, canGoForward: false, canGoHome: false, url: ENTRY });
     view.becomeReady();
-    expect(states.at(-1)).toEqual({ canGoBack: false, canGoForward: false, canGoHome: false, url: ENTRY });
+    expect(states).toEqual([]); // dom-ready on an unchanged page is not a change
     view.go(SUB);
     expect(nav.state.canGoBack).toBe(true);
   });

@@ -113,6 +113,13 @@ export interface PinsCoordinator {
   onAnchorResults(message: InspectAnchorResultsMessage): void;
   onAnchorRects(message: InspectAnchorRectsMessage): void;
   onAnchorsSent(epoch: number): void;
+  /**
+   * The guest is leaving its page (Back, Forward, Home, a link): what was resolved belongs to that page, so it is dropped
+   * at once rather than left drawn over the next one until that page answers.
+   */
+  pageNavigating(): void;
+  /** The navigation finished. If the new page never answered (a cancelled load keeps the old page), the anchors are asked again. */
+  pageSettled(): void;
   layoutChanged(): void;
   setFilter(filter: RailFilter): void;
   clearCluster(): void;
@@ -155,6 +162,10 @@ export function createPinsCoordinator(deps: PinsCoordinatorDeps): PinsCoordinato
   let signature: string | null = null;
   let idSignature = "";
   let epoch = 0;
+  /** The anchor set last sent to the guest, kept to ask again after a navigation that produced no new document. */
+  let sentQueries: readonly unknown[] = [];
+  /** A navigation started and no answer for the current page has arrived since. */
+  let awaitingPage = false;
   let busy = false;
   /** The guest did not answer in time: placed pins are drawn as unconfirmed until the next answer. */
   let unconfirmed = false;
@@ -309,6 +320,7 @@ export function createPinsCoordinator(deps: PinsCoordinatorDeps): PinsCoordinato
     idToKey.clear();
     list.forEach((c, i) => { keyToId.set(`a${i}`, c.id); idToKey.set(c.id, `a${i}`); });
     for (const id of [...placements.keys()]) if (!idToKey.has(id)) placements.delete(id);
+    sentQueries = queries;
     const outcome = bridge.setAnchors(queries);
     epoch = outcome.epoch;
     for (const key of outcome.rejected) {
@@ -399,6 +411,7 @@ export function createPinsCoordinator(deps: PinsCoordinatorDeps): PinsCoordinato
 
   function onAnchorResults(message: InspectAnchorResultsMessage): void {
     if (disposed || message.epoch !== epoch) return;
+    awaitingPage = false;
     if (message.viewport) guestViewport = message.viewport;
     for (const r of message.results) {
       const id = keyToId.get(r.key);
@@ -587,6 +600,20 @@ export function createPinsCoordinator(deps: PinsCoordinatorDeps): PinsCoordinato
       epoch = sentEpoch;
       startBusy(keyToId.size > 0);
       scheduleRender();
+    },
+    pageNavigating() {
+      if (disposed || (placements.size === 0 && keyToId.size === 0)) return;
+      placements.clear();
+      awaitingPage = true;
+      scheduleRender(true);
+    },
+    pageSettled() {
+      if (disposed || !awaitingPage) return;
+      awaitingPage = false;
+      if (keyToId.size === 0) return;
+      const outcome = bridge.setAnchors(sentQueries);
+      epoch = outcome.epoch;
+      startBusy(outcome.sent > 0);
     },
     layoutChanged: () => scheduleRender(),
     setFilter(next) { filter = next; clusterIds = null; renderRail(); scheduleRender(); },
