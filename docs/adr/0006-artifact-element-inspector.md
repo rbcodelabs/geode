@@ -1482,6 +1482,13 @@ it is placed, else the Comments toggle. Narrow mode (below 560 px of pane width)
 removes the badge and rail transitions; the guest scroll is already instant under it (the 1.2 s flash outline is not suppressed
 by G3; it is a static outline in the guest host, not an animation).
 
+**Shortcut collision (assumption A4 checked).** Cmd/Ctrl+Shift+Enter is already the global command "Toggle focus on active
+pane" (`workspace:toggle-focus-pane`), which the app dispatches from a document-level capture listener, so it fired before
+the popover ever saw the key (observed in e2e: the popover stayed idle). While focus is inside the comment popover the
+combo is now Pin: a window-level capture listener (which runs before the document listener) handles it and stops
+propagation, and is released when the popover is discarded. Everywhere else the global command is unchanged. The popover's
+Pin button works without any shortcut.
+
 **Verification status.** Verified: unit tests (Node and jsdom) and Electron e2e on Linux/Xvfb at DPR 1. NOT VERIFIED: DPR 2,
 ProMotion, non-default zoom and a real Retina Mac (spike S2, Rick's harness), a screen-reader pass (spike S6), a real
 Design plugin, inner-scroller clipping on real pages.
