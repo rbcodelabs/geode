@@ -284,7 +284,7 @@ describe("rail-model reducer: adversarial table", () => {
     const comments = [comment(1), comment(2), comment(3)];
     const view = buildRailView(input({ comments, clusterIds: [idOf(2), "cmt_gone"] }));
     expect(view.rows.map((r) => r.id)).toEqual([idOf(2)]);
-    expect(view.clusterChip).toBe("2 comments at this spot"); // counts ids in the chip, including one that no longer exists (reported by the static review)
+    expect(view.clusterChip).toBe("1 comment at this spot"); // counts the rows actually visible, not ids that no longer exist or are filtered out
     const none = buildRailView(input({ comments, clusterIds: ["cmt_gone"] }));
     expect(none.emptyText).toBe("No comments match this view.");
     expect(buildRailView(input()).emptyText).toMatch(/No comments yet/);
