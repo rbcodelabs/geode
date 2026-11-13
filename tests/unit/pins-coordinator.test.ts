@@ -293,28 +293,51 @@ describe("anchor results and rects drive pin and rail state", () => {
   });
 });
 
-describe("rail open: list, subscribe, re-list, focus", () => {
-  it("lists on start, subscribes only while open, and re-lists after subscribing", async () => {
+describe("list, subscribe, re-list and the rail", () => {
+  it("start lists, subscribes for the life of the view, and lists again after subscribing", async () => {
     const r = rig(snapshot([comment(1)]));
     await r.coordinator.start();
-    const listsAfterStart = r.client.list.mock.calls.length;
-    expect(r.client.onDidChange).not.toHaveBeenCalled();
-    await r.coordinator.openRail();
     expect(r.client.onDidChange).toHaveBeenCalledTimes(1);
-    expect(r.client.list.mock.calls.length).toBeGreaterThanOrEqual(listsAfterStart + 1);
-    const order = [r.client.onDidChange.mock.invocationCallOrder[0]!, r.client.list.mock.invocationCallOrder.at(-1)!];
-    expect(order[1]).toBeGreaterThan(order[0]!);
-    expect(r.coordinator.railOpen).toBe(true);
-    r.coordinator.closeRail();
-    r.emit(snapshot([comment(1), comment(2)], { revision: 5 }));
-    await flush();
-    expect(r.lastRail().rows).toHaveLength(1);
+    expect(r.client.list).toHaveBeenCalledTimes(2);
+    const [list1, list2] = r.client.list.mock.invocationCallOrder;
+    const sub = r.client.onDidChange.mock.invocationCallOrder[0]!;
+    expect(list1!).toBeLessThan(sub);
+    expect(list2!).toBeGreaterThan(sub);
   });
 
-  it("a change event while open updates the rail", async () => {
+  it("without a client nothing is subscribed", async () => {
+    const r = rig(snapshot([comment(1)]), { client: false });
+    await r.coordinator.start();
+    expect(r.client.onDidChange).not.toHaveBeenCalled();
+  });
+
+  it("a change event updates the pins and the rail whether or not the rail is open", async () => {
+    const r = rig(snapshot([comment(1)]));
+    await r.coordinator.start();
+    r.emit(snapshot([comment(1), comment(2)], { revision: 5 }));
+    await flush();
+    expect(r.lastRail().rows).toHaveLength(2);
+    expect(r.bridge.setAnchors).toHaveBeenCalledTimes(2);
+  });
+
+  it("opening the rail lists again, does not subscribe twice, and asks the view to focus the heading", async () => {
+    const r = rig(snapshot([comment(1)]));
+    await r.coordinator.start();
+    const lists = r.client.list.mock.calls.length;
+    await r.coordinator.openRail();
+    expect(r.client.onDidChange).toHaveBeenCalledTimes(1);
+    expect(r.client.list.mock.calls.length).toBe(lists + 1);
+    expect(r.log.focus.at(-1)).toEqual({ type: "heading" });
+    expect(r.coordinator.railOpen).toBe(true);
+  });
+
+  it("closing the rail keeps the subscription (pins still follow changes)", async () => {
     const r = rig(snapshot([comment(1)]));
     await r.coordinator.start();
     await r.coordinator.openRail();
+    r.coordinator.closeRail();
+    r.coordinator.closeRail();
+    expect(r.coordinator.railOpen).toBe(false);
     r.emit(snapshot([comment(1), comment(2)], { revision: 5 }));
     await flush();
     expect(r.lastRail().rows).toHaveLength(2);
@@ -323,7 +346,6 @@ describe("rail open: list, subscribe, re-list, focus", () => {
   it("a failed refresh from a change event shows the message and keeps the last rows", async () => {
     const r = rig(snapshot([comment(1)]));
     await r.coordinator.start();
-    await r.coordinator.openRail();
     for (const l of [...(r.client.onDidChange.mock.calls.map((c) => c[0]))]) l(rej("unavailable", "Design went away."));
     expect(r.lastRail().notice).toBe("Design went away.");
     expect(r.lastRail().rows).toHaveLength(1);
@@ -335,17 +357,6 @@ describe("rail open: list, subscribe, re-list, focus", () => {
     const n = r.client.list.mock.calls.length;
     await r.coordinator.refresh();
     expect(r.client.list.mock.calls.length).toBe(n + 1);
-  });
-
-  it("opening the rail asks the view to focus the heading; closing unsubscribes", async () => {
-    const r = rig(snapshot([comment(1)]));
-    await r.coordinator.start();
-    await r.coordinator.openRail();
-    expect(r.log.focus.at(-1)).toEqual({ type: "heading" });
-    const unsubscribed = vi.fn();
-    r.client.onDidChange.mockReturnValueOnce(unsubscribed);
-    r.coordinator.closeRail();
-    r.coordinator.closeRail();
   });
 
   it("dispose drops the subscription and clears the guest anchors", async () => {

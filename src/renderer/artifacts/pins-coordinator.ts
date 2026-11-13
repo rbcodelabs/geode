@@ -38,7 +38,7 @@ import {
  * The wiring between one open artifact's comments client, the guest anchor channels and the rail / pin layer (design
  * 3.4, 3.8; ADR 0006 Addendum 1 A.5). DOM-free: it owns the data flow, the view (`PinsUi`) owns the elements.
  *
- *   plugin store --list/subscribe--> client --> snapshot --+--> rail view model --> ui.renderRail
+ *   plugin store --list, subscribe (view lifetime)--> client --> snapshot --+--> rail view model --> ui.renderRail
  *                                                          +--> anchor queries (ids/selectors only) --> bridge.setAnchors
  *   guest --anchor-results/rects--> placements --> collapse --> ui.renderPins
  *
@@ -287,7 +287,7 @@ export function createPinsCoordinator(deps: PinsCoordinatorDeps): PinsCoordinato
     const c = client();
     if (c === null) return;
     unsubscribe = c.onDidChange((result) => {
-      if (disposed || !railOpen) return;
+      if (disposed) return;
       if (result.status === "ok") { snapshot = result.value; listError = null; } else listError = result.message;
       afterData();
     });
@@ -358,7 +358,6 @@ export function createPinsCoordinator(deps: PinsCoordinatorDeps): PinsCoordinato
     if (!wasOpen) {
       ui.railOpenChanged?.(true);
       subscribe();
-      // A change between the list at load and the subscription must not be missed: list again once subscribed.
       await list();
     }
     if (disposed) return;
@@ -369,7 +368,6 @@ export function createPinsCoordinator(deps: PinsCoordinatorDeps): PinsCoordinato
     if (!railOpen) return;
     railOpen = false;
     clusterIds = null;
-    unsubscribeNow();
     if (!disposed) { renderRail(); scheduleRender(); }
     ui.railOpenChanged?.(false);
   }
@@ -449,7 +447,12 @@ export function createPinsCoordinator(deps: PinsCoordinatorDeps): PinsCoordinato
     get railAvailable() { return railAvailable; },
     get railOpen() { return railOpen; },
 
-    start: async () => { await list(); },
+    start: async () => {
+      await list();
+      // Subscribe for the life of the view (pins on the canvas must follow changes, not just the rail), then list again so
+      // a change between the first list and the subscription is not missed.
+      if (client() !== null && !disposed) { subscribe(); await list(); }
+    },
     refresh: async () => { await list(); },
     openRail,
     closeRail,

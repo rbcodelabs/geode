@@ -1443,9 +1443,10 @@ to answer `list` with health `ok` or `recovered` and fewer than 200 comments; a 
 Pick plus Send behave exactly as before. A registry change with a v2 route rebuilds the comments client (a reloaded
 handler leaves no dead client); a page load does not, so pins stay in place while the guest re-resolves.
 
-**Wiring.** `pins-coordinator.ts` (DOM-free) owns the flow: `list` on load, on rail open (after subscribing, so no change
-is missed) and on window focus or leaf activation; `subscribe` only while the rail is open; each change event is answered
-with one `list` by the client (coalesced per frame). The anchor set is sent to the guest through `bridge.setAnchors` as
+**Wiring.** `pins-coordinator.ts` (DOM-free) owns the flow: `list` when the view loads, then `subscribe` for the life of the
+view (pins on the canvas follow changes whether or not the rail is open) and one more `list` after subscribing so no change
+is missed; `list` again on rail open and on window focus or leaf activation. Each change event is answered with one `list`
+by the client (coalesced per frame). The anchor set is sent to the guest through `bridge.setAnchors` as
 exactly `{key, route, tag, selector, alternates, textAnchor, landmark}` with keys `a0..a99` per set; comment text, ids,
 statuses and ordinals never leave the embedder (asserted on the serialized payload). It is re-sent only when an anchor
 field or the set changes, not on a status change. Results and rects drive pin state: `selector`+`agrees` is exact,
