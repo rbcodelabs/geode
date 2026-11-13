@@ -109,6 +109,8 @@ export function createAnchorTracker(deps: AnchorTrackerDeps): AnchorTracker {
   let sentResultsJson = "";
   let lastResultsSentAt = Number.NEGATIVE_INFINITY;
   let resultsTimer: number | null = null;
+  let rectsTimer: number | null = null;
+  let lastRectsSentAt = Number.NEGATIVE_INFINITY;
   let passRoute = "";
   let disposed = false;
   const ownNodes = new WeakSet<Node>();
@@ -134,11 +136,16 @@ export function createAnchorTracker(deps: AnchorTrackerDeps): AnchorTracker {
 
   // ---- geometry ----
   const MAGNITUDE = INSPECTOR_CAPS.numberMagnitude;
-  const clamp = (v: number, min: number): number => Math.min(MAGNITUDE, Math.max(min, v));
+  // A non-finite value (a dependency that returned NaN) becomes 0 rather than poisoning the whole message.
+  const clamp = (v: number, min: number): number => (Number.isFinite(v) ? Math.min(MAGNITUDE, Math.max(min, v)) : 0);
   /** One element with an absurd rect (a 1e12 px offset) must not make the embedder drop a whole message. */
-  const rectOf = (el: Element): Rect => {
-    const r = deps.rectOf(el);
+  const clampRect = (r: Rect): Rect => {
     return { x: clamp(r.x, -MAGNITUDE), y: clamp(r.y, -MAGNITUDE), width: clamp(r.width, 0), height: clamp(r.height, 0) };
+  };
+  /** Reported values are clamped; visibility is judged on the UNCLAMPED rect (an element 1e7 px wide really covers the viewport). */
+  const measureEl = (el: Element): { rect: Rect; visible: boolean } => {
+    const raw = deps.rectOf(el);
+    return { rect: clampRect(raw), visible: intersectsViewport(raw) };
   };
   const intersectsViewport = (r: Rect): boolean =>
     r.width > 0 && r.height > 0 && r.x < win.innerWidth && r.y < win.innerHeight && r.x + r.width > 0 && r.y + r.height > 0;
@@ -151,8 +158,8 @@ export function createAnchorTracker(deps: AnchorTrackerDeps): AnchorTracker {
   const unplaced = (key: string, match: "detached" | "other-route"): Placed =>
     ({ result: { key, match, agrees: false, rect: null, visible: false }, el: null });
   const placed = (key: string, match: "selector" | "text" | "landmark", agrees: boolean, el: Element): Placed => {
-    const rect = rectOf(el);
-    return { result: { key, match, agrees, rect, visible: intersectsViewport(rect) }, el };
+    const { rect, visible } = measureEl(el);
+    return { result: { key, match, agrees, rect, visible }, el };
   };
 
   const textAgrees = (el: Element, anchor: string): boolean => {
@@ -365,23 +372,36 @@ export function createAnchorTracker(deps: AnchorTrackerDeps): AnchorTracker {
     measureScheduled = false;
     if (disposed || resolved.size === 0) return;
     const rects: InspectAnchorRect[] = [];
+    const keys: string[] = [];
     let changed = false;
     let gone = false;
     for (const [key, entry] of resolved) {
       let rect: Rect | null = null;
       let visible = false;
       if (entry.el.isConnected) {
-        rect = rectOf(entry.el);
-        visible = intersectsViewport(rect);
+        ({ rect, visible } = measureEl(entry.el));
       } else {
         gone = true;
       }
       const k = rectKey(rect, visible);
-      if (k !== entry.lastKey) { changed = true; entry.lastKey = k; }
+      if (k !== entry.lastKey) changed = true;
+      keys.push(k);
       rects.push({ key, rect, visible });
     }
     paintFlash();
-    if (changed) deps.send(INSPECT_CHANNEL.anchorRects, { epoch, rects });
+    if (changed) {
+      // Spaced like the results: above ~110 messages/s the embedder would shed some, possibly the final one. A throttled
+      // measure retries (and re-reads the rects, so the trailing send is the LATEST state) when the spacing has elapsed.
+      const wait = lastRectsSentAt + INSPECTOR_CAPS.anchorRectsSpacingMillis - deps.now();
+      if (wait > 0) {
+        if (rectsTimer === null) rectsTimer = deps.setTimeout(() => { rectsTimer = null; measure(); }, wait);
+      } else {
+        lastRectsSentAt = deps.now();
+        let i = 0;
+        for (const entry of resolved.values()) entry.lastKey = keys[i++]!;
+        deps.send(INSPECT_CHANNEL.anchorRects, { epoch, rects });
+      }
+    }
     if (gone) scheduleResolve(true);
   }
 
@@ -484,6 +504,7 @@ export function createAnchorTracker(deps: AnchorTrackerDeps): AnchorTracker {
     pass = null;
     if (resolveTimer !== null) { deps.clearTimeout(resolveTimer); resolveTimer = null; }
     if (resultsTimer !== null) { deps.clearTimeout(resultsTimer); resultsTimer = null; }
+    if (rectsTimer !== null) { deps.clearTimeout(rectsTimer); rectsTimer = null; }
     dirtySince = null;
     callbackTimes = [];
     removeFlash();
@@ -558,7 +579,7 @@ export function createAnchorTracker(deps: AnchorTrackerDeps): AnchorTracker {
     if (flashKey === null || !flashSheet) return;
     const entry = resolved.get(flashKey);
     if (!entry || !entry.el.isConnected) { removeFlash(); return; }
-    const r = rectOf(entry.el);
+    const r = measureEl(entry.el).rect;
     try {
       flashSheet.replaceSync(`:host{all:initial}.b{position:fixed;box-sizing:border-box;pointer-events:none;outline:2px solid ${FLASH_COLOR};outline-offset:2px;left:${r.x}px;top:${r.y}px;width:${r.width}px;height:${r.height}px;z-index:2147483647}`);
     } catch { removeFlash(); }

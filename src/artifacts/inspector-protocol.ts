@@ -220,6 +220,8 @@ export const INSPECTOR_CAPS = {
    */
   anchorResultsSpacingMillis: 150,
   anchorMinPassGapMillis: 250,
+  /** Guest: minimum spacing between `anchor-rects` sends (9 ms: at most 112 per second, inside the embedder's 120), with a trailing send of the latest rects. */
+  anchorRectsSpacingMillis: 9,
   /** Guest: how long the jump-to flash outline stays. */
   anchorFlashMillis: 1200,
 } as const;

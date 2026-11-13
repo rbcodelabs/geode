@@ -278,7 +278,7 @@ export function startInspector(env: InspectorGuestEnv): InspectorGuest | null {
     return [
       () => {
         const value = el.getAttribute("data-testid");
-        return value && value.length <= 128 && !hasControl(value) ? `[data-testid="${value.replace(/["\\]/g, "\\$&")}"]` : null;
+        return value && value.length <= INSPECTOR_CAPS.anchorAttributeValueUnits && !hasControl(value) ? `[data-testid="${value.replace(/["\\]/g, "\\$&")}"]` : null;
       },
       () => uniqueId(el),
       () => {

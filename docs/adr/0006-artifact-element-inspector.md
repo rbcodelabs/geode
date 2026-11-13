@@ -981,7 +981,8 @@ once on any route whose DOM contains the same element.
 
 A text scan examines the first 5,000 elements of a tag. A unique hit in a scan that was truncated (or interrupted by a throwing
 text read) is reported as `text` with `agrees: false`, never as an agreeing match, because uniqueness over the unread elements is
-unproven. Rects are clamped to the protocol magnitude (1e6 px) so one element with an absurd box cannot make the embedder drop a
+unproven. Consumers (the pin overlay, G3) must treat `agrees: false` as unconfirmed: the element is probably, not certainly, the one that was pinned.
+Rects are clamped to the protocol magnitude (1e6 px) so one element with an absurd box cannot make the embedder drop a
 whole message. The selection generator only emits selectors the grammar accepts (a custom element whose name the grammar's tag
 cannot spell, such as one containing `_` or non-ASCII letters, is selected by `*.class`; the tracker still checks the tag).
 
@@ -999,7 +1000,9 @@ scan examines at most 5,000 elements per tag per pass and builds one index share
 pass. Re-resolution triggers: a new `anchors` message, `hashchange`/`popstate`, and a `MutationObserver` (childList, subtree, characterData
 and attributes `id class data-testid data-variation`) with a 250 ms trailing debounce, a 1 s hard maximum, a 1 s floor after a pass that
 used more than 20 ms, and a 2 s floor under more than 50 observer callbacks per second. Scroll and resize only re-measure
-(`getBoundingClientRect` on resolved elements, one frame coalesced) and send `anchor-rects`, in full, only when something changed. A 1 s
+(`getBoundingClientRect` on resolved elements, one frame coalesced) and send `anchor-rects`, in full, only when something changed, at
+least 9 ms apart with a trailing send of the latest rects (at most 112 per second, inside the embedder's 120, so a display above
+120 Hz never sheds the final rect). Visibility is judged on the unclamped rect. A 1 s
 re-assertion (the Phase 2a pattern) re-adds listeners erased by `document.open()` and re-sends current rects. Results are sent only when
 they differ from the last results of the epoch, spaced at least 150 ms apart with a trailing send of the latest state (so any 1 s
 window holds at most 7 messages, under the embedder's 8), and the 1 s re-assertion re-sends the cached results, so a message the
@@ -1041,7 +1044,7 @@ targets inside the 5,000 element scan window; detached 100; mixed 50 selector / 
 | 5k nodes | selector / structural / text / detached / mixed | 0.39 to 0.40 s | 16.7-16.8 / 16.8 ms | 16.7-16.8 / 16.8 ms |
 | 50k nodes | selector / text | 0.39 s | 16.7-16.8 / 16.8 ms | 16.7-16.8 / 16.8 ms |
 | 50k nodes | structural / detached / mixed | 1.89 to 1.90 s | 16.7-16.8 / 16.8 ms | 16.7-33.3 / 33.4 ms (one dropped frame in a few cases) |
-| 5k and 50k nodes | 100 selector anchors while the page scrolls every frame for 3 s | n/a | 16.7-16.8 / 16.8 ms | 181 / 180 rect messages in 3 s (one per frame, under the 120/s embedder budget) |
+| 5k and 50k nodes | 100 selector anchors while the page scrolls every frame for 3 s | n/a | 16.7-16.8 / 16.8 ms | worst 1 s window of raw guest rect sends is asserted at most 120 (see numbers below) |
 
 Idle baseline frames were 16.7 ms (p95 16.7-16.8, max 16.8). A pass adds no visible frame time at either size; the cost shows as a
 longer time to results on 50k nodes, not as jank. Not measured: DPR 2, ProMotion, a real GPU; those belong to spike S2 (G3).

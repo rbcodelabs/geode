@@ -50,7 +50,7 @@ const summary = (deltas: number[]) => ({
 
 const report: Record<string, unknown> = {};
 
-/** 100 resolved anchors while the page scrolls every frame for 3 s: measure() reads 100 rects per frame (coalesced). */
+/** 100 resolved anchors while the page scrolls every frame for 3 s: measure() reads 100 rects per frame (coalesced). rectMessages is the worst 1 s window of raw guest sends. */
 async function scrollRun(n: number) {
   const s = await session(anchorPerfArtifact(n));
   try {
@@ -59,10 +59,20 @@ async function scrollRun(n: number) {
     const set = await inView(s.window, (p: any, _v: any, a: any) => p.setAnchors(a), queries("selector", n, r));
     await expect.poll(async () => (await lastResults(s.window))?.epoch ?? 0, { timeout: 120_000 }).toBeGreaterThanOrEqual(set.epoch);
     await guestEval(s.window, `window.__perf.start(); (() => { let y = 0; const step = () => { if (!window.__perf.running) return; y += 7; window.scrollTo(0, y % 20000); requestAnimationFrame(step); }; requestAnimationFrame(step); })()`);
-    const before = await inView(s.window, (p: any) => p.snapshot().rectCount);
+    // Count what the GUEST sends (raw ipc-message events, before any embedder gate): the embedder would silently shed the excess.
+    await s.window.evaluate(() => {
+      const view = (window as any).app.workspace.getLeavesOfType("geode-artifact")[0].view;
+      const frame = view.containerEl.querySelector("webview");
+      const log: number[] = ((window as any).__rawRects = []);
+      frame.addEventListener("ipc-message", (e: any) => { if (String(e.channel).endsWith("anchor-rects")) log.push(performance.now()); });
+    });
+    await guestEval(s.window, `window.__perf.start(); (() => { let y = 0; const step = () => { if (!window.__perf.running) return; y += 7; window.scrollTo(0, y % 20000); requestAnimationFrame(step); }; requestAnimationFrame(step); })()`);
     await s.window.waitForTimeout(3000);
     const deltas = await guestEval<number[]>(s.window, `window.__perf.stop()`);
-    const rectMessages = (await inView(s.window, (p: any) => p.snapshot().rectCount)) - before;
+    await s.window.waitForTimeout(500);
+    const stamps = await s.window.evaluate(() => (window as any).__rawRects as number[]);
+    let rectMessages = 0;
+    for (let i = 0; i < stamps.length; i++) { let n = 0; for (let j = i; j < stamps.length && stamps[j]! - stamps[i]! < 1000; j++) n++; rectMessages = Math.max(rectMessages, n); }
     return { frames: summary(deltas), rectMessages };
   } finally { await s.cleanup(); }
 }
@@ -115,6 +125,6 @@ for (const n of [5000, 50000]) {
     console.log(`S1 ${n} scroll ${JSON.stringify(out)}`);
     expect(out.frames.max).toBeLessThan(FRAME_BUDGET_MS * 2);
     expect(out.rectMessages).toBeGreaterThan(0);
-    expect(out.rectMessages).toBeLessThanOrEqual(3 * INSPECTOR_CAPS.anchorRectsPerSecond + 20); // the embedder budget holds
+    expect(out.rectMessages).toBeLessThanOrEqual(INSPECTOR_CAPS.anchorRectsPerSecond); // worst 1 s window of RAW guest sends fits the embedder window
   });
 }
