@@ -123,14 +123,12 @@ export class ArtifactView implements View, ReloadableView {
   private commentsClient: (ArtifactCommentsClient & { dispose(): void }) | null = null;
   private commentsRoute = "";
   private static nextRailId = 0;
-  private lastFocusRefresh = 0;
-  /** Re-lists when the window regains focus, for the visible, active view only (a background tab does nothing), at most once a second. */
+  private focusRefreshing = false;
+  /** Re-lists when the window regains focus, for the visible, active view only (a background tab does nothing), one at a time. */
   private readonly onWindowFocus = (): void => {
-    if (this.containerEl.getClientRects().length === 0) return; // not the active tab: nothing to refresh
-    const now = Date.now();
-    if (now - this.lastFocusRefresh < 1000) return;
-    this.lastFocusRefresh = now;
-    void this.pins?.refresh();
+    if (this.containerEl.getClientRects().length === 0 || this.focusRefreshing || !this.pins) return; // not the active tab, or one is already running
+    this.focusRefreshing = true;
+    void this.pins.refresh().finally(() => { this.focusRefreshing = false; });
   };
   private readonly onStageScroll = (): void => this.layoutPins();
   private unsubscribeActiveLeaf: (() => void) | undefined;
