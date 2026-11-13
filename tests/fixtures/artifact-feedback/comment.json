@@ -1,0 +1,28 @@
+{
+  "id": "cmt_0123456789abcdef0123456789abcdef",
+  "selectionId": "sel_0123456789abcdef0123456789abcdef",
+  "ordinal": 2,
+  "version": 3,
+  "kind": "pin",
+  "status": "open",
+  "provenance": "local",
+  "text": "Make this primary action larger.",
+  "createdAt": "2026-11-12T10:00:00.000Z",
+  "updatedAt": "2026-11-12T10:05:00.000Z",
+  "sentAt": null,
+  "artifactRevision": 14,
+  "viewSessionId": "view-1",
+  "anchor": {
+    "route": "/index.html",
+    "tag": "button",
+    "selector": "main > .actions > button.primary",
+    "selectorAlternates": ["#save"],
+    "textAnchor": { "tag": "button", "text": "Save" },
+    "landmark": "Actions",
+    "lastRect": { "x": 10, "y": 220, "width": 80, "height": 32 }
+  },
+  "label": "button Save",
+  "hasScreenshot": true,
+  "redacted": false,
+  "send": { "attempts": 0, "lastOutcome": null, "maybeSent": false, "lastMessage": null }
+}
