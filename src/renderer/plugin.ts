@@ -8,7 +8,8 @@ import type { EditorView } from "@codemirror/view";
 import type { MarkdownView } from "./views/markdown-view";
 import type { QuickSwitcherProvider } from "./quick-switcher-providers";
 import type { SyncProvider } from "./sync/types";
-import type { ArtifactFeedbackHandler, ArtifactFeedbackRegistration } from "../artifacts/feedback-contract";
+import type { ArtifactFeedbackRegistration } from "../artifacts/feedback-contract";
+import type { AnyArtifactFeedbackHandler } from "../artifacts/feedback-contract-v2";
 import { notifyThreadsDataSaved } from "./integrations/threads-projects";
 
 export type { PluginManifest } from "./plugin-manifest";
@@ -250,6 +251,12 @@ export abstract class Plugin extends Component {
    * the artifact. Feature-detect with `typeof plugin.registerArtifactFeedbackHandler
    * === "function"` and `app.artifactFeedback?.contractVersions.includes(1)`.
    *
+   * Contract v2 (ADR 0006 Addendum 1) adds pinned comments: a handler with
+   * `contractVersion: 2` also supplies a `comments` provider (and still implements
+   * `submit`). Negotiate in the plugin: register v2 only when
+   * `app.artifactFeedback.contractVersions.includes(2)`, otherwise register the same
+   * handler as v1. A v1 handler keeps today's Pick + Send behavior unchanged.
+   *
    * The owner identity comes from this plugin's manifest, never from the handler.
    * Never throws for caller mistakes (a structured status is returned); throws
    * only when this plugin generation is inactive. The handler is disposed on
@@ -258,7 +265,7 @@ export abstract class Plugin extends Component {
    * with console.warn, deliberately NOT routed through errorHandler (that would
    * quarantine the whole plugin). Obsidian lacks this method.
    */
-  registerArtifactFeedbackHandler(handler: ArtifactFeedbackHandler): ArtifactFeedbackRegistration {
+  registerArtifactFeedbackHandler(handler: AnyArtifactFeedbackHandler): ArtifactFeedbackRegistration {
     this.assertHostGeneration();
     // The full service is a separate internal reference; `app.artifactFeedback` is the read-only view.
     const registry = this.app.artifactFeedbackService;

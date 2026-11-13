@@ -1,0 +1,65 @@
+{
+  "storeId": "str_89abcdef0123456789abcdef01234567",
+  "revision": 7,
+  "health": "ok",
+  "notice": null,
+  "foreignCount": 1,
+  "comments": [
+    {
+      "id": "cmt_0123456789abcdef0123456789abcdef",
+      "selectionId": "sel_0123456789abcdef0123456789abcdef",
+      "ordinal": 2,
+      "version": 3,
+      "kind": "pin",
+      "status": "open",
+      "provenance": "local",
+      "text": "Make this primary action larger.",
+      "createdAt": "2026-11-12T10:00:00.000Z",
+      "updatedAt": "2026-11-12T10:05:00.000Z",
+      "sentAt": null,
+      "artifactRevision": 14,
+      "viewSessionId": "view-1",
+      "anchor": {
+        "route": "/index.html",
+        "tag": "button",
+        "selector": "main > .actions > button.primary",
+        "selectorAlternates": ["#save"],
+        "textAnchor": { "tag": "button", "text": "Save" },
+        "landmark": "Actions",
+        "lastRect": { "x": 10, "y": 220, "width": 80, "height": 32 }
+      },
+      "label": "button Save",
+      "hasScreenshot": true,
+      "redacted": false,
+      "send": { "attempts": 0, "lastOutcome": null, "maybeSent": false, "lastMessage": null }
+    },
+    {
+      "id": "cmt_fedcba9876543210fedcba9876543210",
+      "selectionId": "sel_fedcba9876543210fedcba9876543210",
+      "ordinal": 5,
+      "version": 1,
+      "kind": "pin",
+      "status": "sent",
+      "provenance": "foreign",
+      "text": "Heading is too small.",
+      "createdAt": "2026-11-11T09:00:00.000Z",
+      "updatedAt": "2026-11-11T09:30:00.000Z",
+      "sentAt": "2026-11-11T09:30:00.000Z",
+      "artifactRevision": 9,
+      "viewSessionId": "view-0",
+      "anchor": {
+        "route": "/index.html",
+        "tag": "h2",
+        "selector": "",
+        "selectorAlternates": [],
+        "textAnchor": { "tag": "h2", "text": "" },
+        "landmark": null,
+        "lastRect": null
+      },
+      "label": "h2",
+      "hasScreenshot": false,
+      "redacted": true,
+      "send": { "attempts": 1, "lastOutcome": "sent", "maybeSent": false, "lastMessage": "Sent to the thread." }
+    }
+  ]
+}
