@@ -103,7 +103,7 @@ describe("resolution order", () => {
     const h = fresh();
     const epoch = setAnchors(h, [q()]);
     h.flush(3);
-    expect(lastResults(h)).toEqual({ epoch, results: [{ key: "a0", match: "selector", agrees: true, rect: R.buy, visible: true }] });
+    expect(lastResults(h)).toEqual({ epoch, viewport: { width: h.win.innerWidth, height: h.win.innerHeight }, results: [{ key: "a0", match: "selector", agrees: true, rect: R.buy, visible: true }] });
     expect(Object.keys(lastResults(h)!.results[0]!).sort()).toEqual(["agrees", "key", "match", "rect", "visible"]);
   });
 
@@ -585,6 +585,7 @@ describe("rect reporting", () => {
     expect(h.all(INSPECT_CHANNEL.anchorRects)).toHaveLength(1);
     expect(h.last(INSPECT_CHANNEL.anchorRects)!.payload).toEqual({
       epoch,
+      viewport: { width: h.win.innerWidth, height: h.win.innerHeight },
       rects: [
         { key: "a0", rect: { x: 100, y: 50, width: 160, height: 48 }, visible: true },
         { key: "a1", rect: R.pro, visible: true },
@@ -784,5 +785,159 @@ describe("a hostile page", () => {
     h.tick();
     h.flush(5);
     expect(qsa).toEqual([]);
+  });
+});
+
+/**
+ * Spike S2 (Retina MacBook): the tracker said visible=true for an element clipped away by an ancestor scroller or
+ * overflow:hidden box, so a badge floated over unrelated content. The guest also has to say how big its viewport is, because
+ * the embedder maps guest px to embedder px with frame.clientWidth / guest.innerWidth.
+ */
+describe("ancestor clipping (S2)", () => {
+  const SCROLLER = { x: 90, y: 190, width: 300, height: 90 }; // #pro, the button's parent
+  const clipped = (h: GuestHarness, style: Record<string, string> = { "overflow-x": "auto", "overflow-y": "auto" }) => {
+    h.setStyle($(h, "#pro"), style);
+    h.setRect($(h, "#pro"), SCROLLER);
+  };
+
+  it("a target scrolled out of an overflow scroller is visible:false, and still reports its rect", () => {
+    const h = fresh();
+    clipped(h);
+    h.setRect($(h, "button"), { x: 100, y: 400, width: 160, height: 48 }); // inside the viewport, below the scroller
+    setAnchors(h, [q()]);
+    h.flush(3);
+    expect(byKey(h, "a0")).toMatchObject({ match: "selector", visible: false, rect: { x: 100, y: 400, width: 160, height: 48 } });
+  });
+
+  it("a target inside the scroller's box stays visible, and a partly clipped one is still visible", () => {
+    const h = fresh();
+    clipped(h);
+    setAnchors(h, [q()]);
+    h.flush(3);
+    expect(byKey(h, "a0")?.visible).toBe(true);
+    h.setRect($(h, "button"), { x: 100, y: 260, width: 160, height: 48 }); // 20 of 48 px inside (190..280)
+    h.win.dispatchEvent(new h.win.Event("scroll"));
+    h.flush(3);
+    expect(h.last(INSPECT_CHANNEL.anchorRects)!.payload.rects[0]).toMatchObject({ key: "a0", visible: true });
+  });
+
+  it("scrolling the scroller (a scroll event that does not bubble) flips visible", () => {
+    const h = fresh();
+    clipped(h);
+    setAnchors(h, [q()]);
+    h.flush(3);
+    h.setRect($(h, "button"), { x: 100, y: 400, width: 160, height: 48 });
+    $(h, "#pro").dispatchEvent(new h.win.Event("scroll", { bubbles: false }));
+    h.flush(3);
+    expect(h.last(INSPECT_CHANNEL.anchorRects)!.payload.rects[0]).toMatchObject({ key: "a0", visible: false });
+  });
+
+  it("overflow:hidden clips too, one axis at a time (overflow-x only does not clip vertically)", () => {
+    const h = fresh();
+    clipped(h, { "overflow-x": "hidden", "overflow-y": "visible" });
+    h.setRect($(h, "button"), { x: 100, y: 400, width: 160, height: 48 }); // outside vertically only
+    setAnchors(h, [q()]);
+    h.flush(3);
+    expect(byKey(h, "a0")?.visible).toBe(true);
+    h.setRect($(h, "button"), { x: 600, y: 200, width: 160, height: 48 }); // outside horizontally
+    h.win.dispatchEvent(new h.win.Event("scroll"));
+    h.flush(3);
+    expect(h.last(INSPECT_CHANNEL.anchorRects)!.payload.rects[0]).toMatchObject({ visible: false });
+  });
+
+  it("overflow:visible ancestors never clip", () => {
+    const h = fresh();
+    clipped(h, { "overflow-x": "visible", "overflow-y": "visible" });
+    h.setRect($(h, "button"), { x: 100, y: 400, width: 160, height: 48 });
+    setAnchors(h, [q()]);
+    h.flush(3);
+    expect(byKey(h, "a0")?.visible).toBe(true);
+  });
+
+  it("every clipping ancestor counts, not only the nearest", () => {
+    const h = fresh();
+    h.setStyle($(h, "section"), { "overflow-x": "hidden", "overflow-y": "hidden" });
+    h.setRect($(h, "section"), { x: 80, y: 150, width: 600, height: 100 }); // 150..250
+    h.setRect($(h, "button"), { x: 100, y: 260, width: 160, height: 48 }); // inside #pro, but below the section's box
+    setAnchors(h, [q()]);
+    h.flush(3);
+    expect(byKey(h, "a0")?.visible).toBe(false);
+  });
+
+  it("an out-of-flow descendant is not clipped by a scroller that is not its containing block", () => {
+    const h = fresh();
+    clipped(h);
+    h.setStyle($(h, "button"), { position: "fixed" });
+    h.setRect($(h, "button"), { x: 100, y: 400, width: 160, height: 48 });
+    setAnchors(h, [q()]);
+    h.flush(3);
+    expect(byKey(h, "a0")?.visible).toBe(true);
+    // absolute: the scroller is not positioned, so its overflow does not clip the button
+    h.setStyle($(h, "button"), { position: "absolute" });
+    h.win.dispatchEvent(new h.win.Event("scroll"));
+    h.flush(3);
+    expect(h.last(INSPECT_CHANNEL.anchorRects)?.payload.rects[0]?.visible ?? true).toBe(true);
+    // absolute inside a positioned scroller IS clipped
+    h.setStyle($(h, "#pro"), { "overflow-x": "auto", "overflow-y": "auto", position: "relative" });
+    h.win.dispatchEvent(new h.win.Event("scroll"));
+    h.flush(3);
+    expect(h.last(INSPECT_CHANNEL.anchorRects)!.payload.rects[0]).toMatchObject({ visible: false });
+  });
+
+  it("the page's own prototype patches cannot lie about clipping (natives captured at start)", () => {
+    const h = fresh();
+    clipped(h);
+    h.setRect($(h, "button"), { x: 100, y: 400, width: 160, height: 48 });
+    h.win.getComputedStyle = (() => ({ getPropertyValue: () => "visible" })) as unknown as typeof h.win.getComputedStyle;
+    setAnchors(h, [q()]);
+    h.flush(3);
+    expect(byKey(h, "a0")?.visible).toBe(false);
+  });
+
+  it("an ancestor with no overflow styling does not clip", () => {
+    const h = fresh();
+    h.setRect($(h, "button"), { x: 100, y: 400, width: 160, height: 48 });
+    setAnchors(h, [q()]);
+    h.flush(3);
+    expect(byKey(h, "a0")?.visible).toBe(true);
+  });
+});
+
+describe("guest viewport on the anchor messages (S2 scale)", () => {
+  it("results and rects carry the guest's innerWidth and innerHeight", () => {
+    const h = fresh();
+    setAnchors(h, [q()]);
+    h.flush(3);
+    const viewport = { width: h.win.innerWidth, height: h.win.innerHeight };
+    expect(viewport.width).toBeGreaterThan(0);
+    expect(lastResults(h)).toMatchObject({ viewport });
+    h.setRect($(h, "button"), { x: 100, y: 50, width: 160, height: 48 });
+    h.win.dispatchEvent(new h.win.Event("scroll"));
+    h.flush(3);
+    expect(h.last(INSPECT_CHANNEL.anchorRects)!.payload).toMatchObject({ viewport });
+  });
+
+  it("follows a resize of the guest viewport", () => {
+    const h = fresh();
+    setAnchors(h, [q()]);
+    h.flush(3);
+    Object.defineProperty(h.win, "innerWidth", { value: 375, configurable: true });
+    Object.defineProperty(h.win, "innerHeight", { value: 667, configurable: true });
+    h.setRect($(h, "button"), { x: 100, y: 52, width: 160, height: 48 });
+    h.win.dispatchEvent(new h.win.Event("resize"));
+    h.flush(3);
+    expect(h.last(INSPECT_CHANNEL.anchorRects)!.payload.viewport).toEqual({ width: 375, height: 667 });
+  });
+
+  it("a viewport-only change (rects identical) is still reported once", () => {
+    const h = fresh();
+    setAnchors(h, [q()]);
+    h.flush(3);
+    const before = h.all(INSPECT_CHANNEL.anchorRects).length;
+    Object.defineProperty(h.win, "innerWidth", { value: 1000, configurable: true });
+    h.win.dispatchEvent(new h.win.Event("resize"));
+    h.flush(3);
+    expect(h.all(INSPECT_CHANNEL.anchorRects).length).toBe(before + 1);
+    expect(h.last(INSPECT_CHANNEL.anchorRects)!.payload.viewport.width).toBe(1000);
   });
 });
