@@ -49,7 +49,7 @@ export function markdownReferences(body: string, locate: (start: number, end: nu
     if (link === undefined) return false;
     const position = locate(node.from, node.to);
     if (!url) references.push({ id, link, position });
-    (isEmbed ? embeds : links).push({ link, displayText: display, position, isEmbed });
+    (isEmbed ? embeds : links).push({ link, original: raw, displayText: display, position, isEmbed });
     return false;
   } });
   return { links, embeds, references };

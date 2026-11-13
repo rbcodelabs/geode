@@ -1,0 +1,10 @@
+{
+  "requestId": "req_00112233445566778899aabbccddeeff",
+  "outcome": "partial",
+  "message": "1 sent, 1 waiting for the agent, 1 skipped.",
+  "items": [
+    { "id": "cmt_0123456789abcdef0123456789abcdef", "result": "sent" },
+    { "id": "cmt_fedcba9876543210fedcba9876543210", "result": "skipped", "reason": "foreign" },
+    { "id": "cmt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "result": "deferred" }
+  ]
+}

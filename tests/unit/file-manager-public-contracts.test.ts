@@ -22,7 +22,7 @@ function fakeApp() {
   return {
     vault: { rename: vi.fn(async () => {}), trash: vi.fn(async () => {}) },
     metadataCache: { fileToLinktext: vi.fn((target: TFile) => target.basename) },
-    renameFileWithLinkUpdate: vi.fn(async () => {}),
+    moveVaultPath: vi.fn(async () => ({ moved: [], updatedNotes: [] })),
   } as any;
 }
 
@@ -32,7 +32,7 @@ describe("FileManager public foundation", () => {
     expect(app.fileManager).toBeInstanceOf(FileManager);
   });
 
-  it("renames files through link-aware handling and folders through Vault", async () => {
+  it("renames files and folders through the same link-aware move path", async () => {
     const app = fakeApp();
     const manager = new FileManager(app);
     const note = file("Old.md");
@@ -40,8 +40,8 @@ describe("FileManager public foundation", () => {
 
     await manager.renameFile(note, "New.md");
     await manager.renameFile(docs, "Archive");
-    expect(app.renameFileWithLinkUpdate).toHaveBeenCalledWith(note, "New.md");
-    expect(app.vault.rename).toHaveBeenCalledWith(docs, "Archive");
+    expect(app.moveVaultPath.mock.calls).toEqual([["Old.md", "New.md"], ["Docs", "Archive"]]);
+    expect(app.vault.rename).not.toHaveBeenCalled();
   });
 
   it("trashes files and folders through the Vault trash implementation", async () => {
@@ -78,7 +78,7 @@ describe("FileManager through require('obsidian')", () => {
             const app = {
               vault: { rename: async (...args) => calls.push(["rename", ...args]), trash: async (...args) => calls.push(["trash", ...args]) },
               metadataCache: { fileToLinktext: () => "Note" },
-              renameFileWithLinkUpdate: async (...args) => calls.push(["link-rename", ...args])
+              moveVaultPath: async (...args) => { calls.push(["link-rename", ...args]); return { moved: [], updatedNotes: [] }; }
             };
             const manager = new FileManager(app);
             const note = { kind: "file", path: "Note.md", basename: "Note", extension: "md" };

@@ -13,7 +13,7 @@ const SAMPLE = [
   "```", "[[in-code]]", "```", "Paragraph with mention words. ^para",
 ].join("\n");
 
-const EXPECTED = { version: 2, fingerprint: "94aa2f25" };
+const EXPECTED = { version: 3, fingerprint: "be63f937" };
 
 function fingerprint(): string {
   const text = JSON.stringify([parseMetadata(SAMPLE), extractMentionIndexKeys(SAMPLE)]);
