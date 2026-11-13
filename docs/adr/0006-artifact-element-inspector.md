@@ -1318,3 +1318,108 @@ Plugin: new `geodeArtifactFeedbackV2.ts` (vendored), `commentModel.ts`, `comment
 `elementBatchPrompt.ts`; changed `elementFeedbackRegistration.ts` (negotiation), `artifactFeedbackHandler.ts`,
 `sendCoordinator.ts` (`cancel`), `selectionFiles.ts` (`protectIds`), `reportTemplate.ts` (legend swatch name),
 `designGuidance.ts` and the kickoff text (agents never edit `.threads-design/`).
+
+## Addendum 2: guest anchors (Phase 2b-i, G2)
+
+Status: implemented in the G2 pull request. No visible UI: pins, the rail and the contract v2 provider arrive in later PRs. Addendum 1
+(contract v2) is a separate pull request and is not referenced here.
+
+### Decision
+
+**Re-anchoring runs in the guest; rendering will run in the embedder.** Four new inspector channels (`inspect:v1`, one bundle):
+
+| Direction | Channel | Payload |
+|---|---|---|
+| embedder to guest | `geode-artifact:inspect:v1:anchors` | `{ epoch, redactText, anchors: InspectAnchorQuery[] }` (at most 100) |
+| embedder to guest | `geode-artifact:inspect:v1:anchor-focus` | `{ epoch, key, behavior: "scroll" \| "flash" }` |
+| guest to embedder | `geode-artifact:inspect:v1:anchor-results` | `{ epoch, results: InspectAnchorResult[] }` (at most 100, 64 KB) |
+| guest to embedder | `geode-artifact:inspect:v1:anchor-rects` | `{ epoch, rects: InspectAnchorRect[] }` |
+
+A query carries only page-derived data (`key`, `route`, `tag`, `selector`, `alternates`, `textAnchor`, `landmark`). The embedder rebuilds
+every query from that allowlist before sending (`sanitizeAnchorQuery`), so comment text, ids, ordinals and status cannot reach the page's
+process even if a caller attaches them. Pins work in every inspector mode: the tracker is passive (no input interception, no highlight host).
+
+**Resolution order per anchor:** route gate (another route is `other-route`, with no DOM work), selector, text anchor, weak selector hit,
+landmark, `detached`. A selector hit counts when exactly one element matches and its tag equals the stored tag; it agrees when the text
+anchor is empty (redacted) or equals the element's normalized text, or one is a prefix of the other and both are at least 12 units. A text
+anchor matches only when exactly one element of the tag has that text (never a guess among several). A landmark is exactly one
+`[data-variation]` or heading with that text. On redacted artifacts the stored route is path-only, so the route gate compares paths, text
+and heading steps are skipped, and a unique selector hit is accepted. A consequence worth knowing: a hash-routed page (`#/a`, `#/b`) that is redacted
+loses the route gate, because the hash is deliberately not stored (it can carry note titles); a pin made on one hash route resolves
+once on any route whose DOM contains the same element.
+
+A text scan examines the first 5,000 elements of a tag. A unique hit in a scan that was truncated (or interrupted by a throwing
+text read) is reported as `text` with `agrees: false`, never as an agreeing match, because uniqueness over the unread elements is
+unproven. Consumers (the pin overlay, G3) must treat `agrees: false` as unconfirmed: the element is probably, not certainly, the one that was pinned.
+Rects are clamped to the protocol magnitude (1e6 px) so one element with an absurd box cannot make the embedder drop a
+whole message. The selection generator only emits selectors the grammar accepts (a custom element whose name the grammar's tag
+cannot spell, such as one containing `_` or non-ASCII letters, is selected by `*.class`; the tracker still checks the tag).
+
+**Stored selectors are untrusted input (A2.7).** The guest executes only the grammar its own generator emits
+(`src/artifacts/anchor-selector.ts`): up to 12 compounds joined by a space or ` > `, a tag or `*`, `#ident`, `.ident`, `[attr]`,
+`[attr="value"]` (value at most 128 units, the selection generator's `data-testid` limit; only `\"` and `\\` escapes), `:nth-child(n)`, `:nth-of-type(n)`, `:first/last-child`,
+`:first/last-of-type`, at most 512 units. Everything else (`:has`, `:is`, `:where`, `:not`, pseudo-elements, lists, sibling combinators,
+namespaces, case flags) is rejected as `detached` without calling the DOM. The parser is a single left-to-right pass. Known
+looseness, no security impact: an unescaped `:` or `.` is accepted inside an attribute name, which is not valid CSS; the DOM then
+throws, the guest catches it and the candidate is simply not a hit.
+
+**Bounded, time-sliced work.** At most 100 anchors. A pass resolves up to 8 anchors per animation frame within a 4 ms slice; each anchor
+is a generator that yields after every native query and every 250 elements of a text scan, so a slice is honoured inside an anchor. A text
+scan examines at most 5,000 elements per tag per pass and builds one index shared by all anchors of the pass. A newer epoch abandons the
+pass. Re-resolution triggers: a new `anchors` message, `hashchange`/`popstate`, and a `MutationObserver` (childList, subtree, characterData
+and attributes `id class data-testid data-variation`) with a 250 ms trailing debounce, a 1 s hard maximum, a 1 s floor after a pass that
+used more than 20 ms, and a 2 s floor under more than 50 observer callbacks per second. Scroll and resize only re-measure
+(`getBoundingClientRect` on resolved elements, one frame coalesced) and send `anchor-rects`, in full, only when something changed, at
+least 9 ms apart with a trailing send of the latest rects (at most 112 per second, inside the embedder's 120, so a display above
+120 Hz never sheds the final rect). Visibility is judged on the unclamped rect. A 1 s
+re-assertion (the Phase 2a pattern) re-adds listeners erased by `document.open()` and re-sends current rects. Results are sent only when
+they differ from the last results of the epoch, spaced at least 150 ms apart with a trailing send of the latest state (so any 1 s
+window holds at most 7 messages, under the embedder's 8), and the 1 s re-assertion re-sends the cached results, so a message the
+embedder dropped heals within about a second. Every trigger, the immediate ones too (an anchored node that left the document, a
+history event), waits at least 250 ms after the previous pass ended. `history.pushState` and `replaceState` fire no event the
+isolated world can see, so the route is re-checked by the same 1 s re-assertion (up to about a second of latency).
+
+**Embedder gates (T1).** Sender is this view's webview main frame; the epoch must be current; every key must belong to the set sent in that
+epoch and appear once; the message is rebuilt from an allowlist (`anchor-validator.ts`); a hostile own key, a non-finite or out-of-range
+number, a rect inconsistent with the match, more than 100 entries or more than 64 KB drops the whole message. `anchorResultsPerSecond: 8`
+and `anchorRectsPerSecond: 120` are sliding windows of their own, separate from hover, select, cancel, ready and rect. The `ready`
+handler re-sends the current set with `epoch + 1` after the mode. `selection-validator.ts` is untouched.
+
+**Jump to.** `anchor-focus` with `scroll` scrolls the resolved element to the middle; `flash` scrolls it into view if needed and draws a
+static outline in a closed shadow root for 1.2 s. Both are instant under `prefers-reduced-motion`; nothing is animated.
+
+**Test access.** There is no production hook: no UI consumes the anchors yet. The end-to-end specs drive the view's bridge
+directly through a probe they install on the live instance (`setAnchors`, `focusAnchor`, and the bridge's own validated callbacks).
+The pin overlay (a later PR) is the first production consumer.
+
+### Threat model (T1, T2, T3, T7, T9)
+
+| Threat | Mitigation | Residual |
+|---|---|---|
+| T1 page forges or floods anchor results and rects | sender, epoch, key-subset gate, allowlist rebuild, hostile-key reject, 64 KB cap, independent budgets, whole-message drop; the preload channel is not reachable from page `postMessage` or events | can only move or hide a badge |
+| T2 patched `getBoundingClientRect` or queries, decoys | the tracker uses the natives captured at document start in the isolated world; a decoy loses to a unique selector hit and makes a text anchor ambiguous | a lone decoy with the same text, after the original is removed, attracts the pin (visual only) |
+| T3 malicious stored selector | grammar subset, 512 units, 12 compounds, native calls in try/catch, sliced resolve, 100-anchor cap, abandon on new epoch | none known |
+| T7 thousands of pins | 100-anchor cap, text scan cap, shared index, slices, observer backoff | none |
+| T9 page reads or observes comments | `.threads-design/` already 404s; the anchors payload keys equal the allowlist exactly | the jump-to flash outline is a host element in the page's DOM (closed shadow root, so its content is unreadable, but the page can see that a node was added and removed for 1.2 s), as the Phase 1 highlight host already is; it reveals that a jump happened, not why |
+
+### Spike S1 result (a Linux Xvfb CI-class host with software rendering, Electron 42, 6 vCPU; not a Retina Mac)
+
+100 anchors per case; the page's own `requestAnimationFrame` loop measures frame intervals while the guest works, and the spec asserts
+the distribution of matches so each case measures real resolution (selector 100; structural 100 as selector; text 100 as text, with
+targets inside the 5,000 element scan window; detached 100; mixed 50 selector / 25 text / 25 detached). Budgets kept: chunk 8, slice 4 ms.
+
+| Page | Anchors | Time to results | Frame interval during the pass (p95 / max) | During 60 Hz page mutation (p95 / max) |
+|---|---|---|---|---|
+| 5k nodes | selector / structural / text / detached / mixed | 0.39 to 0.40 s | 16.7-16.8 / 16.8 ms | 16.7-16.8 / 16.8 ms |
+| 50k nodes | selector / text | 0.39 s | 16.7-16.8 / 16.8 ms | 16.7-16.8 / 16.8 ms |
+| 50k nodes | structural / detached / mixed | 1.89 to 1.90 s | 16.7-16.8 / 16.8 ms | 16.7-33.3 / 33.4 ms (one dropped frame in a few cases) |
+| 5k and 50k nodes | 100 selector anchors while the page scrolls every frame for 3 s | n/a | 16.7-16.8 / 16.8 ms | worst 1 s window of raw guest rect sends is asserted at most 120 (see numbers below) |
+
+Idle baseline frames were 16.7 ms (p95 16.7-16.8, max 16.8). A pass adds no visible frame time at either size; the cost shows as a
+longer time to results on 50k nodes, not as jank. Not measured: DPR 2, ProMotion, a real GPU; those belong to spike S2 (G3).
+
+### Consequences
+
+- The guest preload gains a second feature set (a tracker) behind the same document-start capture of natives.
+- A pass costs the embedder nothing between changes; reloads cost one resolve pass.
+- The grammar's attribute-value cap (128) equals the generator's `data-testid` limit; the round trip (generator output is always inside the grammar) is covered by tests over report-shaped pages.

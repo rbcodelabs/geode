@@ -260,3 +260,20 @@ describe("redactHtml with control characters before data: (review A7)", () => {
     expect(out).toContain('href="..."');
   });
 });
+
+describe("validateRectMessage guest viewport (S2 scale)", () => {
+  const rect = { x: 1, y: 2, width: 30, height: 40 };
+  const viewport = { width: 1024, height: 768 };
+  it("rebuilds a viewport on a connected selected report, and omits it when absent", () => {
+    expect(validateRectMessage({ target: "selected", connected: true, rect, viewport: { ...viewport, junk: 1 } })).toEqual({ target: "selected", connected: true, rect, viewport });
+    // only the selection box needs the scale; a hover report carrying one is not something the guest sends
+    expect(validateRectMessage({ target: "hover", connected: true, rect, tag: "a", viewport })).toBeNull();
+    expect(Object.keys(validateRectMessage({ target: "selected", connected: true, rect })!)).toEqual(["target", "connected", "rect"]);
+  });
+  it("drops a malformed viewport, and a viewport on a disconnected report", () => {
+    for (const v of [{ width: 0, height: 1 }, { width: -1, height: 1 }, { width: Number.NaN, height: 1 }, { width: 1e9, height: 1 }, { width: 1 }, "x"]) {
+      expect(validateRectMessage({ target: "selected", connected: true, rect, viewport: v })).toBeNull();
+    }
+    expect(validateRectMessage({ target: "selected", connected: false, rect: null, viewport })).toBeNull();
+  });
+});

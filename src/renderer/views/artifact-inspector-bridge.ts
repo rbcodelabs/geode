@@ -14,12 +14,17 @@ import {
   INSPECTOR_CAPS,
   INSPECTOR_SCREENSHOT,
   type GuestSelectMessage,
+  type InspectAnchorFocusBehavior,
+  type InspectAnchorQuery,
+  type InspectAnchorRectsMessage,
+  type InspectAnchorResultsMessage,
   type InspectHoverMessage,
   type InspectKey,
   type InspectMode,
   type InspectRectMessage,
 } from "../../artifacts/inspector-protocol";
 import type { ArtifactRegistration } from "../../main/artifact-runtime";
+import { sanitizeAnchorQuery, validateAnchorRects, validateAnchorResults } from "../artifacts/anchor-validator";
 import { freezePlain, type ArtifactFeedbackOutcome } from "../artifacts/feedback-registry";
 import { messageWithinCap, validateGuestSelect, validateHoverMessage, validateRectMessage } from "../artifacts/selection-validator";
 
@@ -34,6 +39,9 @@ import { messageWithinCap, validateGuestSelect, validateHoverMessage, validateRe
  *   callbacks.onCancel()               the guest saw Escape
  *   sendKey("parent" | "child")        forward [ and ] when focus is in the embedder chrome
  *   submit(snapshot, comment)          route the comment + selection to the plugin; returns the outcome
+ *   setAnchors(queries)                (Phase 2b-i) hand the guest the page-derived anchors to resolve and track
+ *   focusAnchor(key, behavior)         (Phase 2b-i) scroll to and/or flash one anchor
+ *   callbacks.onAnchorResults/Rects    (Phase 2b-i) the guest's enums and rects, validated, current epoch only
  *   dispose()
  *
  * Everything from the guest is untrusted data: accepted only from this webview,
@@ -82,6 +90,10 @@ export interface ArtifactInspectorBridgeOptions {
     onCancel(): void;
     /** Phase 2a: the live rect of the hovered element (pick) or the selected one (hold); `connected: false` means it left the page. */
     onRect?(rect: InspectRectMessage): void;
+    /** Phase 2b-i: a validated resolve-pass outcome for the current anchors epoch. Works in every inspector mode. */
+    onAnchorResults?(message: InspectAnchorResultsMessage): void;
+    /** Phase 2b-i: validated rects of the resolved anchors for the current epoch. */
+    onAnchorRects?(message: InspectAnchorRectsMessage): void;
   };
   /** Epoch milliseconds; injectable for tests. */
   now?: () => number;
@@ -94,6 +106,15 @@ const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 const READY_PER_SECOND = 10;
 const CANCEL_PER_SECOND = 10;
 const GUEST_CHANNELS: ReadonlySet<string> = new Set(INSPECT_GUEST_TO_EMBEDDER_CHANNELS);
+const FOCUS_BEHAVIORS: ReadonlySet<string> = new Set<InspectAnchorFocusBehavior>(["scroll", "flash"]);
+
+export interface AnchorSetOutcome {
+  /** The epoch this set was sent under (unchanged when nothing was sent). */
+  readonly epoch: number;
+  readonly sent: number;
+  /** Keys (or "?") of queries that were invalid, duplicated or over the 100 cap; they were not sent. */
+  readonly rejected: readonly string[];
+}
 
 /** The data-only description of an artifact that routing and the visibility check use. */
 export function artifactFeedbackTarget(
@@ -126,7 +147,14 @@ export class ArtifactInspectorBridge {
   /** Bumped on every guest `ready`, i.e. every document start; a selection from an older document is stale. */
   private documentGeneration = 0;
   // Separate sliding-window budgets (ADR: hover 30/s, select 4/s) so a pointer sweep can never starve the click.
-  private readonly budgets: Record<"hover" | "ready" | "cancel" | "select" | "rect", number[]> = { hover: [], ready: [], cancel: [], select: [], rect: [] };
+  // The anchor channels have windows of their own so scroll-driven rect traffic can never starve select or cancel.
+  private readonly budgets: Record<"hover" | "ready" | "cancel" | "select" | "rect" | "anchorResults" | "anchorRects", number[]> = {
+    hover: [], ready: [], cancel: [], select: [], rect: [], anchorResults: [], anchorRects: [],
+  };
+  /** Phase 2b-i: strictly increasing; 0 until the first `setAnchors`. */
+  private epoch = 0;
+  private anchorKeys: ReadonlySet<string> = new Set();
+  private anchorQueries: readonly InspectAnchorQuery[] = [];
   private readonly generationOf = new WeakMap<SelectionSnapshot, number>();
   private readonly listener = (event: InspectorIpcEvent): void => this.onIpc(event);
 
@@ -141,6 +169,9 @@ export class ArtifactInspectorBridge {
 
   get mode(): InspectMode { return this.currentMode; }
 
+  /** The epoch of the last anchors message; results and rects for any other epoch are dropped. */
+  get anchorEpoch(): number { return this.epoch; }
+
   setMode(mode: InspectMode): void {
     if (this.disposed) return;
     this.currentMode = mode;
@@ -151,6 +182,40 @@ export class ArtifactInspectorBridge {
   sendKey(key: InspectKey): void {
     if (this.disposed || this.currentMode !== "pick" || (key !== "parent" && key !== "child")) return;
     this.safeSend(INSPECT_CHANNEL.key, { key });
+  }
+
+  /**
+   * Replaces the guest's anchor set. Only the allowlisted page-derived fields are sent: whatever else the caller
+   * attached to a query (a comment, an id, a status) is dropped here, so none of it can reach the page's process.
+   * Pins work in every inspector mode, so this is not gated on the mode.
+   */
+  setAnchors(queries: readonly unknown[]): AnchorSetOutcome {
+    if (this.disposed) return { epoch: this.epoch, sent: 0, rejected: [] };
+    const accepted: InspectAnchorQuery[] = [];
+    const rejected: string[] = [];
+    const seen = new Set<string>();
+    for (const raw of Array.isArray(queries) ? queries : []) {
+      const query = sanitizeAnchorQuery(raw);
+      if (!query || seen.has(query.key) || accepted.length >= INSPECTOR_CAPS.anchors) {
+        const key = typeof raw === "object" && raw !== null ? (raw as { key?: unknown }).key : undefined;
+        rejected.push(typeof key === "string" ? key : "?");
+        continue;
+      }
+      seen.add(query.key);
+      accepted.push(query);
+    }
+    this.anchorQueries = Object.freeze(accepted);
+    this.anchorKeys = seen;
+    this.epoch++;
+    this.sendAnchors();
+    return { epoch: this.epoch, sent: accepted.length, rejected };
+  }
+
+  /** Asks the guest to scroll to and/or flash one anchor of the current epoch. False when the key is unknown. */
+  focusAnchor(key: string, behavior: InspectAnchorFocusBehavior): boolean {
+    if (this.disposed || !this.anchorKeys.has(key) || !FOCUS_BEHAVIORS.has(behavior)) return false;
+    this.safeSend(INSPECT_CHANNEL.anchorFocus, { epoch: this.epoch, key, behavior });
+    return true;
   }
 
   /**
@@ -213,10 +278,14 @@ export class ArtifactInspectorBridge {
     const kind = event.channel === INSPECT_CHANNEL.hover ? "hover"
       : event.channel === INSPECT_CHANNEL.ready ? "ready"
       : event.channel === INSPECT_CHANNEL.rect ? "rect"
+      : event.channel === INSPECT_CHANNEL.anchorResults ? "anchorResults"
+      : event.channel === INSPECT_CHANNEL.anchorRects ? "anchorRects"
       : "cancel";
     const limit = kind === "hover" ? INSPECTOR_CAPS.messagesPerSecond
       : kind === "ready" ? READY_PER_SECOND
       : kind === "rect" ? INSPECTOR_CAPS.rectsPerSecond
+      : kind === "anchorResults" ? INSPECTOR_CAPS.anchorResultsPerSecond
+      : kind === "anchorRects" ? INSPECTOR_CAPS.anchorRectsPerSecond
       : CANCEL_PER_SECOND;
     if (!this.withinRate(this.budgets[kind], limit)) return;
     const payload = event.args[0];
@@ -229,6 +298,21 @@ export class ArtifactInspectorBridge {
         if (keys.length !== 1 || keys[0] !== "protocol" || (payload as { protocol?: unknown }).protocol !== INSPECT_PROTOCOL_VERSION) return;
         this.documentGeneration++;
         this.sendMode(); // the guest starts every document in "off"; tell it what the user wants
+        // A new document has no anchors either: re-send the current set under a new epoch, so a result still in flight
+        // from the old document is dropped by the epoch gate.
+        if (this.epoch > 0) { this.epoch++; this.sendAnchors(); }
+        return;
+      }
+      case INSPECT_CHANNEL.anchorResults: {
+        if (this.epoch === 0) return;
+        const message = validateAnchorResults(payload, { epoch: this.epoch, keys: this.anchorKeys });
+        if (message) this.options.callbacks.onAnchorResults?.(message);
+        return;
+      }
+      case INSPECT_CHANNEL.anchorRects: {
+        if (this.epoch === 0) return;
+        const message = validateAnchorRects(payload, { epoch: this.epoch, keys: this.anchorKeys });
+        if (message) this.options.callbacks.onAnchorRects?.(message);
         return;
       }
       case INSPECT_CHANNEL.hover: {
@@ -389,6 +473,11 @@ export class ArtifactInspectorBridge {
 
   private sendMode(): void {
     this.safeSend(INSPECT_CHANNEL.mode, { mode: this.currentMode, redactText: this.redacted });
+  }
+
+  private sendAnchors(): void {
+    // Built field by field: exactly the allowlist, nothing the embedder knows about the comments themselves.
+    this.safeSend(INSPECT_CHANNEL.anchors, { epoch: this.epoch, redactText: this.redacted, anchors: this.anchorQueries });
   }
 
   private safeSend(channel: string, payload: unknown): void {

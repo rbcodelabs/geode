@@ -11,6 +11,8 @@ import {
   type InspectMode,
   type InspectRectMessage,
 } from "../artifacts/inspector-protocol";
+import { isRestrictedSelector } from "../artifacts/anchor-selector";
+import { createAnchorTracker } from "./artifact-inspector-anchors";
 
 /**
  * Guest side of the artifact element inspector (ADR 0006 D4). Pure logic over a
@@ -35,6 +37,8 @@ export interface InspectorGuestEnv {
   requestFrame?: (callback: () => void) => number;
   setInterval?: (callback: () => void, ms: number) => number;
   clearInterval?: (handle: number) => void;
+  setTimeout?: (callback: () => void, ms: number) => number;
+  clearTimeout?: (handle: number) => void;
 }
 
 export interface InspectorGuest {
@@ -59,6 +63,10 @@ const TEXT_CHAR_BUDGET = 400;
 const RAW_ATTRIBUTE_UNITS = INSPECTOR_CAPS.attributeValueUnits * 2;
 const RAW_TEXT_UNITS = 16_384;
 const HIGHLIGHT_COLOR = "#7c3aed";
+/** Ancestors inspected per element when deciding what clips it; deeper than this is treated as unclipped beyond. */
+const CLIP_ANCESTOR_BUDGET = 64;
+/** An overflow value that cuts content off (scroll, auto, hidden, clip; the empty string is "no computed value"). */
+const clipsOverflow = (value: string): boolean => value !== "" && value !== "visible";
 /** A data: URL as the URL parser sees it: leading C0 controls, spaces and zero-width characters are ignored. */
 const DATA_URI_START = /^[\u0000-\u0020\u200b-\u200d\u2060\ufeff]*data:/i;
 const HTML_NAMESPACE = "http://www.w3.org/1999/xhtml";
@@ -109,6 +117,8 @@ export function startInspector(env: InspectorGuestEnv): InspectorGuest | null {
   const requestFrame = env.requestFrame ?? ((cb) => win.requestAnimationFrame(cb));
   const setTimer = env.setInterval ?? ((cb, ms) => win.setInterval(cb, ms));
   const clearTimer = env.clearInterval ?? ((handle) => win.clearInterval(handle));
+  const setDelay = env.setTimeout ?? ((cb, ms) => win.setTimeout(cb, ms));
+  const clearDelay = env.clearTimeout ?? ((handle) => win.clearTimeout(handle));
   const send = (channel: string, payload: unknown): void => { try { env.ipc.send(channel, payload); } catch { /* embedder gone */ } };
 
   // Captured at document start. In the isolated world the page cannot reach these anyway; this is belt and braces.
@@ -116,6 +126,7 @@ export function startInspector(env: InspectorGuestEnv): InspectorGuest | null {
   const nativeGCS = win.getComputedStyle.bind(win);
   const nativeAttachShadow = win.Element.prototype.attachShadow;
   const nativeQSA = win.Document.prototype.querySelectorAll;
+  const nativeGetElementsByTagName = win.Document.prototype.getElementsByTagName;
   const nativeElementFromPoint = typeof doc.elementFromPoint === "function" ? doc.elementFromPoint.bind(doc) : null;
   const addListener = win.addEventListener.bind(win);
   const removeListener = win.removeEventListener.bind(win);
@@ -150,6 +161,51 @@ export function startInspector(env: InspectorGuestEnv): InspectorGuest | null {
   const rectOf = (el: Element): { x: number; y: number; width: number; height: number } => {
     const r = nativeGBCR.call(el) as DOMRect;
     return { x: finite(r.x ?? r.left), y: finite(r.y ?? r.top), width: finite(r.width), height: finite(r.height) };
+  };
+  /**
+   * The region ancestors let `el` show: the intersection of the padding boxes of every ancestor whose overflow clips
+   * (per axis). An absolutely positioned element is only clipped by ancestors from its containing block up; a fixed one
+   * by none. Transforms and `contain: paint` are not modelled (the viewport test still applies). The html and body
+   * elements are skipped: their overflow belongs to the viewport. Bounded by `CLIP_ANCESTOR_BUDGET`. Uses the natives
+   * captured at start; any failure means "unknown" (null), never a throw.
+   */
+  const clipBoxOf = (el: Element): { left: number; top: number; right: number; bottom: number } | null => {
+    try {
+      const prop = (node: Element, name: string): string => String(nativeGCS(node).getPropertyValue(name));
+      let left = Number.NEGATIVE_INFINITY, top = Number.NEGATIVE_INFINITY, right = Number.POSITIVE_INFINITY, bottom = Number.POSITIVE_INFINITY;
+      let clipped = false;
+      let position = prop(el, "position");
+      if (position === "fixed") return null;
+      let findingContainingBlock = position === "absolute";
+      let steps = 0;
+      for (let node = el.parentElement; node && node !== doc.documentElement && node !== doc.body; node = node.parentElement) {
+        if (++steps > CLIP_ANCESTOR_BUDGET) break;
+        position = prop(node, "position");
+        if (findingContainingBlock) {
+          if (position === "" || position === "static") continue;
+          findingContainingBlock = false;
+        }
+        const clipsX = clipsOverflow(prop(node, "overflow-x"));
+        const clipsY = clipsOverflow(prop(node, "overflow-y"));
+        if (clipsX || clipsY) {
+          const r = nativeGBCR.call(node) as DOMRect;
+          // Content is clipped to the padding box; the scrollbar gutter is not content. Layout (offset) px to viewport px.
+          const sx = node.offsetWidth > 0 ? r.width / node.offsetWidth : 1;
+          const sy = node.offsetHeight > 0 ? r.height / node.offsetHeight : 1;
+          const x0 = (r.x ?? r.left) + (node.clientWidth > 0 ? node.clientLeft * sx : 0);
+          const y0 = (r.y ?? r.top) + (node.clientHeight > 0 ? node.clientTop * sy : 0);
+          const x1 = node.clientWidth > 0 ? x0 + node.clientWidth * sx : (r.x ?? r.left) + r.width;
+          const y1 = node.clientHeight > 0 ? y0 + node.clientHeight * sy : (r.y ?? r.top) + r.height;
+          if (clipsX && Number.isFinite(x0) && Number.isFinite(x1)) { left = Math.max(left, x0); right = Math.min(right, x1); clipped = true; }
+          if (clipsY && Number.isFinite(y0) && Number.isFinite(y1)) { top = Math.max(top, y0); bottom = Math.min(bottom, y1); clipped = true; }
+        }
+        if (position === "fixed") break;
+        if (position === "absolute") findingContainingBlock = true;
+      }
+      return clipped ? { left, top, right, bottom } : null;
+    } catch {
+      return null;
+    }
   };
   /**
    * Type selectors are case-insensitive for HTML elements but CASE-SENSITIVE for SVG and other non-HTML elements, so
@@ -271,12 +327,14 @@ export function startInspector(env: InspectorGuestEnv): InspectorGuest | null {
     return [
       () => {
         const value = el.getAttribute("data-testid");
-        return value && value.length <= 128 && !hasControl(value) ? `[data-testid="${value.replace(/["\\]/g, "\\$&")}"]` : null;
+        return value && value.length <= INSPECTOR_CAPS.anchorAttributeValueUnits && !hasControl(value) ? `[data-testid="${value.replace(/["\\]/g, "\\$&")}"]` : null;
       },
       () => uniqueId(el),
       () => {
         const classes = [...el.classList].filter((c) => c.length <= INSPECTOR_CAPS.ancestorClassUnits).slice(0, 2);
-        return classes.length > 0 ? `${selectorTag(el)}${classes.map((c) => `.${cssEscapeIdent(c)}`).join("")}` : null;
+        // A name the grammar's tag cannot spell (a custom element with "_" or non-ASCII letters) is matched by `*`; the tracker checks the tag itself.
+        const tagName = selectorTag(el);
+        return classes.length > 0 ? `${/^[A-Za-z][A-Za-z0-9-]*$/.test(tagName) ? tagName : "*"}${classes.map((c) => `.${cssEscapeIdent(c)}`).join("")}` : null;
       },
       () => structuralPath(el, "of-type"),
       () => structuralPath(el, "child"),
@@ -288,7 +346,8 @@ export function startInspector(env: InspectorGuestEnv): InspectorGuest | null {
       if (verified.length > INSPECTOR_CAPS.selectorAlternates) break;
       let selector: string | null = null;
       try { selector = candidate(); } catch { selector = null; }
-      if (!selector || selector.length > INSPECTOR_CAPS.selectorUnits || verified.includes(selector)) continue;
+      // Only selectors the anchor tracker's grammar will execute later (a selector it would refuse is no anchor at all).
+      if (!selector || selector.length > INSPECTOR_CAPS.selectorUnits || verified.includes(selector) || !isRestrictedSelector(selector)) continue;
       if (resolvesTo(selector, el)) verified.push(selector);
     }
     return { selector: verified[0] ?? "", alternates: verified.slice(1, 1 + INSPECTOR_CAPS.selectorAlternates) };
@@ -579,11 +638,13 @@ export function startInspector(env: InspectorGuestEnv): InspectorGuest | null {
       return;
     }
     const rect = rectOf(el);
-    const key = rectKey(rect);
+    // The selection box needs the guest-to-embedder scale (S2): a viewport change alone is a change worth reporting.
+    const viewport = target === "selected" && win.innerWidth > 0 && win.innerHeight > 0 ? { width: win.innerWidth, height: win.innerHeight } : null;
+    const key = viewport ? `${rectKey(rect)}|${viewport.width}x${viewport.height}` : rectKey(rect);
     if (key === lastRectKey) return;
     lastRectKey = key;
     if (target === "hover" && ensureHost()) paint(rect);
-    send(INSPECT_CHANNEL.rect, (target === "hover" ? { target, connected: true, rect, tag: safeTag(el) } : { target, connected: true, rect }) satisfies InspectRectMessage);
+    send(INSPECT_CHANNEL.rect, (target === "hover" ? { target, connected: true, rect, tag: safeTag(el) } : viewport ? { target, connected: true, rect, viewport } : { target, connected: true, rect }) satisfies InspectRectMessage);
   }
   function onViewportChange(): void {
     scheduleRectReport();
@@ -709,16 +770,43 @@ export function startInspector(env: InspectorGuestEnv): InspectorGuest | null {
     if (key === "parent" || key === "child" || key === "select") handleKey(key);
   }
 
+  // ---- pinned-comment anchors (Phase 2b-i, ADR 0006 addendum 2): passive, works in every mode ----
+  const anchors = createAnchorTracker({
+    win, doc,
+    send,
+    now,
+    requestFrame,
+    setInterval: setTimer,
+    clearInterval: clearTimer,
+    setTimeout: setDelay,
+    clearTimeout: clearDelay,
+    addListener: (type, listener, options) => addListener(type, listener, options),
+    removeListener: (type, listener, options) => removeListener(type, listener, options),
+    queryAll: querySelectorAllSafe,
+    elementsByTag: (tag) => { try { return nativeGetElementsByTagName.call(doc, tag) as unknown as ArrayLike<Element>; } catch { return null; } },
+    rectOf,
+    clipBoxOf,
+    textOf: (el, limit) => collectText(el).slice(0, limit),
+    tagOf: safeTag,
+    isElement,
+    isGuestHost: (node) => host !== null && node === host,
+    attachShadow: (el, init) => nativeAttachShadow.call(el, init) as ShadowRoot,
+    scrollIntoView: nativeScrollIntoView,
+  });
+
   // Registered at document start, in the capture phase, before any page script can run.
   attachListeners();
   env.ipc.on(INSPECT_CHANNEL.mode, onModeMessage);
   env.ipc.on(INSPECT_CHANNEL.key, onKeyMessage);
+  env.ipc.on(INSPECT_CHANNEL.anchors, anchors.onAnchors);
+  env.ipc.on(INSPECT_CHANNEL.anchorFocus, anchors.onFocus);
   send(INSPECT_CHANNEL.ready, { protocol: INSPECT_PROTOCOL_VERSION });
 
   return {
     get mode() { return mode; },
     dispose() {
       disposed = true;
+      anchors.dispose();
       detachListeners();
       observer?.disconnect();
       selectedObserver?.disconnect();

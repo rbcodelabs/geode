@@ -24,6 +24,14 @@ export const INSPECT_CHANNEL = {
   cancel: `${PREFIX}cancel`,
   /** guest to embedder (Phase 2a): the CURRENT rect of the hovered or selected element after a scroll, resize or mutation. */
   rect: `${PREFIX}rect`,
+  /** embedder to guest (Phase 2b-i): replace the set of anchors the guest resolves and tracks. */
+  anchors: `${PREFIX}anchors`,
+  /** embedder to guest (Phase 2b-i): scroll to and/or flash one resolved anchor. */
+  anchorFocus: `${PREFIX}anchor-focus`,
+  /** guest to embedder (Phase 2b-i): the outcome of a resolve pass. */
+  anchorResults: `${PREFIX}anchor-results`,
+  /** guest to embedder (Phase 2b-i): current rects of the resolved anchors after a scroll, resize or layout change. */
+  anchorRects: `${PREFIX}anchor-rects`,
 } as const;
 
 export const INSPECT_GUEST_TO_EMBEDDER_CHANNELS: readonly string[] = [
@@ -32,6 +40,8 @@ export const INSPECT_GUEST_TO_EMBEDDER_CHANNELS: readonly string[] = [
   INSPECT_CHANNEL.select,
   INSPECT_CHANNEL.cancel,
   INSPECT_CHANNEL.rect,
+  INSPECT_CHANNEL.anchorResults,
+  INSPECT_CHANNEL.anchorRects,
 ];
 
 export type InspectMode = "off" | "pick" | "hold";
@@ -47,6 +57,8 @@ export interface InspectHoverMessage {
   /** Only for `keyboard`; accessible name, at most 80. */
   readonly label?: string;
 }
+/** The guest's window.innerWidth/innerHeight, CSS px. The embedder's guest-to-embedder scale is frame.clientWidth / width (S2). */
+export interface InspectViewportSize { readonly width: number; readonly height: number }
 export interface InspectCancelMessage { readonly reason: "escape" }
 /**
  * Phase 2a. The live viewport rect of what the user is pointing at. `hover` follows the highlighted element while
@@ -60,7 +72,55 @@ export interface InspectRectMessage {
   readonly rect: Rect | null;
   /** Only on a connected `hover` report: the lower-case tag of the element the rect belongs to (keeps the chip atomic). */
   readonly tag?: string;
+  /** Only on a connected `selected` report: the guest viewport the rect was measured in (drives the selection box scale). */
+  readonly viewport?: InspectViewportSize;
 }
+
+/**
+ * Phase 2b-i (ADR 0006 addendum 2): pins. The embedder hands the guest page-derived anchor data only (never comment
+ * text, ids, ordinals or status); the guest answers with enums, booleans and rects.
+ */
+export interface InspectAnchorQuery {
+  /** /^a[0-9]{1,3}$/, minted per set by the embedder; the comment id never goes to the guest. */
+  readonly key: string;
+  readonly route: string;
+  readonly tag: string;
+  readonly selector: string;
+  readonly alternates: readonly string[];
+  readonly textAnchor: { readonly tag: string; readonly text: string };
+  readonly landmark: string | null;
+}
+export interface InspectAnchorsMessage {
+  /** Strictly increasing; results and rects for any other epoch are dropped. */
+  readonly epoch: number;
+  readonly redactText: boolean;
+  readonly anchors: readonly InspectAnchorQuery[];
+}
+export type InspectAnchorFocusBehavior = "scroll" | "flash";
+export interface InspectAnchorFocusMessage {
+  readonly epoch: number;
+  readonly key: string;
+  readonly behavior: InspectAnchorFocusBehavior;
+}
+export type InspectAnchorMatch = "selector" | "text" | "landmark" | "detached" | "other-route";
+export interface InspectAnchorResult {
+  readonly key: string;
+  readonly match: InspectAnchorMatch;
+  /** true when a selector hit was corroborated by the text anchor, or there is no text anchor to compare (redacted); true for a text match from a complete scan, false when the scan was truncated or interrupted. */
+  readonly agrees: boolean;
+  /** Guest viewport CSS px; null exactly when `match` is `detached` or `other-route`. */
+  readonly rect: Rect | null;
+  /** Some part of the element can be seen: it intersects the viewport and every ancestor that clips it. Always false when `rect` is null. */
+  readonly visible: boolean;
+}
+export interface InspectAnchorRect {
+  readonly key: string;
+  /** null when the element left the document. */
+  readonly rect: Rect | null;
+  readonly visible: boolean;
+}
+export interface InspectAnchorResultsMessage { readonly epoch: number; readonly viewport?: InspectViewportSize; readonly results: readonly InspectAnchorResult[] }
+export interface InspectAnchorRectsMessage { readonly epoch: number; readonly viewport?: InspectViewportSize; readonly rects: readonly InspectAnchorRect[] }
 
 /** The origin-G half of `ElementSelection` as the page's DOM supplies it. Untrusted. */
 export interface GuestSelectMessage {
@@ -131,6 +191,43 @@ export const INSPECTOR_CAPS = {
   /** Guest outerHTML walker budgets. */
   walkerNodes: 600,
   walkerMillis: 25,
+
+  // ---- Phase 2b-i anchors (ADR 0006 addendum 2). Embedder budgets, each its own sliding window. ----
+  /** Anchors per set (and entries per result or rect message). */
+  anchors: 100,
+  anchorKeyPattern: /^a[0-9]{1,3}$/,
+  /** Embedder: `anchor-results` per second. A result is one resolve pass; the guest sends at most ~4 per second even under churn. */
+  anchorResultsPerSecond: 8,
+  /** Embedder: `anchor-rects` per second (one per animation frame at most, up to 120 Hz displays). */
+  anchorRectsPerSecond: 120,
+  /** Selector grammar (the restricted subset the guest will execute). */
+  anchorSelectorCompounds: 12,
+  anchorAttributeValueUnits: 128,
+  /** Guest: elements of one tag examined for a text anchor, per pass. */
+  anchorTextScan: 5000,
+  /** Guest: elements read per time-sliced step of a text index build. */
+  anchorScanStep: 250,
+  /** Guest: anchors resolved per animation frame, and the time slice within it (spike S1, recorded in the ADR addendum). */
+  anchorChunk: 8,
+  anchorSliceMillis: 4,
+  /** Guest: mutation observer scheduling (trailing debounce, hard maximum, and the floors after a slow pass or a storm). */
+  anchorDebounceMillis: 250,
+  anchorMaxDelayMillis: 1000,
+  anchorSlowPassMillis: 20,
+  anchorSlowFloorMillis: 1000,
+  anchorStormCallbacksPerSecond: 50,
+  anchorStormFloorMillis: 2000,
+  /**
+   * Guest: minimum spacing between `anchor-results` sends (150 ms keeps any 1 s window at 7 messages, under the embedder's 8)
+   * with a trailing send of the latest state, and the minimum gap between the end of one resolve pass and the start of the next
+   * (so the immediate triggers, a removed node or a history event, cannot run passes back to back).
+   */
+  anchorResultsSpacingMillis: 150,
+  anchorMinPassGapMillis: 250,
+  /** Guest: minimum spacing between `anchor-rects` sends (9 ms: at most 112 per second, inside the embedder's 120), with a trailing send of the latest rects. */
+  anchorRectsSpacingMillis: 9,
+  /** Guest: how long the jump-to flash outline stays. */
+  anchorFlashMillis: 1200,
 } as const;
 
 export const OUTER_HTML_TRUNCATION_MARKER = "<!--truncated-->";
