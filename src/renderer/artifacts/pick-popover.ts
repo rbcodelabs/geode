@@ -199,6 +199,7 @@ export class PickPopover {
   private readonly repick: HTMLButtonElement;
   private readonly done: HTMLButtonElement;
   private renderedComment = "";
+  private readonly onWindowKeydown: (event: KeyboardEvent) => void;
 
   constructor(private readonly doc: Document, private readonly callbacks: PopoverCallbacks) {
     const make = <K extends keyof HTMLElementTagNameMap>(tag: K, className?: string): HTMLElementTagNameMap[K] => {
@@ -259,14 +260,23 @@ export class PickPopover {
       this.callbacks.onComment(this.area.value);
     });
     this.area.addEventListener("keydown", (event) => {
-      if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+      // Cmd/Ctrl+Enter sends (design 3.7). Cmd/Ctrl+Shift+Enter (Pin) is taken earlier, by the window capture listener below.
+      if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && !event.shiftKey) {
         event.preventDefault();
-        // Cmd/Ctrl+Shift+Enter pins; Cmd/Ctrl+Enter sends (design 3.7).
-        if (event.shiftKey) {
-          if (!this.pin.disabled && !this.pin.hidden) this.callbacks.onPin?.();
-        } else if (!this.send.disabled && !this.send.hidden) this.callbacks.onSend();
+        if (!this.send.disabled && !this.send.hidden) this.callbacks.onSend();
       }
     });
+    // Mod+Shift+Enter is also the global "Toggle focus on active pane" command, which the app dispatches from a document
+    // capture listener. While focus is inside this popover the combo is Pin (design 3.7, A4 collision check); a window
+    // capture listener runs first and keeps the global command from also firing. Everywhere else the command is unchanged.
+    this.onWindowKeydown = (event) => {
+      if (event.key !== "Enter" || !event.shiftKey || event.altKey || !(event.metaKey || event.ctrlKey)) return;
+      if (event.isComposing || !this.el.contains(event.target as Node)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (!this.pin.disabled && !this.pin.hidden) this.callbacks.onPin?.();
+    };
+    doc.defaultView?.addEventListener("keydown", this.onWindowKeydown, true);
     // Esc anywhere in the popover is the user's, not the page's.
     this.el.addEventListener("keydown", (event) => {
       if (event.key !== "Escape") return;
@@ -337,6 +347,9 @@ export class PickPopover {
     this.cancel.disabled = pending;
     if (gone && !wasGone && focusWasInside) this.repick.focus();
   }
+
+  /** Removes the window-level listener; the view calls it when the popover is discarded. */
+  dispose(): void { this.doc.defaultView?.removeEventListener("keydown", this.onWindowKeydown, true); }
 
   focusComment(): void { this.area.focus(); }
   focusDone(): void { this.done.focus(); }

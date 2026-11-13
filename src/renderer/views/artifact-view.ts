@@ -484,6 +484,7 @@ export class ArtifactView implements View, ReloadableView {
     this.offscreen = false;
     this.earlyRect = null;
     window.removeEventListener("resize", this.onWindowResize);
+    this.popover?.dispose();
     this.popover?.el.remove();
     this.liveRect = null;
     this.liveRectFor = null;

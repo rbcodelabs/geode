@@ -92,6 +92,28 @@ describe("popover Pin action (design 3.7)", () => {
     expect(cb.onPin).not.toHaveBeenCalled();
   });
 
+  it("owns Mod+Shift+Enter inside the popover: the app's document-level hotkey (toggle focus pane) does not also fire", () => {
+    const { popover, cb, key, doc } = mount();
+    popover.render(base, "Design");
+    const appHotkey = vi.fn();
+    doc.addEventListener("keydown", appHotkey, true); // what CommandRegistry.attach does
+    key({ key: "Enter", ctrlKey: true, shiftKey: true });
+    expect(cb.onPin).toHaveBeenCalledTimes(1);
+    expect(appHotkey).not.toHaveBeenCalled();
+    // outside the popover the combo is the app's, untouched
+    doc.body.dispatchEvent(new doc.defaultView!.KeyboardEvent("keydown", { key: "Enter", ctrlKey: true, shiftKey: true, bubbles: true, cancelable: true }));
+    expect(appHotkey).toHaveBeenCalledTimes(1);
+    expect(cb.onPin).toHaveBeenCalledTimes(1);
+  });
+
+  it("dispose releases the window listener", () => {
+    const { popover, cb, key } = mount();
+    popover.render(base, "Design");
+    popover.dispose();
+    key({ key: "Enter", ctrlKey: true, shiftKey: true });
+    expect(cb.onPin).not.toHaveBeenCalled();
+  });
+
   it("words the status for a pin", () => {
     const { popover, q } = mount();
     popover.render({ ...base, submit: "pending", action: "pin" }, "Design");
