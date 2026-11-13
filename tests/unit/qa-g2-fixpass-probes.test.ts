@@ -232,7 +232,7 @@ describe("QA G2 fix pass: clamp (A2)", () => {
   // BUG QA-G2-7 (Info): visibility is computed from the CLAMPED rect, so an element 1e7 px wide that really covers the viewport
   // (x -5e6) is clamped to x -1e6, width 1e6 (right edge 0) and reported visible:false. Fix in artifact-inspector-anchors.ts placed()/measure():
   // compute intersectsViewport from deps.rectOf(el) (unclamped) and clamp only what is sent. Remove .fails when fixed.
-  it.fails("BUG: a huge element that really covers the viewport is reported visible", async () => {
+  it("a huge element that really covers the viewport is reported visible", async () => {
     const h = fresh();
     h.setRect(h.doc.querySelector("button")!, { x: -5e6, y: -5e6, width: 1e7, height: 1e7 });
     setAnchors(h, [q()]);
@@ -354,7 +354,7 @@ describe("QA G2 fix pass: advisories from review (BUG: tests, src fixes needed)"
   // BUG QA-G2-8: rect messages have no spacing and no trailing send. On a >120 Hz display (or with jitter) the guest sends more than
   // the embedder's 120/s window accepts, so the embedder sheds intermediate AND possibly the final rect; the pin is stale until the
   // 1 s re-assertion. Fix: space rects (>= 9 ms) with a trailing send of the latest, like the results. Remove .fails when fixed.
-  it.fails("BUG: at 144 Hz the guest never sends more than 120 rects messages in any 1 s window", async () => {
+  it("at 144 Hz the guest never sends more than 120 rects messages in any 1 s window", async () => {
     const h = fresh();
     setAnchors(h, [q()]);
     await run(h, 600, INSPECT_CHANNEL.anchorRects, []);
@@ -399,7 +399,7 @@ describe("QA G2 fix pass: advisories from review (BUG: tests, src fixes needed)"
 
   // BUG QA-G2-9 (defense in depth, unreachable today because the guest's own rectOf maps NaN to 0): the tracker's clamp passes NaN
   // through (Math.min/Math.max propagate it), and one NaN rect makes the embedder drop the whole message. Fix: clamp(v) = Number.isFinite(v) ? ... : 0.
-  it.fails("BUG: the tracker's clamp turns a NaN rect from its dependency into a finite number", () => {
+  it("the tracker's clamp turns a NaN rect from its dependency into a finite number", () => {
     const h = fresh();
     const sent: Array<{ channel: string; payload: any }> = [];
     const frames: Array<() => void> = [];
@@ -421,7 +421,7 @@ describe("QA G2 fix pass: advisories from review (BUG: tests, src fixes needed)"
 
   // BUG QA-G2-10 (Low): the generator's data-testid limit is a literal 128 in artifact-inspector-guest.ts, duplicating
   // INSPECTOR_CAPS.anchorAttributeValueUnits, so the two can drift apart again (that was QA-G2-1). Fix: use the constant.
-  it.fails("BUG: the generator's data-testid length limit comes from INSPECTOR_CAPS.anchorAttributeValueUnits, not a literal", () => {
+  it("the generator's data-testid length limit comes from INSPECTOR_CAPS.anchorAttributeValueUnits, not a literal", () => {
     const src = fs.readFileSync(path.join(__dirname, "..", "..", "src", "main", "artifact-inspector-guest.ts"), "utf8");
     expect(src).not.toMatch(/value\.length <= 128/);
   });
