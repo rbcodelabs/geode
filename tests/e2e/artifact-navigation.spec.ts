@@ -206,22 +206,43 @@ test.describe("artifact tab navigation (back / forward / home)", () => {
     } finally { await s.cleanup(); }
   });
 
-  test("history resets when the artifact is re-previewed; reload keeps the page and the history", async () => {
+  test("reload keeps the page and its history; re-loading in place, closing and reopening, or switching artifact starts clean", async () => {
     const s = await open();
     const w = s.window;
-    try {
-      await clickInGuest(s, "#opt-a");
-      await expect.poll(() => guestPath(w)).toBe(PAGE_A);
-      // reload: same page, history intact
-      await view(w).getByRole("button", { name: "Reload artifact" }).click();
-      await expect.poll(() => guestPath(w)).toBe(PAGE_A);
-      await expect(backBtn(w)).toBeEnabled();
-      // re-preview: a new guest at the entry page with a clean history
-      await w.evaluate((r) => (window as any).app.openArtifact(r), s.root);
+    const expectClean = async () => {
       await expect.poll(() => guestPath(w)).toBe(BOARD);
       await expect(backBtn(w)).toBeDisabled();
       await expect(forwardBtn(w)).toBeDisabled();
       await expect(homeBtn(w)).toBeDisabled();
+    };
+    const intoA = async () => { await clickInGuest(s, "#opt-a"); await expect.poll(() => guestPath(w)).toBe(PAGE_A); await expect(backBtn(w)).toBeEnabled(); };
+    try {
+      await intoA();
+      // reload: same page, history intact
+      await view(w).getByRole("button", { name: "Reload artifact" }).click();
+      await expect.poll(() => guestPath(w)).toBe(PAGE_A);
+      await expect(backBtn(w)).toBeEnabled();
+      await expect(homeBtn(w)).toBeEnabled();
+
+      // the view loads the same artifact again in place (what a dev-server restart does): a new guest, a clean history
+      await w.evaluate(() => { const v = (window as any).app.workspace.getLeavesOfType("geode-artifact")[0].view; return v.setState(v.getState()); });
+      await expectClean();
+
+      // a different artifact in the same tab: its own entry page, nothing carried over from the previous guest
+      await intoA();
+      const other = `${s.root}-other`;
+      fs.cpSync(s.root, other, { recursive: true });
+      fs.writeFileSync(path.join(other, "artifact.json"), fs.readFileSync(path.join(other, "artifact.json"), "utf8").replace("nav-variations", "nav-variations-other"));
+      await w.evaluate((root) => { const v = (window as any).app.workspace.getLeavesOfType("geode-artifact")[0].view; return v.setState({ ...v.getState(), root }); }, other);
+      await expectClean();
+      expect(await guestEval<string>(w, `location.origin`)).toBe("geode-artifact://nav-variations-other");
+
+      // close the tab and preview again: a new view, a clean history
+      await w.evaluate(() => (window as any).app.workspace.getLeavesOfType("geode-artifact")[0].detach());
+      await expect(view(w)).toHaveCount(0);
+      await w.evaluate((r) => (window as any).app.openArtifact(r), s.root);
+      await expect(view(w)).toBeVisible();
+      await expectClean();
     } finally { await s.cleanup(); }
   });
 
