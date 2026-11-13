@@ -5802,6 +5802,14 @@ body.is-mobile .empty-state-action-hint {
   .artifact-view.is-picking .artifact-view-toolbar > .artifact-view-status { display: none; }
   .artifact-view-toolbar > .artifact-view-hover { flex: 1 1 0; max-width: none; }
 }
+/* Back / forward / home stay in the toolbar but read as unavailable until the guest has somewhere to go. */
+.artifact-view-toolbar-btn:disabled { opacity: 0.35; cursor: default; background: transparent; }
+.artifact-view-toolbar-btn:focus-visible { outline: 2px solid var(--interactive-accent); outline-offset: 1px; }
+/* A phone-width pane: wrap the toolbar onto a second row instead of clipping controls off the right edge. */
+@container artifact-view (max-width: 560px) {
+  .artifact-view-toolbar { flex-wrap: wrap; overflow: visible; row-gap: 4px; padding-top: 4px; padding-bottom: 4px; }
+  .artifact-view-toolbar > .artifact-view-status { flex: 1 1 100%; }
+}
 .artifact-view-pick-btn[hidden] { display: none; }
 .artifact-view-pick-btn[aria-pressed="true"] {
   color: var(--text-on-accent);

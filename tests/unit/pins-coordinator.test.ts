@@ -674,3 +674,69 @@ describe("S2 guest-to-embedder scale and the on-screen set", () => {
     expect(r.lastPins().badges.map((b) => [b.kind, b.text])).toEqual([["cluster", "2"]]);
   });
 });
+
+describe("page navigation (back / forward / home inside the artifact)", () => {
+  async function placedPin() {
+    const r = rig(snapshot([comment(1)]));
+    await r.coordinator.start();
+    r.results(1, [["a0", "selector", true, BOX]]);
+    r.runFrames();
+    expect(r.lastPins().badges).toHaveLength(1);
+    return r;
+  }
+
+  it("pageNavigating removes the old page's pins at once, so they never show over the next page", async () => {
+    const r = await placedPin();
+    r.coordinator.pageNavigating();
+    r.runFrames();
+    expect(r.lastPins().badges).toEqual([]);
+  });
+
+  it("the new page's results (current epoch) bring its pins back", async () => {
+    const r = await placedPin();
+    r.coordinator.pageNavigating();
+    r.coordinator.onAnchorsSent(2);
+    r.results(2, [["a0", "selector", true, BOX]]);
+    r.runFrames();
+    expect(r.lastPins().badges).toHaveLength(1);
+  });
+
+  it("a page that does not carry the pin leaves it off the canvas (other-route) while the rail still lists it", async () => {
+    const r = await placedPin();
+    r.coordinator.pageNavigating();
+    r.coordinator.onAnchorsSent(2);
+    r.results(2, [["a0", "other-route", true, null]]);
+    r.runFrames();
+    expect(r.lastPins().badges).toEqual([]);
+    expect(r.lastRail().rows).toHaveLength(1);
+  });
+
+  it("pageSettled re-asks the guest when the navigation produced no new answers (a cancelled load keeps its pins)", async () => {
+    const r = await placedPin();
+    const calls = r.bridge.setAnchors.mock.calls.length;
+    r.coordinator.pageNavigating();
+    r.coordinator.pageSettled();
+    expect(r.bridge.setAnchors.mock.calls.length).toBe(calls + 1);
+    r.results(2, [["a0", "selector", true, BOX]]);
+    r.runFrames();
+    expect(r.lastPins().badges).toHaveLength(1);
+  });
+
+  it("pageSettled does nothing when the new page already answered", async () => {
+    const r = await placedPin();
+    r.coordinator.pageNavigating();
+    r.coordinator.onAnchorsSent(2);
+    r.results(2, [["a0", "selector", true, BOX]]);
+    const calls = r.bridge.setAnchors.mock.calls.length;
+    r.coordinator.pageSettled();
+    expect(r.bridge.setAnchors.mock.calls.length).toBe(calls);
+  });
+
+  it("with no pins at all both calls are harmless", async () => {
+    const r = rig(snapshot([]));
+    await r.coordinator.start();
+    r.coordinator.pageNavigating();
+    r.coordinator.pageSettled();
+    expect(r.bridge.setAnchors).not.toHaveBeenCalledWith(expect.arrayContaining([expect.anything()]));
+  });
+});
