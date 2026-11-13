@@ -152,21 +152,22 @@ test.describe("artifact tab navigation (back / forward / home)", () => {
       await backBtn(w).focus();
       await w.keyboard.press("Enter");
       await expect.poll(() => guestPath(w)).toBe(BOARD);
-      // Mod+] from the chrome (Ctrl on Linux)
-      await w.keyboard.press("Control+]");
+      // Mod+] from the chrome (Cmd on macOS, Ctrl elsewhere: the app's own Mod)
+      await w.keyboard.press("ControlOrMeta+]");
       await expect.poll(() => guestPath(w)).toBe(PAGE_A);
-      await w.keyboard.press("Control+[");
+      await w.keyboard.press("ControlOrMeta+[");
       await expect.poll(() => guestPath(w)).toBe(BOARD);
       // the same combos while focus is inside the guest page
       await w.locator(".artifact-view-frame").focus();
       await s.app.evaluate(({ webContents }) => {
         const guest = webContents.getAllWebContents().find((c) => c.getType() === "webview" && !c.isDestroyed() && !c.getURL().startsWith("devtools"))!;
-        guest.sendInputEvent({ type: "keyDown", keyCode: "]", modifiers: ["control"] });
-        guest.sendInputEvent({ type: "keyUp", keyCode: "]", modifiers: ["control"] });
+        const mod = process.platform === "darwin" ? "meta" : "control"; // the guest hotkey bridge resolves Mod per platform
+        guest.sendInputEvent({ type: "keyDown", keyCode: "]", modifiers: [mod] });
+        guest.sendInputEvent({ type: "keyUp", keyCode: "]", modifiers: [mod] });
       });
       await expect.poll(() => guestPath(w)).toBe(PAGE_A);
       // with nowhere to go the shortcut is inert (and does not throw)
-      await w.keyboard.press("Control+]");
+      await w.keyboard.press("ControlOrMeta+]");
       expect(await guestPath(w)).toBe(PAGE_A);
     } finally { await s.cleanup(); }
   });
