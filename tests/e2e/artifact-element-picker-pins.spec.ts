@@ -174,7 +174,9 @@ test.describe("pinned comments (phase 2b-i G3)", () => {
       // narrow preset: a 640 px window; the rail becomes a sheet
       const bw = await s.app.browserWindow(w);
       await bw.evaluate((win: any) => win.setSize(640, 800));
-      await expect.poll(() => w.locator(".artifact-view").evaluate((e) => e.clientWidth), { timeout: 15_000 }).toBeLessThan(700);
+      // with the right sidebar open the pane is well under the 560 px breakpoint
+      await w.evaluate(() => { const side = (window as any).app.workspace.rightSidebar; if (side.collapsed) side.toggle(); });
+      await expect.poll(() => w.locator(".artifact-view").evaluate((e) => e.clientWidth), { timeout: 15_000 }).toBeLessThan(540);
       await check();
       await windowShot(s, "pins-narrow");
       await commentsToggle(w).click();
