@@ -45,7 +45,25 @@ const homeBtn = (w: Page): Locator => view(w).getByRole("button", { name: "Back 
 const badges = (w: Page): Locator => w.locator(".pin-badge");
 const guestPath = (w: Page) => guestEval<string>(w, `location.pathname`);
 const guestH1 = (w: Page) => guestEval<string>(w, `document.querySelector("h1")?.textContent ?? ""`);
-const clickInGuest = (w: Page, selector: string) => guestEval(w, `document.querySelector(${JSON.stringify(selector)}).click()`);
+const guestInput = (app: ElectronApplication, event: Record<string, unknown>) =>
+  app.evaluate(({ webContents }, e) => {
+    const guest = webContents.getAllWebContents().find((c) => c.getType() === "webview" && !c.isDestroyed() && !c.getURL().startsWith("devtools"));
+    if (!guest) return false;
+    guest.sendInputEvent(e as never);
+    return true;
+  }, event);
+/**
+ * A real pointer click on a link in the page, as a user would make it, once the document has finished loading.
+ * (A scripted `.click()` right after parse is a navigation during load, which Chromium turns into a history REPLACE,
+ * so it would hide exactly the history this feature navigates.)
+ */
+async function clickInGuest(s: Session, selector: string): Promise<void> {
+  await expect.poll(() => guestEval<string>(s.window, `document.readyState`)).toBe("complete");
+  const at = await guestEval<{ x: number; y: number }>(s.window, `(() => { const r = document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect(); return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) }; })()`);
+  await guestInput(s.app, { type: "mouseMove", x: at.x, y: at.y });
+  await guestInput(s.app, { type: "mouseDown", x: at.x, y: at.y, button: "left", clickCount: 1 });
+  await guestInput(s.app, { type: "mouseUp", x: at.x, y: at.y, button: "left", clickCount: 1 });
+}
 const seed = (w: Page, rows: unknown[]) => w.evaluate((r) => (window as any).__feedbackProbe.store.seed(r), rows);
 
 const BOARD_PIN = { tag: "h1", label: "h1 Design options", anchor: { route: BOARD, tag: "h1", selector: "#board-title", textAnchor: { tag: "h1", text: "Design options" } } };
@@ -54,8 +72,15 @@ const PAGE_A_PIN = { tag: "h1", label: "h1 Option A: dense", anchor: { route: PA
 /** Playwright's page screenshot does not composite the webview under Xvfb; the window's own capture does. */
 async function windowShot(app: ElectronApplication, name: string): Promise<void> {
   fs.mkdirSync(SHOT_DIR, { recursive: true });
+  await new Promise((resolve) => setTimeout(resolve, 600)); // let the guest paint before the capture
   const png = await app.evaluate(async ({ BrowserWindow }) => (await BrowserWindow.getAllWindows()[0]!.webContents.capturePage()).toPNG().toString("base64"));
   fs.writeFileSync(path.join(SHOT_DIR, `${name}.png`), Buffer.from(png, "base64"));
+  // The window capture may not composite the guest under Xvfb; the guest's own capture is the page as the user sees it.
+  const guestPng = await app.evaluate(async ({ webContents }) => {
+    const guest = webContents.getAllWebContents().find((c) => c.getType() === "webview" && !c.isDestroyed() && !c.getURL().startsWith("devtools"));
+    return guest ? (await guest.capturePage()).toPNG().toString("base64") : "";
+  });
+  if (guestPng) fs.writeFileSync(path.join(SHOT_DIR, `${name}-page.png`), Buffer.from(guestPng, "base64"));
 }
 
 async function open(options: { size?: [number, number] } = {}): Promise<Session> {
@@ -75,7 +100,7 @@ test.describe("artifact tab navigation (back / forward / home)", () => {
       await expect(forwardBtn(w)).toBeDisabled();
       await expect(homeBtn(w)).toBeDisabled();
 
-      await clickInGuest(w, "#opt-a");
+      await clickInGuest(s, "#opt-a");
       await expect.poll(() => guestPath(w)).toBe(PAGE_A);
       await expect(guestH1(w)).resolves.toBe("Option A: dense");
       await expect(backBtn(w)).toBeEnabled();
@@ -99,7 +124,7 @@ test.describe("artifact tab navigation (back / forward / home)", () => {
     const s = await open();
     const w = s.window;
     try {
-      await clickInGuest(w, "#opt-b");
+      await clickInGuest(s, "#opt-b");
       await expect.poll(() => guestPath(w)).toBe("/variations/B/index.html");
       await homeBtn(w).click();
       await expect.poll(() => guestPath(w)).toBe(BOARD);
@@ -121,7 +146,7 @@ test.describe("artifact tab navigation (back / forward / home)", () => {
       }
       await expect(backBtn(w)).toHaveAttribute("title", /\[/); // the shortcut is in the tooltip
 
-      await clickInGuest(w, "#opt-a");
+      await clickInGuest(s, "#opt-a");
       await expect.poll(() => guestPath(w)).toBe(PAGE_A);
       // Enter on the focused Back button
       await backBtn(w).focus();
@@ -152,7 +177,7 @@ test.describe("artifact tab navigation (back / forward / home)", () => {
     try {
       // On the artifact tab the commands are offered; on a markdown tab they are not, so the hotkey is not consumed
       // and CodeMirror keeps Mod+[ (indent less) / Mod+] (indent more).
-      await clickInGuest(w, "#opt-a");
+      await clickInGuest(s, "#opt-a");
       await expect.poll(() => guestPath(w)).toBe(PAGE_A);
       const onArtifact = await w.evaluate(() => (window as any).app.commands.list().map((c: any) => c.id).filter((id: string) => id.startsWith("artifact.")));
       expect(onArtifact).toEqual(expect.arrayContaining(["artifact.back", "artifact.home"]));
@@ -172,7 +197,7 @@ test.describe("artifact tab navigation (back / forward / home)", () => {
     const s = await open();
     const w = s.window;
     try {
-      await clickInGuest(w, "#ext");
+      await clickInGuest(s, "#ext");
       await guestEval(w, `location.href = "https://example.com/escape2"`);
       await expect.poll(() => guestPath(w)).toBe(BOARD);
       expect(await guestEval<string>(w, `location.origin`)).toBe("geode-artifact://nav-variations");
@@ -185,7 +210,7 @@ test.describe("artifact tab navigation (back / forward / home)", () => {
     const s = await open();
     const w = s.window;
     try {
-      await clickInGuest(w, "#opt-a");
+      await clickInGuest(s, "#opt-a");
       await expect.poll(() => guestPath(w)).toBe(PAGE_A);
       // reload: same page, history intact
       await view(w).getByRole("button", { name: "Reload artifact" }).click();
@@ -209,7 +234,7 @@ test.describe("artifact tab navigation (back / forward / home)", () => {
       await expect(badges(w)).toHaveCount(1, { timeout: 20_000 });
       await expect(badges(w).first()).toHaveAttribute("aria-label", /Design options/);
 
-      await clickInGuest(w, "#opt-a");
+      await clickInGuest(s, "#opt-a");
       await expect.poll(() => guestPath(w)).toBe(PAGE_A);
       await expect(badges(w)).toHaveCount(1, { timeout: 20_000 });
       await expect(badges(w).first()).toHaveAttribute("aria-label", /Option A: dense/);
@@ -219,7 +244,7 @@ test.describe("artifact tab navigation (back / forward / home)", () => {
       await expect(badges(w)).toHaveCount(1, { timeout: 20_000 });
       await expect(badges(w).first()).toHaveAttribute("aria-label", /Design options/);
 
-      await clickInGuest(w, "#opt-b"); // a page that carries neither pin
+      await clickInGuest(s, "#opt-b"); // a page that carries neither pin
       await expect.poll(() => guestPath(w)).toBe("/variations/B/index.html");
       await expect(badges(w)).toHaveCount(0, { timeout: 20_000 });
       await homeBtn(w).click();
@@ -235,7 +260,7 @@ test.describe("artifact tab navigation (back / forward / home)", () => {
     try {
       await expect(guestH1(w)).resolves.toBe("Design options");
       await windowShot(s.app, "desktop-board");
-      await clickInGuest(w, "#opt-a");
+      await clickInGuest(s, "#opt-a");
       await expect.poll(() => guestPath(w)).toBe(PAGE_A);
       await expect(backBtn(w)).toBeEnabled();
       await windowShot(s.app, "desktop-subpage");
