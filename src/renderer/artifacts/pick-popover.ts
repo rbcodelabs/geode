@@ -91,6 +91,8 @@ export function hoverChipText(hover: InspectHoverMessage): string {
 export interface PopoverCallbacks {
   onComment(text: string): void;
   onSend(): void;
+  /** Phase 2b-i: save the comment as a pin (Pin button, Cmd/Ctrl+Shift+Enter). Absent for a host that cannot pin. */
+  onPin?(): void;
   onCancel(): void;
   onDone(): void;
   onEscape(): void;
@@ -123,8 +125,9 @@ export function popoverPosition(
 export function popoverStatus(state: PickState, displayName: string, extra?: { offscreen?: boolean }): { text: string; alert: boolean } {
   let text = "";
   let alert = false;
-  if (state.submit === "pending") text = `Sending to ${displayName}…`;
-  else if (state.submit === "accepted") text = state.outcome?.message || "Sent.";
+  const pinning = state.action === "pin";
+  if (state.submit === "pending") text = pinning ? `Pinning to ${displayName}…` : `Sending to ${displayName}…`;
+  else if (state.submit === "accepted") text = state.outcome?.message || (pinning ? "Pinned." : "Sent.");
   else if (state.handlerGone && state.submit === "rejected" && state.outcome?.source === "disposed") {
     // Disposed while the send was in flight: show the registry's neutral message, not "cannot be sent".
     text = state.outcome.message ?? "";
@@ -191,6 +194,7 @@ export class PickPopover {
   private readonly statusIcon: HTMLElement;
   private readonly statusLine: HTMLElement;
   private readonly send: HTMLButtonElement;
+  private readonly pin: HTMLButtonElement;
   private readonly cancel: HTMLButtonElement;
   private readonly repick: HTMLButtonElement;
   private readonly done: HTMLButtonElement;
@@ -235,6 +239,10 @@ export class PickPopover {
     this.cancel.textContent = "Cancel";
     this.send = make("button", "mod-cta pick-popover-send");
     this.send.type = "button";
+    this.pin = make("button", "pick-popover-pin");
+    this.pin.type = "button";
+    this.pin.textContent = "Pin";
+    this.pin.hidden = true;
     this.repick = make("button", "mod-cta pick-popover-repick");
     this.repick.type = "button";
     this.repick.textContent = "Pick again";
@@ -243,7 +251,7 @@ export class PickPopover {
     this.done.type = "button";
     this.done.textContent = "Done";
     // DOM order is tab order (primary first); CSS lays the row out reversed.
-    actions.append(this.repick, this.send, this.cancel, this.done);
+    actions.append(this.repick, this.send, this.pin, this.cancel, this.done);
 
     this.el.append(this.heading, this.target, this.area, details, this.statusLine, actions);
 
@@ -254,7 +262,10 @@ export class PickPopover {
     this.area.addEventListener("keydown", (event) => {
       if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
         event.preventDefault();
-        if (!this.send.disabled && !this.send.hidden) this.callbacks.onSend();
+        // Cmd/Ctrl+Shift+Enter pins; Cmd/Ctrl+Enter sends (design 3.7).
+        if (event.shiftKey) {
+          if (!this.pin.disabled && !this.pin.hidden) this.callbacks.onPin?.();
+        } else if (!this.send.disabled && !this.send.hidden) this.callbacks.onSend();
       }
     });
     // Esc anywhere in the popover is the user's, not the page's.
@@ -267,6 +278,7 @@ export class PickPopover {
       this.callbacks.onEscape();
     });
     this.send.addEventListener("click", () => this.callbacks.onSend());
+    this.pin.addEventListener("click", () => this.callbacks.onPin?.());
     this.cancel.addEventListener("click", () => this.callbacks.onCancel());
     this.done.addEventListener("click", () => this.callbacks.onDone());
     this.repick.addEventListener("click", () => this.callbacks.onRepick());
@@ -315,8 +327,13 @@ export class PickPopover {
     this.send.hidden = accepted || gone; // in the gone state "Pick again" replaces Send
     this.cancel.hidden = accepted;
     this.done.hidden = !accepted;
-    this.send.textContent = pending ? "Sending…" : state.submit === "rejected" ? "Retry" : "Send";
-    this.send.disabled = pending || state.handlerGone || state.elementGone || state.comment.trim().length === 0;
+    const lastPin = state.action === "pin";
+    this.send.textContent = pending && !lastPin ? "Sending…" : state.submit === "rejected" && !lastPin ? "Retry" : "Send";
+    const empty = state.comment.trim().length === 0;
+    this.send.disabled = pending || state.handlerGone || state.elementGone || empty;
+    this.pin.hidden = accepted || gone || state.pinAvailable !== true;
+    this.pin.textContent = pending && lastPin ? "Pinning…" : state.submit === "rejected" && lastPin ? "Retry pin" : "Pin";
+    this.pin.disabled = pending || state.handlerGone || state.elementGone || empty;
     this.cancel.disabled = pending;
     if (gone && !wasGone && focusWasInside) this.repick.focus();
   }

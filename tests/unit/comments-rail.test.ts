@@ -305,4 +305,3 @@ describe("CommentsRail narrow mode and motion", () => {
     expect(block.slice(0, 600)).toMatch(/transition: none/);
   });
 });
-});
