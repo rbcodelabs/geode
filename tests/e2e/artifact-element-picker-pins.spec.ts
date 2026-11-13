@@ -245,7 +245,6 @@ test.describe("pinned comments (phase 2b-i G3)", () => {
       await expect(popover(v1.window)).toBeVisible();
       await expect(popover(v1.window).getByRole("button", { name: "Send" })).toBeVisible();
       await expect(popover(v1.window).getByRole("button", { name: "Pin" })).toBeHidden();
-      expect(await v1.window.evaluate(() => (window as any).app.commands.commands?.["artifact.toggle-comments"] !== undefined || true)).toBe(true);
     } finally { await v1.cleanup(); }
 
     const s = await session(BASIC_ARTIFACT, { register: "v2" });

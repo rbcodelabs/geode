@@ -1272,6 +1272,14 @@ multi-select Send. Detached comments appear greyed in the rail only. Pins and th
 (roving tabindex pin layer, documented focus rules). Screenshot and redaction policy are unchanged for
 `vault: read`.
 
+**Send request ids (plugin P2b QA).** Geode mints a NEW `requestId` for every user click on Send, Send N or Send again.
+A request id is reused only for a transport-level retry of that one click (a timeout or abort, offered as "Retry" in the
+rail's status line), because the plugin treats a same-id retry after a plugin reload as `conflict` (nothing is sent) when
+a requested comment is `open` with `maybeSent`, and remembers a failed write-ahead conflict report per id for 10 minutes.
+A comment that is `open` and `maybeSent` shows a "May have been sent" chip and keeps Send enabled; clicking it is a new
+click, so it gets a new id. Any non-transport rejection (`busy`, `conflict`, `invalid`, `foreign`, `limit`) clears the
+retry; the next click starts a fresh request.
+
 ### A.6 Rejected alternatives
 
 Geode reading `comments.json` directly (two parsers, fs hardening in the renderer); a Geode-owned store (violates
@@ -1423,3 +1431,55 @@ longer time to results on 50k nodes, not as jank. Not measured: DPR 2, ProMotion
 - The guest preload gains a second feature set (a tracker) behind the same document-start capture of natives.
 - A pass costs the embedder nothing between changes; reloads cost one resolve pass.
 - The grammar's attribute-value cap (128) equals the generator's `data-testid` limit; the round trip (generator output is always inside the grammar) is covered by tests over report-shaped pages.
+
+## Addendum 3: pins and the rail (Phase 2b-i, G3, non-overlay parts first)
+
+Status: implemented in the G3 pull request (integration of G1 and G2). Addenda 1 and 2 stand; this records what G3 decided.
+
+**Availability.** Pin, the rail toggle and the `artifact.toggle-comments` command exist only when the routed handler is v2
+(`describeRoute(target).contractVersion === 2`; no fall-through to a later handler). Pin additionally needs the provider
+to answer `list` with health `ok` or `recovered` and fewer than 200 comments; a rejected list or health `read-only` or
+`unavailable` hides Pin but keeps the rail toggle so the notice can be read. A v1 handler gets no toggle and no Pin, and
+Pick plus Send behave exactly as before. A registry change with a v2 route rebuilds the comments client (a reloaded
+handler leaves no dead client); a page load does not, so pins stay in place while the guest re-resolves.
+
+**Wiring.** `pins-coordinator.ts` (DOM-free) owns the flow: `list` on load, on rail open (after subscribing, so no change
+is missed) and on window focus or leaf activation; `subscribe` only while the rail is open; each change event is answered
+with one `list` by the client (coalesced per frame). The anchor set is sent to the guest through `bridge.setAnchors` as
+exactly `{key, route, tag, selector, alternates, textAnchor, landmark}` with keys `a0..a99` per set; comment text, ids,
+statuses and ordinals never leave the embedder (asserted on the serialized payload). It is re-sent only when an anchor
+field or the set changes, not on a status change. Results and rects drive pin state: `selector`+`agrees` is exact,
+`text`+`agrees` is moved, anything with `agrees: false` or a landmark hit is approximate (hollow badge with a tilde and a
+chip, "may not be the same element"), `detached` and `other-route` have no badge and show chips in the rail. Until the
+first answer of a new epoch pins stay where they were with `aria-busy`.
+
+**Mapping (the one replaceable unit).** `guestRectToStage` in `pin-collapse.ts` maps a guest viewport rect to stage px:
+the webview's border box plus its border width (`clientLeft`/`clientTop`, read, never hard-coded) minus the stage origin,
+unrounded. The spike S2 mechanics check on Linux at DPR 1 found the old popover mapping (`round(frame.left - stage.left +
+box.x)`) 1 css px up/left in tablet and mobile presets (the webview's bounding rect includes its 1 px border) and Math.round
+adding up to 1 more; the popover and highlight mapping is NOT changed in G3 (their tests are the v1/2a ones), only the pins
+use the corrected variant. Guest rects are already in embedder css px under app zoom, so there is no scale factor. A preset's
+content size is never hard-coded (tablet content measured 766x1022, not 768x1024).
+
+**Clipping.** A badge is drawn only when the element's stage-relative box intersects the visible stage
+(`intersectsStage`), so an element the tracker calls visible but that lies outside the pane (a preset webview larger than the
+stage) gets no badge; a partly visible element gets one, clamped 2 px inside the stage. The tracker cannot know clipping by an
+inner scroller's `overflow`; a pin on such an element can be drawn where it is not visible. That is a known limitation
+(rect-based, no per-ancestor clip walk) and is listed as NOT VERIFIED for real pages with inner scrollers.
+
+**Collapse.** `collapsePins` (pure, O(n), n <= 100): grid of cell 28 px, 3x3 neighbour test, union-find, merge below 22 px
+(below 28 px for a pair that shared a cluster last pass), count badge at the centroid, z-order cluster > open/pending >
+sent > terminal, cluster identity the sorted ids.
+
+**Rail and keyboard.** Filters: All, Open (open and pending), Sent, Resolved, Dismissed. Canvas pins show open, pending and
+sent comments; resolved and dismissed ones show only while the matching filter is on. Default selection is every open local
+comment, pruned to what is still sendable; Send N is disabled above 20. Rows render in chunks of 50, with `textContent`
+only (a source scan test forbids HTML-string APIs in the rail and the overlay). Focus rules follow the design: the heading on
+open; after a row action removes the focused row, the next row, else the previous, else the list; Jump keeps focus in the
+rail; Esc clears a cluster chip first, then closes and returns to the toggle; a saved pin returns focus to its new badge when
+it is placed, else the Comments toggle. Narrow mode (below 560 px of pane width) lays the rail out as a sheet. Reduced motion
+removes the badge and rail transitions; the guest already uses instant scroll and no flash animation under it.
+
+**Verification status.** Verified: unit tests (Node and jsdom) and Electron e2e on Linux/Xvfb at DPR 1. NOT VERIFIED: DPR 2,
+ProMotion, non-default zoom and a real Retina Mac (spike S2, Rick's harness), a screen-reader pass (spike S6), a real
+Design plugin, inner-scroller clipping on real pages.
