@@ -27,7 +27,16 @@ test("diag: why are seeded pins not placed", async () => {
     await w.evaluate(() => (window as any).__feedbackProbe.store.seed([
       { tag: "button", label: "button Buy now", anchor: { tag: "button", selector: "#buy", textAnchor: { tag: "button", text: "Buy now" } } },
     ]));
-    await w.waitForTimeout(6000);
+    await w.waitForTimeout(4000);
+    const manual = await w.evaluate(() => {
+      const view = (window as any).app.workspace.getLeavesOfType("geode-artifact")[0].view;
+      try {
+        view.pins.onAnchorResults({ epoch: 1, results: [{ key: "a0", match: "selector", agrees: true, rect: { x: 100, y: 200, width: 160, height: 48 }, visible: true }] });
+        return { ok: true, debug: view.pins.debug() };
+      } catch (err: any) { return { ok: false, error: String(err && err.stack) }; }
+    });
+    console.log("G3MANUAL " + JSON.stringify(manual));
+    await w.waitForTimeout(1500);
     const dump = await w.evaluate(() => {
       const view = (window as any).app.workspace.getLeavesOfType("geode-artifact")[0].view;
       const st = (window as any).__feedbackProbe.store;
