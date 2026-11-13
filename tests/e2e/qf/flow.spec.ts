@@ -428,7 +428,8 @@ test.describe("flow (new Geode + new plugin)", () => {
     } finally { await s.cleanup(); }
   });
 
-  async function timeoutReloadRetry() {
+  /** Timed-out send (delivered, answer lost) -> plugin reload; returns before the Retry click. */
+  async function timedOutThenReload() {
     const { s, w, root } = await boot();
     await pinAt(s, "#buy", "hang one"); await pinAt(s, ".price", "hang two");
     await openRail(w);
@@ -443,34 +444,63 @@ test.describe("flow (new Geode + new plugin)", () => {
     await expect(rail(w).locator(".comments-rail-retry")).toBeVisible({ timeout: 10_000 });
     const restoreMs = Date.now() - t0;
     await expect(rail(w).locator('.comments-rail-filter[data-filter="open"]')).toHaveAttribute("aria-pressed", "true");
-    await rail(w).locator(".comments-rail-retry").click();
-    await waitComments(root, (f) => statuses(f).join() === "sent,sent", 30_000);
-    const all = await sends(w);
-    const runs = await si(w, (x) => x.runs);
-    return { s, root, first, all, runs, restoreMs };
+    return { s, w, root, first, restoreMs };
   }
+  const delivered = (w: Page) => si(w, (x) => x.runs as number);
 
   test("QF-F13 a timed-out send, then a plugin reload: the rail, its filter and the Retry button are back within 10 s and Retry completes the send", async () => {
     test.setTimeout(300_000);
-    const r = await timeoutReloadRetry();
+    const r = await timedOutThenReload();
     try {
       ev("F13.restoreMs", r.restoreMs); obs("restoreMs=" + r.restoreMs);
-      expect(r.all.length).toBeGreaterThanOrEqual(2);
+      await rail(r.w).locator(".comments-rail-retry").click();
+      await waitComments(r.root, (f) => statuses(f).join() === "sent,sent", 30_000);
     } finally { await r.s.cleanup(); }
   });
 
-  // BUG (P2b advisory A1, now reachable by design through the G3 reload holder): the Retry reuses the same requestId, but the
-  // reloaded plugin has a NEW boundary secret, so the rebuilt prompt differs, so the idempotency key differs, so the host
-  // cannot deduplicate and the batch is delivered twice. test.fail(): this passes while the defect exists and goes red when it is fixed.
-  test("QF-F13b BUG: timeout (message delivered, answer lost), plugin reload, Retry with the same requestId delivers the batch twice", async () => {
+  // Was the BUG test for QA-F1 (P2b advisory A1). Fixed in the plugin at 5365265d: stable boundary secret + thread-bound prompt hash,
+  // so the Retry after a reload rebuilds the byte-identical prompt and the host dedupes by idempotency key.
+  test("QF-F13b timeout (message delivered, answer lost), plugin reload, Retry within the window: exactly one message in total, one idempotency key", async () => {
     test.setTimeout(300_000);
-    test.fail();
-    const r = await timeoutReloadRetry();
+    const r = await timedOutThenReload();
     try {
-      const keys = new Set(r.all.map((c) => c.key));
-      const got = `calls=${r.all.length} keys=${keys.size} delivered=${r.runs}`;
-      ev("F13b.observed", got); obs(got);
-      expect(got === "calls=2 keys=1 delivered=1", "A1 timeout+reload+Retry: " + got).toBe(true);
+      await rail(r.w).locator(".comments-rail-retry").click();
+      await waitComments(r.root, (f) => statuses(f).join() === "sent,sent", 30_000);
+      const all = await sends(r.w);
+      const keys = new Set(all.map((c) => c.key));
+      const got = `calls=${all.length} keys=${keys.size} delivered=${await delivered(r.w)} samePrompt=${all.every((c) => c.prompt === r.first.prompt)}`;
+      obs(got);
+      expect(got, "QA-F1").toBe("calls=2 keys=1 delivered=1 samePrompt=true");
+    } finally { await r.s.cleanup(); }
+  });
+
+  test("QF-F13c Retry after the 15-minute dedupe window (clock moved +16 min): a conflict with the 'may have been sent' wording, nothing sent; a fresh Send click sends as a new request", async () => {
+    test.setTimeout(300_000);
+    const r = await timedOutThenReload();
+    try {
+      const w = r.w;
+      await w.evaluate(() => { const o = Date.now.bind(Date); (window as any).__realNow = o; Date.now = () => o() + 16 * 60 * 1000; });
+      await rail(w).locator(".comments-rail-retry").click();
+      const results = rail(w).locator(".comments-rail-results"); const notice = rail(w).locator(".comments-rail-notice");
+      const read = async () => `${(await results.textContent()) ?? ""} | ${(await notice.textContent()) ?? ""}`.replace(/\s+/g, " ");
+      let text = ""; const end = Date.now() + 30_000;
+      while (Date.now() < end) { text = await read(); if (/may have been sent earlier/i.test(text)) break; await sleep(400); }
+      obs("resultsLine+notice: " + text.slice(0, 150));
+      expect(text, "the rail surfaces the conflict (results line or notice)").toMatch(/may have been sent earlier/i);
+      const mid = await sends(w);
+      expect(`calls=${mid.length} delivered=${await delivered(w)}`, "the late Retry must send nothing").toBe("calls=1 delivered=1");
+      expect(statuses(readComments(r.root)).join()).toBe("open,open");
+      await expect(rows(w).first().locator(".comments-rail-chips")).toContainText("May have been sent");
+      // the user decides: a fresh click is a new request, a second message, by choice
+      await expect(rail(w).locator(".comments-rail-send")).toBeEnabled();
+      await rail(w).locator(".comments-rail-send").click();
+      await waitComments(r.root, (f) => statuses(f).join() === "sent,sent", 30_000);
+      const all = await sends(w);
+      const keys = new Set(all.map((c) => c.key));
+      const got = `calls=${all.length} keys=${keys.size} delivered=${await delivered(w)}`;
+      obs(got);
+      expect(got).toBe("calls=2 keys=2 delivered=2");
+      await w.evaluate(() => { Date.now = (window as any).__realNow; });
     } finally { await r.s.cleanup(); }
   });
 
