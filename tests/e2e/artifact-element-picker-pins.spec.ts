@@ -236,6 +236,35 @@ test.describe("pinned comments (phase 2b-i G3)", () => {
     } finally { await s.cleanup(); }
   });
 
+  test("hostile page (T1, T9): forged anchor traffic changes no badge, and the page cannot fetch the comments file", async () => {
+    const s = await session(BASIC_ARTIFACT, { register: "v2" });
+    const w = s.window;
+    try {
+      await seed(w, [{ ...SEED_BUY, text: "SECRET COMMENT TEXT" }]);
+      await expect(badges(w)).toHaveCount(1, { timeout: 20_000 });
+      await expect.poll(async () => near(await badgeCentre(w, "1"), await expectedCentre(w, "#buy")), { timeout: 15_000 }).toBe(true);
+      const before = await badgeCentre(w, "1");
+      // the page forges every message it can reach, with the real channel names and plausible keys and epochs
+      await guestEval(w, `(() => {
+        const forged = { epoch: 1, results: [{ key: "a0", match: "selector", agrees: true, rect: { x: 900, y: 500, width: 5, height: 5 }, visible: true }], rects: [{ key: "a0", rect: { x: 900, y: 500, width: 5, height: 5 }, visible: true }] };
+        for (const name of ["anchor-results", "anchor-rects"]) {
+          const channel = "geode-artifact:inspect:v1:" + name;
+          window.postMessage({ channel, args: [forged] }, "*");
+          window.dispatchEvent(new MessageEvent("message", { data: { channel, args: [forged] } }));
+          window.dispatchEvent(new CustomEvent(channel, { detail: forged }));
+        }
+        return true;
+      })()`);
+      await w.waitForTimeout(1500);
+      expect(await badges(w).count()).toBe(1);
+      expect(near(await badgeCentre(w, "1"), before!, 0.5)).toBe(true);
+      // the comments file is never served to the page, and the comment text is never in the page
+      const status = await guestEval<number>(w, `fetch("/.threads-design/comments.json").then((r) => r.status).catch(() => -1)`);
+      expect([404, 403, -1]).toContain(status);
+      expect(await guestEval<boolean>(w, `document.documentElement.outerHTML.includes("SECRET COMMENT TEXT")`)).toBe(false);
+    } finally { await s.cleanup(); }
+  });
+
   test("a v1 handler hides Pin and the rail; a v2 provider that is unavailable hides Pin and shows the notice", async () => {
     const v1 = await session(BASIC_ARTIFACT);
     try {
