@@ -589,8 +589,8 @@ function printSummary(result: any) {
   L.push("", "Verdict per condition, error in embedder css px (worst of dx dy dw dh per case: p50 / p95 / max). Production mapping = 'existing'.");
   const cell = (a: any) => a && a.cases ? `${a.verdict.padEnd(7)} ${String(a.worstCss.p50).padStart(5)} /${String(a.worstCss.p95).padStart(5)} /${String(a.worstCss.max).padStart(5)} (n ${a.cases})` : "no data";
   L.push("(q = what ONE physical pixel is in css px at that condition: the screenshot cannot resolve less, so on a DPR 1 machine q >= 1 makes PASS unreachable)");
-  L.push(`${"condition".padEnd(34)}${"q".padEnd(6)}${"existing".padEnd(36)}${"border".padEnd(36)}scaled`);
-  for (const c of result.summary.perCondition) L.push(`${c.condition.padEnd(34)}${String(c.onePhysicalPxInCss).padEnd(6)}${cell(c.existing).padEnd(36)}${cell(c.border).padEnd(36)}${cell(c.scaled)}`);
+  L.push(`${"condition".padEnd(42)}${"q".padEnd(6)}${"existing".padEnd(36)}${"border".padEnd(36)}scaled`);
+  for (const c of result.summary.perCondition) L.push(`${c.condition.padEnd(42)}${String(c.onePhysicalPxInCss).padEnd(6)}${cell(c.existing).padEnd(36)}${cell(c.border).padEnd(36)}${cell(c.scaled)}`);
   L.push("", "Per group (existing mapping):");
   for (const g of result.summary.perGroup) L.push(`  ${g.group.padEnd(16)} ${cell(g.existing)}   signed median dx ${g.existing.signedMedian.dx.median} dy ${g.existing.signedMedian.dy.median} dw ${g.existing.signedMedian.dw.median} dh ${g.existing.signedMedian.dh.median}`);
   L.push("", "Overall:");
