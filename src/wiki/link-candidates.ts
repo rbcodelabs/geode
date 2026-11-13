@@ -42,6 +42,14 @@ export function selectLinkCandidates(
     return path ? { candidates: exact(path), stage: "relative" }
       : { candidates: [], stage: "relative", invalid: "traversal" };
   }
+  if (!strict && (target.startsWith("./") || target.startsWith("../"))) {
+    // Markdown-style relative destinations are relative to the SOURCE folder.
+    // These never resolved before (the raw "../x" matched nothing), so
+    // resolving them here cannot change a link that previously worked.
+    const relative = normalizeWikiPath(parent + target);
+    const found = relative ? exact(relative) : [];
+    if (found.length) return { candidates: found, stage: "relative" };
+  }
   const path = strict ? normalizeWikiPath(target) : target;
   if (!path) return { candidates: [], stage: "exact", invalid: "invalid-target" };
   let candidates = exact(path);
