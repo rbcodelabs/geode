@@ -81,7 +81,6 @@ async function narrowScrollable(s: Session): Promise<void> {
 }
 
 /** QA_NOFAIL=1 runs the BUG tests as ordinary tests so the real failure message can be read. */
-const knownBug = (): void => { if (!process.env.QA_NOFAIL) test.fail(); };
 
 test.describe("QA G3 pins and rail (independent)", () => {
   test.setTimeout(180_000);
@@ -124,8 +123,7 @@ test.describe("QA G3 pins and rail (independent)", () => {
   });
 
   // BUG (static review #6): a v1 handler's popover has no Pin, yet the combo is still swallowed in it.
-  test("BUG: in a v1 popover Control+Shift+Enter still toggles focus pane (the window listener swallows it)", async () => {
-    knownBug();
+  test("in a v1 popover Control+Shift+Enter still toggles focus pane (the window listener swallows it)", async () => {
     const s = await session(BASIC_ARTIFACT); // v1 handler
     const w = s.window;
     try {
@@ -168,8 +166,7 @@ test.describe("QA G3 pins and rail (independent)", () => {
   });
 
   // BUG (static review #4): there is no scroll listener on the stage, so a stage scroll leaves badges stranded until the next guest report.
-  test("BUG: a stage scroll moves the badges with the element within two frames (no scroll listener on the stage)", async () => {
-    knownBug();
+  test("a stage scroll moves the badges with the element within two frames (no scroll listener on the stage)", async () => {
     const s = await session(BASIC_ARTIFACT, { register: "v2", probe: false });
     const w = s.window;
     try {
@@ -208,8 +205,7 @@ test.describe("QA G3 pins and rail (independent)", () => {
   });
 
   // ---- (4) focus: reorder drops keyboard focus -------------------------------------------------------------------
-  test("BUG: a focused badge keeps focus when a rect update reorders the pin layer (insertBefore blurs it in Chromium)", async () => {
-    knownBug();
+  test("a focused badge keeps focus when a rect update reorders the pin layer (insertBefore blurs it in Chromium)", async () => {
     const s = await session(BASIC_ARTIFACT, { register: "v2", probe: false });
     const w = s.window;
     try {
@@ -232,8 +228,7 @@ test.describe("QA G3 pins and rail (independent)", () => {
   });
 
   // ---- (4)(8) closing the rail while focus is inside it ---------------------------------------------------------
-  test("BUG: closing the rail with the palette command while focus is inside it leaves focus on the Comments toggle, not body", async () => {
-    knownBug();
+  test("closing the rail with the palette command while focus is inside it leaves focus on the Comments toggle, not body", async () => {
     const s = await session(BASIC_ARTIFACT, { register: "v2", probe: false });
     const w = s.window;
     try {
@@ -248,8 +243,7 @@ test.describe("QA G3 pins and rail (independent)", () => {
   });
 
   // ---- (5)(7) registry change rebuilds the coordinator -----------------------------------------------------------
-  test("BUG: a registry change keeps the rail open with its filter and the Retry for a timed-out send (same requestId)", async () => {
-    knownBug();
+  test("a registry change keeps the rail open with its filter and the Retry for a timed-out send (same requestId)", async () => {
     test.setTimeout(240_000);
     const s = await session(BASIC_ARTIFACT, { register: "v2", probe: false });
     const w = s.window;

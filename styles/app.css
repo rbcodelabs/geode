@@ -5977,14 +5977,19 @@ body.is-mobile .empty-state-action-hint {
 /* State is carried by shape, not colour alone: open solid, pending dashed ring, sent a check, approximate hollow with ~. */
 .pin-badge.is-pending { border-style: dashed; border-color: var(--pin-fg); }
 .pin-badge.is-sent .pin-badge-check {
-  position: absolute; right: -6px; bottom: -6px; width: 11px; height: 11px; border-radius: 50%; background: var(--pin-ring);
+  position: absolute; right: -2px; bottom: -2px; width: 10px; height: 10px; border-radius: 50%; background: var(--pin-ring);
+  pointer-events: none; /* decoration only: the badge is the target; and it stays inside the 2 px stage margin */
 }
 .pin-badge.is-sent .pin-badge-check::before {
-  content: ""; position: absolute; left: 3.5px; top: 1px; width: 3px; height: 5.5px;
+  content: ""; position: absolute; left: 3px; top: 0.5px; width: 3px; height: 5.5px;
   border: solid var(--pin-bg); border-width: 0 1.6px 1.6px 0; transform: rotate(45deg);
 }
 .pin-badge.is-resolved, .pin-badge.is-dismissed { opacity: 0.55; }
-.pin-badge.is-approximate { background: transparent; color: var(--pin-bg); border-color: var(--pin-bg); box-shadow: none; }
+.pin-badge.is-approximate { background: var(--pin-ring); color: var(--pin-bg); border-color: var(--pin-bg); box-shadow: 0 0 0 1px var(--pin-ring); }
+/* From another install and not adopted: hollow with a dotted ring (also named so for assistive tech). */
+.pin-badge.is-foreign { background: var(--pin-ring); color: var(--pin-bg); border: 2px dotted var(--pin-bg); box-shadow: 0 0 0 1px var(--pin-ring); }
+/* The element's own anchor is outside the visible stage, so the badge is clamped to its edge. */
+.pin-badge.is-edge { opacity: 0.7; }
 .pin-badge.is-cluster { width: 24px; height: 24px; border-radius: 6px; border-width: 2px; margin: -2px 0 0 -2px; }
 .pin-badge:focus-visible { outline: 2px solid var(--interactive-accent); outline-offset: 2px; }
 
@@ -6007,7 +6012,9 @@ body.is-mobile .empty-state-action-hint {
   margin: 4px 10px; padding: 6px 8px; border-left: 3px solid var(--text-muted); border-radius: 2px;
   background: var(--background-secondary); color: var(--text-normal); font-size: var(--font-ui-smaller); overflow-wrap: anywhere;
 }
-.comments-rail-foreign { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.comments-rail-foreign { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.comments-rail-foreign-actions { display: inline-flex; gap: 4px; }
+.comments-rail-foreign-actions button[hidden] { display: none; }
 .comments-rail-notice[hidden], .comments-rail-foreign[hidden], .comments-rail-cluster-chip[hidden],
 .comments-rail-resolve-sent[hidden], .comments-rail-retry[hidden], .comments-rail-empty[hidden] { display: none; }
 .comments-rail-filters { display: flex; flex-wrap: wrap; gap: 4px; padding: 4px 10px; }

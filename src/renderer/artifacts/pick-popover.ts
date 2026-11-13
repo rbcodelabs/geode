@@ -4,6 +4,7 @@ import { INSPECTOR_SCREENSHOT } from "../../artifacts/inspector-protocol";
 import type { PickState } from "./pick-controller";
 import type { InspectHoverMessage } from "../../artifacts/inspector-protocol";
 import type { SelectionSnapshot } from "../views/artifact-inspector-bridge";
+import { cutByCodePoints } from "./rail-model";
 
 /**
  * The comment popover (ADR 0006 D8): plain embedder DOM, non-modal, rendered from
@@ -267,14 +268,16 @@ export class PickPopover {
       }
     });
     // Mod+Shift+Enter is also the global "Toggle focus on active pane" command, which the app dispatches from a document
-    // capture listener. While focus is inside this popover the combo is Pin (design 3.7, A4 collision check); a window
-    // capture listener runs first and keeps the global command from also firing. Everywhere else the command is unchanged.
+    // capture listener. While focus is inside this popover AND Pin can actually fire, the combo is Pin (design 3.7, A4
+    // collision check): a window capture listener runs first and keeps the global command from also firing. In every other
+    // state (v1 handler, empty comment, pending, accepted) the event is left alone, so the global command still works.
     this.onWindowKeydown = (event) => {
       if (event.key !== "Enter" || !event.shiftKey || event.altKey || !(event.metaKey || event.ctrlKey)) return;
       if (event.isComposing || !this.el.contains(event.target as Node)) return;
+      if (this.pin.disabled || this.pin.hidden) return;
       event.preventDefault();
       event.stopPropagation();
-      if (!this.pin.disabled && !this.pin.hidden) this.callbacks.onPin?.();
+      this.callbacks.onPin?.();
     };
     doc.defaultView?.addEventListener("keydown", this.onWindowKeydown, true);
     // Esc anywhere in the popover is the user's, not the page's.
@@ -359,5 +362,5 @@ export class PickPopover {
 function describeTarget(snapshot: SelectionSnapshot): string {
   const s = snapshot.selection;
   const label = s.a11y.name || s.textAnchor.text || s.landmark || "";
-  return label ? `“${label.slice(0, 60)}” · ${s.selector || s.tag}` : s.selector || s.tag;
+  return label ? `“${cutByCodePoints(label, 60)}” · ${s.selector || s.tag}` : s.selector || s.tag;
 }

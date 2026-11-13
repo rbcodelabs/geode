@@ -1468,7 +1468,7 @@ stage) gets no badge; a partly visible element gets one, clamped so the whole 20
 inner scroller's `overflow`; a pin on such an element can be drawn where it is not visible. That is a known limitation
 (rect-based, no per-ancestor clip walk) and is listed as NOT VERIFIED for real pages with inner scrollers.
 
-**Collapse.** `collapsePins` (pure, O(n), n <= 100): grid of cell 28 px, 3x3 neighbour test, union-find, merge below 22 px
+**Collapse.** `collapsePins` (pure, n <= 100): grid of cell 28 px, 3x3 neighbour test, union-find, merge below 22 px
 (below 28 px for a pair that shared a cluster last pass), count badge at the centroid, z-order cluster > open/pending >
 sent > terminal, cluster identity the sorted ids.
 
@@ -1484,11 +1484,25 @@ by G3; it is a static outline in the guest host, not an animation).
 
 **Shortcut collision (assumption A4 checked).** Cmd/Ctrl+Shift+Enter is already the global command "Toggle focus on active
 pane" (`workspace:toggle-focus-pane`), which the app dispatches from a document-level capture listener, so it fired before
-the popover ever saw the key (observed in e2e: the popover stayed idle). While focus is inside the comment popover the
-combo is now Pin: a window-level capture listener (which runs before the document listener) handles it and stops
-propagation, and is released when the popover is discarded. Everywhere else the global command is unchanged. The popover's
-Pin button works without any shortcut.
+the popover ever saw the key (observed in e2e: the popover stayed idle). While focus is inside the comment popover and Pin
+can fire (visible, enabled: a v2 handler, a typed comment, nothing pending), the combo is Pin: a window-level capture listener (which
+runs before the document listener) handles it and stops propagation, and is released when the popover is discarded. In every other
+state (a v1 popover with no Pin, an empty comment, a pending or accepted submission) the event is left alone and the global command
+still works; everywhere outside the popover it is unchanged. The popover's Pin button works without any shortcut.
+
+**QA fixes (independent QA gate, G3).** The routed handler's registration number (`routeInstance`) lets the view tell a reloaded
+handler from an unrelated registry change: an unrelated change does nothing, a reload replaces only the comments client and keeps
+the rail, filter, selection and a pending Retry (so a timed-out send is retried with the same requestId, never re-sent under a
+fresh one). The stage scroll re-lays out the pins at once. A focused badge keeps focus across reorders; a row checkbox keeps focus
+after a toggle. A Delete or Cancel-send confirmation is tied to the row version it was opened on and is dropped when the row
+changes or stops offering the action; the action carries that version. `busy` times out at 5 s (pins then show as unconfirmed);
+the results line goes stale when a later snapshot arrives (unless Retry is offered); foreign pins are drawn hollow with a dotted ring
+and named "not adopted, from another install"; Adopt all asks first; Geode words the read-only, 200-comment and no-live-updates
+notices itself; badge labels are cut by code points; a badge whose own anchor is outside the stage is marked. G4 items done here:
+`reportAnchors` (only for anchors whose state changed, after answers were stable 2 s, state only, no healed anchor; stops asking
+when the provider says it does not accept reports) and the subscription-cap notice. Collapse is O(n) for spread pins and O(n^2),
+bounded by the 100-pin cap (4950 pair tests, under 1 ms), for a dense cell.
 
 **Verification status.** Verified: unit tests (Node and jsdom) and Electron e2e on Linux/Xvfb at DPR 1. NOT VERIFIED: DPR 2,
-ProMotion, non-default zoom and a real Retina Mac (spike S2, Rick's harness), a screen-reader pass (spike S6), a real
+ProMotion, non-default zoom and a real Retina Mac (spike S2: the S2 spike harness, not yet run on a Retina Mac), a screen-reader pass (spike S6), a real
 Design plugin, inner-scroller clipping on real pages.

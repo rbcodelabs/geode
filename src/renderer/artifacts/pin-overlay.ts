@@ -22,6 +22,10 @@ export interface PinBadgeView {
   readonly label: string;
   readonly status: ArtifactCommentStatus;
   readonly approximate: boolean;
+  /** Not adopted: the comment came from another install. Drawn hollow with a dotted ring. */
+  readonly foreign?: boolean;
+  /** The element's own anchor lies outside the visible stage; the badge is clamped to the edge. */
+  readonly edge?: boolean;
   readonly z: number;
 }
 
@@ -62,6 +66,7 @@ export class PinOverlay {
 
   render(badges: readonly PinBadgeView[], options: { busy: boolean }): void {
     const focusedKey = this.keyOf(this.doc.activeElement);
+    const focusedNode = focusedKey !== null ? this.nodes.get(focusedKey) ?? null : null;
     const previousOrder = this.order;
     this.views = new Map(badges.map((b) => [b.key, b]));
     this.order = badges.map((b) => b.key);
@@ -86,7 +91,7 @@ export class PinOverlay {
         node.addEventListener("focus", () => this.setActive(badge.key));
         this.nodes.set(badge.key, node);
       }
-      node.className = `pin-badge is-${badge.kind} is-${badge.status}${badge.approximate ? " is-approximate" : ""}`;
+      node.className = `pin-badge is-${badge.kind} is-${badge.status}${badge.approximate ? " is-approximate" : ""}${badge.foreign ? " is-foreign" : ""}${badge.edge ? " is-edge" : ""}`;
       node.style.transform = `translate(${round2(badge.x - radius)}px, ${round2(badge.y - radius)}px)`;
       node.style.zIndex = String(badge.z);
       node.setAttribute("aria-label", badge.label);
@@ -103,6 +108,8 @@ export class PinOverlay {
     }
     this.syncTabStops();
     if (focusedKey !== null && !this.views.has(focusedKey) && this.activeKey !== null) this.nodes.get(this.activeKey)?.focus();
+    // Moving a focused node (insertBefore) blurs it: a keyboard user arrowing through pins keeps their place.
+    else if (focusedNode !== null && this.doc.activeElement !== focusedNode && this.views.has(focusedKey!)) focusedNode.focus({ preventScroll: true });
   }
 
   /** Focuses the badge standing for a comment (a pin, or a cluster that contains it). */

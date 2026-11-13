@@ -13,7 +13,7 @@ vi.setConfig({ testTimeout: 30_000 });
 /**
  * QA G3: the real CommentsRail + PinOverlay wired to the real coordinator the way artifact-view.ts wires them (JSDOM),
  * with a fake v2 client. Covers hostile strings, what the guest receives, focus, confirm lifetimes and teardown.
- * Tests named BUG: are it.fails: they assert the CORRECT behaviour and are expected to fail until the engineer fixes src.
+ * The former BUG tests (it.fails) are plain tests now that the defects are fixed.
  */
 
 const SRC = path.resolve(__dirname, "..", "..", "src", "renderer");
@@ -402,7 +402,7 @@ describe("send wiring through the real rail", () => {
   });
 
   // QA-G3 advisory (static review #8): the extra clicks above are dropped with no visible or announced feedback.
-  it.fails("BUG: Send is disabled or the user is told while a send is in flight (a dropped click is silent)", async () => {
+  it("Send is disabled or the user is told while a send is in flight (a dropped click is silent)", async () => {
     const r = rig(snapshot([comment(1)]));
     await withOpenRail(r);
     r.client.sendBatch.mockImplementationOnce(() => new Promise(() => {}));
@@ -416,7 +416,7 @@ describe("send wiring through the real rail", () => {
   });
 
   // QA-G3 advisory: the results line is never cleared, so after "2 sent" the user reopens a comment and the old line remains.
-  it.fails("BUG: the results line from an earlier send does not linger after the comments it described changed state", async () => {
+  it("the results line from an earlier send does not linger after the comments it described changed state", async () => {
     const r = rig(snapshot([comment(1), comment(2)]));
     await withOpenRail(r);
     click(r.q(".comments-rail-send")); await flush();
@@ -430,7 +430,7 @@ describe("send wiring through the real rail", () => {
 // ------------------------------------------------------------------------------------------------------------------
 describe("focus and confirm lifetimes (static review #3, #8)", () => {
   // BUG (a11y): toggling a row checkbox with the keyboard re-renders the list and moves focus to the row <li>.
-  it.fails("BUG: a keyboard user's checkbox keeps focus after toggling it", async () => {
+  it("a keyboard user's checkbox keeps focus after toggling it", async () => {
     const r = rig(snapshot([comment(1), comment(2)]));
     await withOpenRail(r);
     const box = r.qa(".comments-rail-select")[1] as HTMLInputElement;
@@ -455,7 +455,7 @@ describe("focus and confirm lifetimes (static review #3, #8)", () => {
   });
 
   // BUG (static review #3): the inline confirm is keyed by id+action only, so it outlives the state that justified it.
-  it.fails("BUG: a delete confirmation is dismissed when the comment turns pending (delete is no longer offered)", async () => {
+  it("a delete confirmation is dismissed when the comment turns pending (delete is no longer offered)", async () => {
     const r = rig(snapshot([comment(1, { version: 1 })]));
     await withOpenRail(r);
     click(r.q('[data-action="delete"]'));
@@ -467,7 +467,7 @@ describe("focus and confirm lifetimes (static review #3, #8)", () => {
   });
 
   // BUG (static review #3): expectedVersion is read from the current snapshot at confirm time, not from the row the user saw.
-  it.fails("BUG: confirming Delete after the comment changed elsewhere does not delete the NEW content at its new version", async () => {
+  it("confirming Delete after the comment changed elsewhere does not delete the NEW content at its new version", async () => {
     const r = rig(snapshot([comment(1, { version: 1, text: "old text" })]));
     await withOpenRail(r);
     click(r.q('[data-action="delete"]'));
@@ -494,7 +494,7 @@ describe("focus and confirm lifetimes (static review #3, #8)", () => {
 // ------------------------------------------------------------------------------------------------------------------
 describe("anchor bookkeeping (static review #8)", () => {
   // BUG: the signature has no comment ids, so replacing a comment by another with an identical anchor in one change keeps a0 -> old id.
-  it.fails("BUG: a comment that replaces another with an identical anchor in one change gets its own pin", async () => {
+  it("a comment that replaces another with an identical anchor in one change gets its own pin", async () => {
     const a = comment(1);
     const c = comment(2, { anchor: a.anchor });
     const r = rig(snapshot([a]));
@@ -512,7 +512,7 @@ describe("anchor bookkeeping (static review #8)", () => {
   });
 
   // BUG: `busy` is set when the set is sent and only cleared by a result; a guest that never answers dims the layer for ever.
-  it.fails("BUG: pins do not stay dimmed (aria-busy) for ever when the guest never answers", async () => {
+  it("pins do not stay dimmed (aria-busy) for ever when the guest never answers", async () => {
     vi.useFakeTimers();
     const r = rig(snapshot([comment(1)]));
     await withOpenRail(r);
@@ -527,7 +527,7 @@ describe("anchor bookkeeping (static review #8)", () => {
 // ------------------------------------------------------------------------------------------------------------------
 describe("provenance and the 200 cap (static review #1, #8)", () => {
   // BUG (advisory): a foreign (copied-in) comment is drawn and named exactly like one of the user's own.
-  it.fails("BUG: a foreign comment's pin is distinguishable on the canvas and in its accessible name", async () => {
+  it("a foreign comment's pin is distinguishable on the canvas and in its accessible name", async () => {
     const r = rig(snapshot([comment(1, { provenance: "foreign" })]));
     await withOpenRail(r);
     r.results(1, [["a0", "selector", true, BOX]]);
@@ -537,14 +537,16 @@ describe("provenance and the 200 cap (static review #1, #8)", () => {
     expect(distinguished).toBe(true);
   });
 
-  it("Adopt all is one click, adopts every foreign comment (in chunks of 20) with no confirm (design A2); the adopted comments become sendable only after the list refreshes", async () => {
+  it("Adopt all asks first (adopted comments become sendable), then adopts every foreign comment in chunks of 20", async () => {
     const cs = Array.from({ length: 45 }, (_, i) => comment(i + 1, { provenance: "foreign" }));
     const r = rig(snapshot(cs));
     await withOpenRail(r);
     expect(r.qa(".comments-rail-select")).toHaveLength(0);
     click(r.q(".comments-rail-adopt-all")); await flush();
+    expect(r.client.adopt).not.toHaveBeenCalled();
+    expect(r.q(".comments-rail-foreign").textContent).toMatch(/Adopt 45 comments\?/);
+    click(r.q(".comments-rail-adopt-yes")); await flush();
     expect(r.client.adopt.mock.calls.map((c: any) => c[0].ids.length)).toEqual([20, 20, 5]);
-    expect(r.qa(".comments-rail-confirm")).toHaveLength(0);
   });
 
   it("at 200 comments Pin is withdrawn", async () => {
@@ -555,7 +557,7 @@ describe("provenance and the 200 cap (static review #1, #8)", () => {
   });
 
   // BUG (advisory UX): nothing tells the user WHY Pin vanished at the cap.
-  it.fails("BUG: at the 200-comment cap the rail explains why Pin is unavailable", async () => {
+  it("at the 200-comment cap the rail explains why Pin is unavailable", async () => {
     const cs = Array.from({ length: 200 }, (_, i) => comment(i + 1));
     const r = rig(snapshot(cs));
     await withOpenRail(r);
@@ -574,7 +576,7 @@ describe("notices (G4)", () => {
   });
 
   // BUG (advisory, G4 notices): all actions silently vanish when the plugin reports read-only without a notice string.
-  it.fails("BUG: read-only without a plugin notice still tells the user why nothing can be changed", async () => {
+  it("read-only without a plugin notice still tells the user why nothing can be changed", async () => {
     const r = rig(snapshot([comment(1)], { health: "read-only", notice: null }));
     await withOpenRail(r);
     expect((r.q(".comments-rail-notice").textContent ?? "").length).toBeGreaterThan(0);
@@ -587,9 +589,9 @@ describe("notices (G4)", () => {
     expect(r.availability.at(-1)).toMatchObject({ pin: true });
   });
 
-  it("the guest never gets a reportAnchors call: Geode does not heal anchors in the plugin yet (G4 optional item missing)", async () => {
+  it("reportAnchors is not called before the answers were stable for 2 s (covered with timers in pins-g3-fixes)", async () => {
     const r = rig(snapshot([comment(1)]));
-    r.client.reportAnchors = vi.fn();
+    r.client.reportAnchors = vi.fn(async () => ok({ applied: 1 }));
     await withOpenRail(r);
     r.results(1, [["a0", "text", true, BOX]]);
     r.runFrames();
@@ -646,7 +648,7 @@ describe("teardown: no timers, listeners or late callbacks survive dispose", () 
 // ------------------------------------------------------------------------------------------------------------------
 describe("pin overlay focus on reorder (static review #2), jsdom level", () => {
   // BUG (static review #2): insertBefore of the focused node blurs it in Chromium too (confirmed in the e2e spec).
-  it.fails("BUG: a focused badge keeps document focus when a render changes the reading order", () => {
+  it("a focused badge keeps document focus when a render changes the reading order", () => {
     const dom = new JSDOM("<!doctype html><body></body>");
     const doc = dom.window.document;
     const layer = new PinOverlay(doc, { onActivate: () => {}, onEscape: () => {} });

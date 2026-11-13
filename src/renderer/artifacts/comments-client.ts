@@ -53,6 +53,8 @@ export interface ArtifactCommentsClient {
   readonly capabilities: ArtifactCommentsCapabilities;
   /** The last good snapshot (never an older revision of the same store), or null before the first successful list. */
   readonly cached: ArtifactCommentsSnapshot | null;
+  /** True while a provider subscription is live. False after `onDidChange` when the per-artifact subscription cap was hit or subscribe failed: the view then gets no change events and must say so. */
+  readonly liveUpdates: boolean;
   list(): Promise<ArtifactCommentsResult<ArtifactCommentsSnapshot>>;
   get(id: string): Promise<ArtifactCommentsResult<ArtifactCommentDetail>>;
   save(input: SavePinnedCommentInput): Promise<ArtifactCommentsResult<{ readonly comment: ArtifactComment; readonly created: boolean }>>;
@@ -121,6 +123,8 @@ class CommentsClient implements ArtifactCommentsClient {
   }
 
   get cached(): ArtifactCommentsSnapshot | null { return this.snapshot; }
+
+  get liveUpdates(): boolean { return this.subscription !== null; }
 
   list(): Promise<ArtifactCommentsResult<ArtifactCommentsSnapshot>> {
     return this.invoke("list", this.deps.callTimeoutMs, (ctx) => this.deps.provider.list(this.deps.target, ctx), rebuildSnapshot).then((result) => {

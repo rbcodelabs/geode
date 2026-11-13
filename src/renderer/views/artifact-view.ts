@@ -123,7 +123,16 @@ export class ArtifactView implements View, ReloadableView {
   private commentsClient: (ArtifactCommentsClient & { dispose(): void }) | null = null;
   private commentsRoute = "";
   private static nextRailId = 0;
-  private readonly onWindowFocus = (): void => { void this.pins?.refresh(); };
+  private lastFocusRefresh = 0;
+  /** Re-lists when the window regains focus, for the visible, active view only (a background tab does nothing), at most once a second. */
+  private readonly onWindowFocus = (): void => {
+    if (document.visibilityState === "hidden" || this.containerEl.getClientRects().length === 0) return;
+    const now = Date.now();
+    if (now - this.lastFocusRefresh < 1000) return;
+    this.lastFocusRefresh = now;
+    void this.pins?.refresh();
+  };
+  private readonly onStageScroll = (): void => this.layoutPins();
   private unsubscribeActiveLeaf: (() => void) | undefined;
 
   constructor(private readonly app: App, private readonly leaf: WorkspaceLeaf) {
@@ -210,7 +219,7 @@ export class ArtifactView implements View, ReloadableView {
       onFilter: (filter) => this.pins?.setFilter(filter),
       onClearCluster: () => this.pins?.clearCluster(),
       onToggleSelect: (id, selected) => this.pins?.toggleSelect(id, selected),
-      onAction: (id, action) => { void this.pins?.runAction(id, action); },
+      onAction: (id, action, version) => { void this.pins?.runAction(id, action, version); },
       onSendSelected: () => { void this.pins?.sendSelected(); },
       onResolveSent: () => { void this.pins?.resolveSent(); },
       onAdoptAll: () => { void this.pins?.adoptAll(); },
@@ -468,13 +477,15 @@ export class ArtifactView implements View, ReloadableView {
     window.addEventListener("resize", this.onWindowResize);
     // Re-list when the window or this tab becomes active again (changes made while closed or in the background).
     window.addEventListener("focus", this.onWindowFocus);
+    // The stage itself scrolls (a device preset larger than the pane): the pin layer follows at once, not at the next guest report.
+    this.stageEl.addEventListener("scroll", this.onStageScroll, { passive: true });
     this.unsubscribeActiveLeaf = this.app.workspace.on("active-leaf-change", (leaf: unknown) => { if (leaf === this.leaf) void this.pins?.refresh(); }) as unknown as (() => void) | undefined;
     this.bridge = bridge;
     this.pick = controller;
     this.popover = popover;
     // dom-ready fires for every document the guest starts; an open popover then goes stale.
     frame.addEventListener("dom-ready", () => controller.pageReloaded());
-    this.unsubscribeFeedback = registry.onDidChange(() => this.updatePickAvailability(true));
+    this.unsubscribeFeedback = registry.onDidChange(() => this.updatePickAvailability());
     this.updatePickAvailability();
   }
 
@@ -483,6 +494,7 @@ export class ArtifactView implements View, ReloadableView {
     this.unsubscribeFeedback = undefined;
     this.teardownComments();
     window.removeEventListener("focus", this.onWindowFocus);
+    this.stageEl.removeEventListener("scroll", this.onStageScroll);
     try { this.unsubscribeActiveLeaf?.(); } catch { /* the workspace is going away */ }
     this.unsubscribeActiveLeaf = undefined;
     this.pinLayer = null;
@@ -525,13 +537,13 @@ export class ArtifactView implements View, ReloadableView {
   }
 
   /** Visible iff static + inspector + a handler passes canHandle + the guest is loaded without error. */
-  private updatePickAvailability(registryChanged = false): void {
+  private updatePickAvailability(): void {
     const target = this.pickTarget;
     const available = this.pickAvailableNow();
     if (target) this.handlerName = this.app.artifactFeedbackService.describeHandler(target) ?? this.handlerName;
     this.pickButton.hidden = !available;
     this.pick?.setAvailable(available);
-    this.syncComments(available, registryChanged);
+    this.syncComments(available);
   }
 
   private focusPick(where: FocusTarget): void {
@@ -561,15 +573,30 @@ export class ArtifactView implements View, ReloadableView {
 
   /**
    * Keeps the comments client and coordinator in step with the routed handler: created when it is v2, dropped when it
-   * is not (Pin and the rail are hidden for a v1 handler). A registry change with a v2 route always rebuilds, so a
-   * handler that was reloaded never leaves a dead client behind; a page load does not, so pins stay in place.
+   * is not (Pin and the rail are hidden for a v1 handler). A registry change that does not touch THIS target's routing
+   * does nothing. When the routed handler was reloaded (a new registration), only the client is replaced: the
+   * coordinator keeps the rail, filter, selection and any pending Retry (same requestId), so a timed-out send is never
+   * re-sent under a fresh id. A page load does not rebuild anything, so pins stay in place.
    */
-  private syncComments(available: boolean, registryChanged = false): void {
+  private syncComments(available: boolean): void {
     const target = this.pickTarget;
     const service = this.app.artifactFeedbackService;
     const route = available && target ? service.describeRoute(target) : null;
-    const key = route && route.contractVersion === 2 ? route.displayName : "";
-    if (key === this.commentsRoute && !(registryChanged && key !== "")) return;
+    const key = route && route.contractVersion === 2 ? `${route.displayName}#${target ? service.routeInstance(target) : ""}` : "";
+    if (key === this.commentsRoute) return;
+    // The same plugin registered again (a reload): keep the coordinator and replace only its client.
+    const rebuildClientOnly = key !== "" && this.pins !== null && this.commentsRoute !== "" && key.split("#")[0] === this.commentsRoute.split("#")[0];
+    if (rebuildClientOnly && target && this.pins) {
+      const client = service.commentsFor(target);
+      if (client) {
+        const old = this.commentsClient;
+        this.commentsClient = client;
+        this.commentsRoute = key;
+        old?.dispose();
+        void this.pins.clientChanged();
+        return;
+      }
+    }
     this.teardownComments();
     this.commentsRoute = key;
     if (!key || !target || !this.bridge) { this.pick?.setPinAvailable(false); return; }
@@ -595,10 +622,13 @@ export class ArtifactView implements View, ReloadableView {
         focusRail: (focus) => { if (focus.type === "heading") rail.focusHeading(); else rail.focusRow(focus.id); },
         geometry: () => this.pinGeometry(),
         railOpenChanged: (open) => {
+          // Closing by any route (button, Esc, palette command) while focus is inside the rail returns it to the toggle.
+          const hadFocus = rail.el.contains(document.activeElement);
           rail.el.hidden = !open;
           this.commentsButton.setAttribute("aria-expanded", String(open));
           this.commentsButton.classList.toggle("is-active", open);
           this.layoutPins();
+          if (!open && hadFocus) this.focusCommentsToggle();
         },
       },
     });

@@ -299,7 +299,7 @@ describe("rail-model reducer: adversarial table", () => {
   });
 
   // BUG (advisory, a11y): the 60-unit slice can cut a surrogate pair; the accessible name then ends in a lone surrogate.
-  it.fails("BUG: pinAccessibleName never ends in a lone surrogate when the 60th unit splits an emoji", () => {
+  it("pinAccessibleName never ends in a lone surrogate when the 60th unit splits an emoji", () => {
     const c = comment(1, { text: "a".repeat(59) + "\u{1F600}tail" });
     const name = pinAccessibleName(c, "exact");
     const cut = name.slice(name.indexOf(": ") + 2);

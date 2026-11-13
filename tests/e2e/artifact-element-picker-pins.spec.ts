@@ -177,6 +177,13 @@ test.describe("pinned comments (phase 2b-i G3)", () => {
       // with the right sidebar open the pane is well under the 560 px breakpoint
       await w.evaluate(() => { const side = (window as any).app.workspace.rightSidebar; if (side.collapsed) side.toggle(); });
       await expect.poll(() => w.locator(".artifact-view").evaluate((e) => e.clientWidth), { timeout: 15_000 }).toBeLessThan(540);
+      // the sidebar animates open: measure only once the pane width has been identical for 600 ms
+      let last = -1; let since = Date.now();
+      await expect.poll(async () => {
+        const width = await w.locator(".artifact-view").evaluate((e) => e.getBoundingClientRect().width);
+        if (width !== last) { last = width; since = Date.now(); }
+        return Date.now() - since >= 600;
+      }, { timeout: 15_000, intervals: [100] }).toBe(true);
       await check();
       await windowShot(s, "pins-narrow");
       await commentsToggle(w).click();
@@ -308,6 +315,7 @@ test.describe("pinned comments (phase 2b-i G3)", () => {
       expect(await w.evaluate(() => (window as any).__pwned)).toBeUndefined();
       expect(await rail(w).locator("img").count()).toBe(0);
       await rail(w).locator(".comments-rail-adopt-all").click();
+      await rail(w).locator(".comments-rail-adopt-yes").click(); // asks first
       await expect(rail(w).locator(".comments-rail-foreign")).toBeHidden();
       await expect(rail(w).locator(".comments-rail-select")).toHaveCount(1);
       // an external change (the agent edited the file) while subscribed

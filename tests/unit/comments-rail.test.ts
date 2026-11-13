@@ -93,7 +93,7 @@ describe("CommentsRail rows", () => {
     const names = qa<HTMLButtonElement>(".comments-rail-row .comments-rail-action").map((b) => b.getAttribute("aria-label"));
     expect(names).toEqual(["Jump to comment 7", "Send comment 7", "Resolve comment 7", "Dismiss comment 7", "Delete comment 7"]);
     qa<HTMLButtonElement>(".comments-rail-action")[2]!.click();
-    expect(cb.onAction).toHaveBeenCalledWith(idOf(7), "resolve");
+    expect(cb.onAction).toHaveBeenCalledWith(idOf(7), "resolve", 1);
   });
 
   it("delete needs an inline confirmation", () => {
@@ -107,7 +107,7 @@ describe("CommentsRail rows", () => {
     expect(cb.onAction).not.toHaveBeenCalled();
     qa<HTMLButtonElement>(".comments-rail-action").find((b) => b.dataset.action === "delete")!.click();
     q<HTMLButtonElement>(".comments-rail-confirm-yes").click();
-    expect(cb.onAction).toHaveBeenCalledWith(idOf(1), "delete");
+    expect(cb.onAction).toHaveBeenCalledWith(idOf(1), "delete", 1);
   });
 
   it("unqueue confirms with the size of the queued batch", () => {
@@ -116,7 +116,7 @@ describe("CommentsRail rows", () => {
     qa<HTMLButtonElement>(".comments-rail-action").find((b) => b.dataset.action === "unqueue")!.click();
     expect(q(".comments-rail-confirm").textContent).toMatch(/Cancels the queued send of 2 comments/);
     q<HTMLButtonElement>(".comments-rail-confirm-yes").click();
-    expect(cb.onAction).toHaveBeenCalledWith(idOf(1), "unqueue");
+    expect(cb.onAction).toHaveBeenCalledWith(idOf(1), "unqueue", 1);
   });
 
   it("selection checkbox has the documented label and reports changes", () => {
@@ -171,7 +171,10 @@ describe("CommentsRail send bar, banners and cluster chip", () => {
     show({ comments: [comment(1, { provenance: "foreign" })] });
     expect(q(".comments-rail-foreign").hidden).toBe(false);
     q<HTMLButtonElement>(".comments-rail-adopt-all").click();
-    expect(cb.onAdoptAll).toHaveBeenCalled();
+    expect(cb.onAdoptAll).not.toHaveBeenCalled(); // asks first: adopted comments can be sent to the agent
+    expect(q(".comments-rail-foreign").textContent).toMatch(/Adopt 1 comment\?/);
+    q<HTMLButtonElement>(".comments-rail-adopt-yes").click();
+    expect(cb.onAdoptAll).toHaveBeenCalledTimes(1);
   });
 
   it("retry button shows for a failed send", () => {

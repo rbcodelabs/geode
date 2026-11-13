@@ -11,7 +11,8 @@ export interface RailCallbacks {
   onFilter(filter: RailFilter): void;
   onClearCluster(): void;
   onToggleSelect(id: string, selected: boolean): void;
-  onAction(id: string, action: RowAction): void;
+  /** `version` is the comment version of the row as rendered (and confirmed): the action is only valid for it. */
+  onAction(id: string, action: RowAction, version: number): void;
   onSendSelected(): void;
   onResolveSent(): void;
   onAdoptAll(): void;
@@ -56,7 +57,9 @@ export class CommentsRail {
   private listSignature = "";
   private rowIds: string[] = [];
   private activeRow: string | null = null;
-  private confirming: { id: string; action: RowAction } | null = null;
+  private confirming: { id: string; action: RowAction; version: number } | null = null;
+  private adoptConfirm = false;
+  private foreignActions: HTMLElement | null = null;
 
   constructor(private readonly doc: Document, private readonly callbacks: RailCallbacks) {
     const make = <K extends keyof HTMLElementTagNameMap>(tag: K, className?: string): HTMLElementTagNameMap[K] => {
@@ -87,8 +90,15 @@ export class CommentsRail {
     this.foreign = make("div", "comments-rail-foreign");
     this.foreignText = make("span");
     const adopt = button("comments-rail-adopt-all", "Adopt all");
-    adopt.addEventListener("click", () => this.callbacks.onAdoptAll());
-    this.foreign.append(this.foreignText, adopt);
+    adopt.addEventListener("click", () => { this.adoptConfirm = true; this.renderForeign(); this.foreign.querySelector<HTMLButtonElement>(".comments-rail-adopt-no")?.focus(); });
+    // Adopted comments become sendable to the agent, so Adopt all asks first (the foreign text was read as text only).
+    const yes = button("comments-rail-adopt-yes", "Adopt");
+    yes.addEventListener("click", () => { this.adoptConfirm = false; this.callbacks.onAdoptAll(); this.renderForeign(); });
+    const no = button("comments-rail-adopt-no", "Keep as is");
+    no.addEventListener("click", () => { this.adoptConfirm = false; this.renderForeign(); this.foreign.querySelector<HTMLButtonElement>(".comments-rail-adopt-all")?.focus(); });
+    this.foreignActions = make("span", "comments-rail-foreign-actions");
+    this.foreignActions.append(adopt, yes, no);
+    this.foreign.append(this.foreignText, this.foreignActions);
     this.foreign.hidden = true;
 
     const filters = make("div", "comments-rail-filters");
@@ -170,7 +180,8 @@ export class CommentsRail {
     this.notice.hidden = view.notice === null || view.notice === "";
     this.notice.textContent = view.notice ?? "";
     this.foreign.hidden = view.foreignBanner === null;
-    this.foreignText.textContent = view.foreignBanner?.text ?? "";
+    if (view.foreignBanner === null) this.adoptConfirm = false;
+    this.renderForeign();
     for (const [filter, b] of this.filterButtons) {
       b.setAttribute("aria-pressed", String(view.filter === filter));
       b.textContent = `${FILTER_LABEL[filter]} ${view.filterCounts[filter]}`;
@@ -190,8 +201,25 @@ export class CommentsRail {
 
     const signature = `${view.filter}|${view.clusterChip ?? ""}`;
     if (signature !== this.listSignature) { this.listSignature = signature; this.shown = RAIL_CHUNK; }
-    if (this.confirming && !view.rows.some((r) => r.id === this.confirming!.id)) this.confirming = null;
+    // A confirmation belongs to the row state the user saw: it is dropped when the row is gone, no longer offers the
+    // action, or was rewritten (a different version).
+    const armed = this.confirming;
+    if (armed) {
+      const row = view.rows.find((r) => r.id === armed.id);
+      if (!row || !row.actions.includes(armed.action) || row.version !== armed.version) this.confirming = null;
+    }
     this.renderList(view, previous);
+  }
+
+  private renderForeign(): void {
+    const banner = this.view?.foreignBanner ?? null;
+    this.foreignText.textContent = banner === null ? "" : this.adoptConfirm
+      ? `Adopt ${banner.count} ${banner.count === 1 ? "comment" : "comments"}? Adopted comments can be sent to the agent as your own.`
+      : banner.text;
+    const set = (cls: string, hidden: boolean): void => { const b = this.foreign.querySelector<HTMLElement>(`.${cls}`); if (b) b.hidden = hidden; };
+    set("comments-rail-adopt-all", this.adoptConfirm);
+    set("comments-rail-adopt-yes", !this.adoptConfirm);
+    set("comments-rail-adopt-no", !this.adoptConfirm);
   }
 
   private renderList(view: RailView, _previous: RailView | null): void {
@@ -273,8 +301,8 @@ export class CommentsRail {
         b.textContent = ACTION_TEXT[action];
         b.setAttribute("aria-label", actionName(action, row.ordinal));
         b.addEventListener("click", () => {
-          if (NEEDS_CONFIRM.has(action)) { this.confirming = { id: row.id, action }; if (this.view) this.renderList(this.view, null); this.focusConfirm(row.id); return; }
-          this.callbacks.onAction(row.id, action);
+          if (NEEDS_CONFIRM.has(action)) { this.confirming = { id: row.id, action, version: row.version }; if (this.view) this.renderList(this.view, null); this.focusConfirm(row.id); return; }
+          this.callbacks.onAction(row.id, action, row.version);
         });
         actions.append(b);
       }
@@ -296,7 +324,7 @@ export class CommentsRail {
     yes.type = "button";
     yes.className = "comments-rail-confirm-yes";
     yes.textContent = action === "delete" ? "Delete" : "Cancel send";
-    yes.addEventListener("click", () => { this.confirming = null; this.callbacks.onAction(row.id, action); if (this.view) this.renderList(this.view, null); });
+    yes.addEventListener("click", () => { this.confirming = null; this.callbacks.onAction(row.id, action, row.version); if (this.view) this.renderList(this.view, null); });
     const no = doc.createElement("button");
     no.type = "button";
     no.className = "comments-rail-confirm-no";
@@ -317,20 +345,21 @@ export class CommentsRail {
     return null;
   }
 
-  private captureFocus(): { id: string; action: string | null } | null {
+  private captureFocus(): { id: string; action: string | null; select: boolean } | null {
     const active = this.doc.activeElement as HTMLElement | null;
     if (!active || !this.list.contains(active)) return null;
     const row = active.closest<HTMLElement>("li.comments-rail-row");
     if (!row?.dataset.id) return null;
-    return { id: row.dataset.id, action: active.dataset?.action ?? null };
+    return { id: row.dataset.id, action: active.dataset?.action ?? null, select: active.classList?.contains("comments-rail-select") === true };
   }
 
   /** The same control when it survived; else the next row, else the previous, else the list container. */
-  private restoreFocus(focus: { id: string; action: string | null } | null, before: readonly string[]): void {
+  private restoreFocus(focus: { id: string; action: string | null; select: boolean } | null, before: readonly string[]): void {
     if (!focus) return;
     const same = this.rowEl(focus.id);
     if (same) {
-      const control = focus.action ? same.querySelector<HTMLElement>(`[data-action="${focus.action}"]`) : null;
+      const control = focus.select ? same.querySelector<HTMLElement>(".comments-rail-select")
+        : focus.action ? same.querySelector<HTMLElement>(`[data-action="${focus.action}"]`) : null;
       (control ?? same).focus();
       return;
     }

@@ -46,6 +46,8 @@ interface Entry {
   /** Comments clients created by `commentsFor`; closed (in-flight calls settled as unavailable) when the handler is disposed. */
   readonly clients: Set<ReturnType<typeof createCommentsClient>>;
   live: boolean;
+  /** Registration order number: tells a reloaded handler from the same one. */
+  readonly instance: number;
 }
 
 const PROVIDER_METHODS = ["list", "get", "save", "update", "remove", "adopt", "subscribe", "sendBatch"] as const;
@@ -113,6 +115,7 @@ export class ArtifactFeedbackService implements ArtifactFeedbackRegistry {
   private readonly commentsMinRefreshMs: number;
   private readonly scheduleFrame: (callback: () => void) => () => void;
   /** Live provider subscriptions per artifact root (ARTIFACT_COMMENTS_CAPS.maxSubscribersPerRoot). */
+  private instanceCounter = 0;
   private readonly subscriberCounts = new Map<string, number>();
 
   constructor(options: {
@@ -160,7 +163,7 @@ export class ArtifactFeedbackService implements ArtifactFeedbackRegistry {
     if (this.entries.some((entry) => entry.owner.pluginId === owner.pluginId)) {
       return failure("conflict", `"${owner.pluginId}" already has a live feedback handler; dispose it first.`);
     }
-    const entry: Entry = { owner: { pluginId: owner.pluginId, displayName: owner.displayName }, handler, contractVersion: version as 1 | 2, provider, capabilities, inFlight: new Set(), clients: new Set(), live: true };
+    const entry: Entry = { owner: { pluginId: owner.pluginId, displayName: owner.displayName }, handler, contractVersion: version as 1 | 2, provider, capabilities, inFlight: new Set(), clients: new Set(), live: true, instance: ++this.instanceCounter };
     this.entries.push(entry);
     this.notify();
     return {
@@ -201,6 +204,11 @@ export class ArtifactFeedbackService implements ArtifactFeedbackRegistry {
   describeRoute(target: ArtifactFeedbackTarget): { readonly displayName: string; readonly contractVersion: 1 | 2 } | null {
     const entry = this.resolve(target);
     return entry ? { displayName: entry.owner.displayName, contractVersion: entry.contractVersion } : null;
+  }
+
+  /** Which registration would receive a submission for this target (changes when that handler is reloaded), or null. */
+  routeInstance(target: ArtifactFeedbackTarget): number | null {
+    return this.resolve(target)?.instance ?? null;
   }
 
   /**

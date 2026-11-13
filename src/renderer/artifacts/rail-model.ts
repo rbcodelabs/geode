@@ -35,6 +35,8 @@ export interface RailInput {
 export interface RailRow {
   readonly id: string;
   readonly ordinal: number;
+  /** The comment version this row was rendered from: a confirmed destructive action is only valid for it. */
+  readonly version: number;
   readonly status: ArtifactCommentStatus;
   readonly statusLabel: string;
   readonly label: string;
@@ -136,6 +138,7 @@ export function buildRailView(input: RailInput): RailView {
     rows.push({
       id: c.id,
       ordinal: c.ordinal,
+      version: c.version,
       status: c.status,
       statusLabel: STATUS_LABEL[c.status],
       label: c.label,
@@ -160,7 +163,7 @@ export function buildRailView(input: RailInput): RailView {
     filter,
     filterCounts,
     rows,
-    clusterChip: cluster ? `${cluster.size} ${cluster.size === 1 ? "comment" : "comments"} at this spot` : null,
+    clusterChip: cluster ? `${rows.length} ${rows.length === 1 ? "comment" : "comments"} at this spot` : null,
     emptyText: rows.length === 0
       ? ordered.length === 0 ? "No comments yet. Pick an element and choose Pin to add one." : "No comments match this view."
       : null,
@@ -192,8 +195,23 @@ export function describeBatchReport(report: BatchSendReport): string {
   return parts.length > 0 ? parts.join(", ") : report.message;
 }
 
+/** The first `n` code points of a string (never ends in half a surrogate pair). Page- and file-derived text is cut with this. */
+export function cutByCodePoints(text: string, n: number): string {
+  let out = "";
+  let count = 0;
+  for (const ch of text) {
+    if (count++ >= n) break;
+    out += ch;
+  }
+  return out;
+}
+
 /** The pin's accessible name (3.7): ordinal, status, label, then the first 60 characters of the text. */
-export function pinAccessibleName(c: ArtifactComment, state: ArtifactAnchorState): string {
-  const approximate = state === "approximate" ? ", approximate position" : "";
-  return `Comment ${c.ordinal}, ${c.status}${approximate}, on ${c.label}: ${c.text.slice(0, 60)}`;
+export function pinAccessibleName(c: ArtifactComment, state: ArtifactAnchorState, options: { partlyOutOfView?: boolean } = {}): string {
+  const extra = [
+    c.provenance === "foreign" ? "not adopted, from another install" : "",
+    state === "approximate" ? "approximate position" : "",
+    options.partlyOutOfView ? "partly out of view" : "",
+  ].filter(Boolean).map((e) => `, ${e}`).join("");
+  return `Comment ${c.ordinal}, ${c.status}${extra}, on ${c.label}: ${cutByCodePoints(c.text, 60)}`;
 }

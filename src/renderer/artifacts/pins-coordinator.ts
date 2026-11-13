@@ -90,6 +90,13 @@ const LIVE = new Set(["open", "pending", "sent"]);
 const PAST: Record<string, string> = { resolve: "resolved", dismiss: "dismissed", reopen: "reopened", unqueue: "returned to open" };
 const INTENDED: Record<string, string> = { resolve: "resolved", dismiss: "dismissed", reopen: "open", unqueue: "open" };
 const SUMMARY_DELAY_MS = 1000;
+/** A guest that has not answered a new anchor set by now stops dimming the pins; they show as unconfirmed. */
+const BUSY_TIMEOUT_MS = 5000;
+/** reportAnchors is sent only after the guest's answers have been stable this long (design 1.2). */
+const REPORT_DELAY_MS = 2000;
+const CAP_NOTICE = `This artifact has the maximum of ${ARTIFACT_COMMENTS_CAPS.maxComments} comments, so Pin is unavailable. Delete some to add more.`;
+const READ_ONLY_NOTICE = "Comments are read-only right now. You can read them but not change or send them.";
+const NO_LIVE_NOTICE = "Live updates are paused for this artifact (too many views are open). Reopen the comments or refocus the window to refresh.";
 
 export interface PinsCoordinator {
   readonly pinAvailable: boolean;
@@ -109,13 +116,16 @@ export interface PinsCoordinator {
   clearCluster(): void;
   toggleSelect(id: string, selected: boolean): void;
   activateBadge(badge: PinBadgeTarget): void;
-  runAction(id: string, action: RowAction): Promise<void>;
+  /** `expectedVersion` is the version of the row the user acted on; a changed comment is refused (conflict), never acted on. */
+  runAction(id: string, action: RowAction, expectedVersion?: number): Promise<void>;
   sendSelected(): Promise<void>;
   retryLastSend(): Promise<void>;
   resolveSent(): Promise<void>;
   adoptAll(): Promise<void>;
   pinned(selectionId: string): Promise<void>;
   focusTargetAfterPin(): { readonly type: "badge"; readonly id: string } | { readonly type: "toggle" };
+  /** The routed handler was reloaded: re-subscribe to the new client and list again, keeping the rail state and any pending Retry. */
+  clientChanged(): Promise<void>;
   dispose(): void;
 }
 
@@ -141,6 +151,15 @@ export function createPinsCoordinator(deps: PinsCoordinatorDeps): PinsCoordinato
   let signature: string | null = null;
   let epoch = 0;
   let busy = false;
+  /** The guest did not answer in time: placed pins are drawn as unconfirmed until the next answer. */
+  let unconfirmed = false;
+  let busyTimer: ReturnType<typeof setTimeout> | null = null;
+  let resultsRevision: { storeId: string; revision: number } | null = null;
+  let liveNotice = false;
+  const lastReported = new Map<string, ArtifactAnchorState>();
+  const reportQueue = new Map<string, ArtifactAnchorState>();
+  let reportTimer: ReturnType<typeof setTimeout> | null = null;
+  let reportsSupported = true;
   let assignment: ReadonlyMap<string, string> | null = null;
   let lastBadges: readonly PinBadgeView[] = [];
   let lastPinnedId: string | null = null;
@@ -166,11 +185,22 @@ export function createPinsCoordinator(deps: PinsCoordinatorDeps): PinsCoordinato
       filter,
       clusterIds,
       selected,
-      notice: listError ?? snapshot?.notice ?? null,
+      notice: notices(),
       health: snapshot?.health ?? "ok",
       resultsLine,
       retry: lastSend !== null,
     });
+  }
+
+  /** What the rail says above the list: the plugin's notice, or Geode's own text when the plugin gave none. */
+  function notices(): string | null {
+    const parts: string[] = [];
+    if (listError !== null) parts.push(listError);
+    else if (snapshot?.notice) parts.push(snapshot.notice);
+    else if (snapshot?.health === "read-only") parts.push(READ_ONLY_NOTICE);
+    if (comments().length >= ARTIFACT_COMMENTS_CAPS.maxComments) parts.push(CAP_NOTICE);
+    if (liveNotice) parts.push(NO_LIVE_NOTICE);
+    return parts.length > 0 ? parts.join(" ") : null;
   }
 
   function renderRail(): void {
@@ -185,7 +215,8 @@ export function createPinsCoordinator(deps: PinsCoordinatorDeps): PinsCoordinato
     const geometry = ui.geometry();
     const placed: PlacedPin[] = [];
     const byPinId = new Map<string, ArtifactComment>();
-    if (geometry && !busyUnavailable()) {
+    const edgeIds = new Set<string>();
+    if (geometry) {
       for (const c of comments()) {
         if (c.kind !== "pin" || !showsOnCanvas(c)) continue;
         const p = placements.get(c.id);
@@ -193,7 +224,11 @@ export function createPinsCoordinator(deps: PinsCoordinatorDeps): PinsCoordinato
         const box = guestRectToStage(p.rect, geometry.frame, geometry.stage);
         if (!intersectsStage(box, geometry.stage)) continue;
         const point = badgeAnchorPoint(box, geometry.stage);
-        placed.push({ id: c.id, ordinal: c.ordinal, status: c.status, x: point.x, y: point.y, approximate: p.state === "approximate" });
+        placed.push({ id: c.id, ordinal: c.ordinal, status: c.status, x: point.x, y: point.y, approximate: p.state === "approximate" || unconfirmed || c.provenance === "foreign" });
+        // The element's own anchor lies outside the visible stage: the clamped badge is marked, not passed off as exact.
+        const rawX = box.x + box.width + PIN_BADGE.offsetX;
+        const rawY = box.y + PIN_BADGE.offsetY;
+        if (rawX < 0 || rawX > geometry.stage.width || rawY < 0 || rawY > geometry.stage.height) edgeIds.add(c.id);
         byPinId.set(c.id, c);
       }
     }
@@ -204,11 +239,11 @@ export function createPinsCoordinator(deps: PinsCoordinatorDeps): PinsCoordinato
         return { key: badge.key, kind: "cluster", ids: badge.ids, x: badge.x, y: badge.y, text: String(badge.count), label: `${badge.count} comments here. Activate to list`, status: badge.status, approximate: badge.approximate, z: badge.z };
       }
       const c = byPinId.get(badge.ids[0]!)!;
-      return { key: badge.key, kind: "pin", ids: badge.ids, x: badge.x, y: badge.y, text: String(c.ordinal), label: pinAccessibleName(c, stateOf(c.id)), status: badge.status, approximate: badge.approximate, z: badge.z };
+      const edge = edgeIds.has(c.id);
+      return { key: badge.key, kind: "pin", ids: badge.ids, x: badge.x, y: badge.y, text: String(c.ordinal), label: pinAccessibleName(c, stateOf(c.id), { partlyOutOfView: edge }), status: badge.status, approximate: badge.approximate, foreign: c.provenance === "foreign", edge, z: badge.z };
     });
     ui.renderPins(lastBadges, busy);
   }
-  const busyUnavailable = (): boolean => false;
 
   function scheduleRender(rail = false): void {
     if (disposed) return;
@@ -245,7 +280,7 @@ export function createPinsCoordinator(deps: PinsCoordinatorDeps): PinsCoordinato
       textAnchor: { tag: c.anchor.textAnchor.tag, text: c.anchor.textAnchor.text },
       landmark: c.anchor.landmark,
     }));
-    const next = JSON.stringify(queries.map((q) => [q.route, q.tag, q.selector, q.alternates, q.textAnchor, q.landmark]));
+    const next = JSON.stringify(list.map((c, i) => [c.id, queries[i]!.route, queries[i]!.tag, queries[i]!.selector, queries[i]!.alternates, queries[i]!.textAnchor, queries[i]!.landmark]));
     if (next === (signature ?? "[]")) { signature = next; return; }
     signature = next;
     keyToId.clear();
@@ -258,13 +293,27 @@ export function createPinsCoordinator(deps: PinsCoordinatorDeps): PinsCoordinato
       const id = keyToId.get(key);
       if (id) placements.set(id, { state: "detached", rect: null, visible: false });
     }
-    busy = outcome.sent > 0;
+    startBusy(outcome.sent > 0);
+  }
+
+  function startBusy(on: boolean): void {
+    if (busyTimer !== null) { clearTimeout(busyTimer); busyTimer = null; }
+    busy = on;
+    if (!on) return;
+    busyTimer = setTimeout(() => {
+      busyTimer = null;
+      if (disposed || !busy) return;
+      busy = false;
+      unconfirmed = true;
+      scheduleRender();
+    }, BUSY_TIMEOUT_MS);
+    (busyTimer as { unref?: () => void }).unref?.();
   }
 
   function afterData(): void {
     if (disposed) return;
     if (client() === null) {
-      if (signature !== null && signature !== "[]") { signature = "[]"; keyToId.clear(); idToKey.clear(); placements.clear(); bridge.setAnchors([]); busy = false; }
+      if (signature !== null && signature !== "[]") { signature = "[]"; keyToId.clear(); idToKey.clear(); placements.clear(); bridge.setAnchors([]); startBusy(false); }
       snapshot = null;
     } else syncAnchors();
     updateAvailability();
@@ -277,9 +326,15 @@ export function createPinsCoordinator(deps: PinsCoordinatorDeps): PinsCoordinato
     if (c === null) { afterData(); return false; }
     const result = await c.list();
     if (disposed) return false;
-    if (result.status === "ok") { snapshot = result.value; listError = null; } else listError = result.message;
+    if (result.status === "ok") { snapshot = result.value; listError = null; ageResults(); } else listError = result.message;
     afterData();
     return result.status === "ok";
+  }
+
+  /** The results line describes the comments as they were after that send: a later snapshot makes it stale (a failed send keeps its line while Retry is offered). */
+  function ageResults(): void {
+    if (resultsLine === null || resultsRevision === null || lastSend !== null || snapshot === null) return;
+    if (snapshot.storeId !== resultsRevision.storeId || snapshot.revision > resultsRevision.revision) { resultsLine = null; resultsRevision = null; }
   }
 
   function subscribe(): void {
@@ -288,9 +343,11 @@ export function createPinsCoordinator(deps: PinsCoordinatorDeps): PinsCoordinato
     if (c === null) return;
     unsubscribe = c.onDidChange((result) => {
       if (disposed) return;
-      if (result.status === "ok") { snapshot = result.value; listError = null; } else listError = result.message;
+      if (result.status === "ok") { snapshot = result.value; listError = null; ageResults(); } else listError = result.message;
       afterData();
     });
+    // The client reports (after subscribing) whether the per-artifact subscription cap left this view without live updates.
+    liveNotice = c.liveUpdates === false;
   }
 
   function unsubscribeNow(): void {
@@ -327,8 +384,41 @@ export function createPinsCoordinator(deps: PinsCoordinatorDeps): PinsCoordinato
       noteTransition(id, stateOf(id), state);
       placements.set(id, { state, rect: r.rect, visible: r.visible });
     }
-    busy = false;
+    startBusy(false);
+    unconfirmed = false;
+    queueReports();
     scheduleRender(true);
+  }
+
+  /** Queues state changes (first observation counts only when not exact) and sends them once the answers were stable for 2 s. */
+  function queueReports(): void {
+    if (!reportsSupported || disposed) return;
+    let changed = false;
+    for (const [id, p] of placements) {
+      if (p.state === "unknown") continue;
+      const known = reportQueue.get(id) ?? lastReported.get(id);
+      if (known === p.state) continue;
+      if (known === undefined && p.state === "exact") { lastReported.set(id, "exact"); continue; } // baseline: nothing to heal
+      reportQueue.set(id, p.state);
+      changed = true;
+    }
+    // Repeated identical answers (the guest re-sends them) do not restart the wait; a state that changed again does.
+    if (!changed) return;
+    if (reportTimer !== null) clearTimeout(reportTimer);
+    reportTimer = setTimeout(() => { reportTimer = null; void sendReports(); }, REPORT_DELAY_MS);
+    (reportTimer as { unref?: () => void }).unref?.();
+  }
+
+  async function sendReports(): Promise<void> {
+    const cl = client();
+    if (cl === null || disposed || reportQueue.size === 0 || typeof cl.reportAnchors !== "function") { reportQueue.clear(); return; }
+    const batch = [...reportQueue.entries()].slice(0, ARTIFACT_COMMENTS_CAPS.maxReportAnchors);
+    reportQueue.clear();
+    const result = await cl.reportAnchors(batch.map(([id, state]) => ({ id, state })));
+    if (disposed || !result) return;
+    if (result.status === "ok") { for (const [id, state] of batch) lastReported.set(id, state); return; }
+    // A plugin without reportAnchors answers unavailable: stop asking. Other failures are retried on the next change.
+    if (result.reason === "unavailable") reportsSupported = false;
   }
 
   function onAnchorRects(message: InspectAnchorRectsMessage): void {
@@ -413,7 +503,8 @@ export function createPinsCoordinator(deps: PinsCoordinatorDeps): PinsCoordinato
 
   async function dispatchSend(click: SendClick): Promise<void> {
     const cl = client();
-    if (cl === null || sending) return;
+    if (cl === null) return;
+    if (sending) { ui.announce("A send is already in progress."); return; }
     sending = true;
     try {
       const anchorStates: Record<string, ArtifactAnchorState> = {};
@@ -433,7 +524,9 @@ export function createPinsCoordinator(deps: PinsCoordinatorDeps): PinsCoordinato
     } finally {
       sending = false;
     }
+    resultsRevision = null;
     await list();
+    if (snapshot !== null && resultsLine !== null) resultsRevision = { storeId: snapshot.storeId, revision: snapshot.revision };
   }
 
   function mintClick(ids: readonly string[], resend: boolean): SendClick {
@@ -468,7 +561,7 @@ export function createPinsCoordinator(deps: PinsCoordinatorDeps): PinsCoordinato
     onAnchorsSent(sentEpoch) {
       if (disposed) return;
       epoch = sentEpoch;
-      busy = keyToId.size > 0;
+      startBusy(keyToId.size > 0);
       scheduleRender();
     },
     layoutChanged: () => scheduleRender(),
@@ -482,10 +575,16 @@ export function createPinsCoordinator(deps: PinsCoordinatorDeps): PinsCoordinato
     },
     activateBadge,
 
-    async runAction(id, action) {
+    async runAction(id, action, expectedVersion) {
       const c = byId(id);
       const cl = client();
       if (!c || cl === null || disposed) return;
+      // The user acted on (and confirmed) a rendered row. If that comment changed since, nothing is done to the new content.
+      if (expectedVersion !== undefined && expectedVersion !== c.version && action !== "jump") {
+        ui.announce(`Comment ${c.ordinal} changed elsewhere. The list was refreshed; try again.`);
+        await list();
+        return;
+      }
       switch (action) {
         case "jump": {
           const key = idToKey.get(id);
@@ -563,6 +662,16 @@ export function createPinsCoordinator(deps: PinsCoordinatorDeps): PinsCoordinato
       await list();
     },
 
+    async clientChanged() {
+      if (disposed) return;
+      unsubscribeNow();
+      liveNotice = false;
+      lastReported.clear();
+      if (client() === null) { afterData(); return; }
+      subscribe();
+      await list();
+    },
+
     async pinned(selectionId) {
       lastPinnedId = `cmt_${selectionId.slice(4)}`;
       await list();
@@ -581,6 +690,10 @@ export function createPinsCoordinator(deps: PinsCoordinatorDeps): PinsCoordinato
       cancelFrame = null;
       if (summaryTimer !== null) clearTimeout(summaryTimer);
       summaryTimer = null;
+      if (busyTimer !== null) clearTimeout(busyTimer);
+      busyTimer = null;
+      if (reportTimer !== null) clearTimeout(reportTimer);
+      reportTimer = null;
       if (signature !== null && signature !== "[]") bridge.setAnchors([]);
       disposed = true;
     },

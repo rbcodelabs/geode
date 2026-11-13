@@ -304,7 +304,7 @@ describe("(4) PickController pin state machine, adversarial", () => {
 
   // BUG (advisory, defence in depth): the controller has no catch on the host promise. bridge.pin() never rejects today,
   // but a host.pin that does leaves the popover "pending" for ever (Cancel disabled, Esc consumed) and an unhandled rejection.
-  it.fails("BUG: a rejecting host.pin settles the popover as rejected instead of leaving it pending", async () => {
+  it("a rejecting host.pin settles the popover as rejected instead of leaving it pending", async () => {
     const host: PickControllerHost = {
       setGuestMode: () => {}, focus: () => {}, changed: () => {},
       submit: async () => accepted(),
@@ -374,21 +374,21 @@ describe("Mod+Shift+Enter: Pin in the popover vs the global 'Toggle focus on act
 
   // BUG (static review #6): the window capture listener swallows the combo whenever focus is in the popover, even when
   // Pin is hidden (v1 handler), disabled (empty comment, pending) or accepted. The engineer's note says "everywhere else unchanged".
-  it.fails("BUG: in a v1 popover (no Pin button) Mod+Shift+Enter still reaches the global command", () => {
+  it("in a v1 popover (no Pin button) Mod+Shift+Enter still reaches the global command", () => {
     const r = popoverRig();
     r.popover.render({ ...baseState, pinAvailable: false }, "Design");
     r.press(r.area);
     expect(r.global).toHaveBeenCalledTimes(1);
   });
 
-  it.fails("BUG: with an empty comment (Pin disabled) Mod+Shift+Enter still reaches the global command", () => {
+  it("with an empty comment (Pin disabled) Mod+Shift+Enter still reaches the global command", () => {
     const r = popoverRig();
     r.popover.render({ ...baseState, comment: "" }, "Design");
     r.press(r.area);
     expect(r.global).toHaveBeenCalledTimes(1);
   });
 
-  it.fails("BUG: while a send is pending Mod+Shift+Enter still reaches the global command", () => {
+  it("while a send is pending Mod+Shift+Enter still reaches the global command", () => {
     const r = popoverRig();
     r.popover.render({ ...baseState, submit: "pending", action: "send" }, "Design");
     r.press(r.area);

@@ -127,7 +127,12 @@ export class PickController {
   private begin(action: PickAction, run: (host: PickControllerHost) => Promise<ArtifactFeedbackOutcome>): void {
     const token = ++this.token;
     this.set({ ...this.current, submit: "pending", action, outcome: null });
-    void run(this.host).then((outcome) => {
+    // A host that rejects (it should not) must not leave the popover pending for ever.
+    const settled = Promise.resolve().then(() => run(this.host)).catch((error): ArtifactFeedbackOutcome => {
+      console.warn("[artifact-feedback] a popover action failed", error);
+      return { status: "rejected", reason: "failed", message: "That could not be completed.", source: "handler" };
+    });
+    void settled.then((outcome) => {
       if (this.disposed || token !== this.token || this.current.submit !== "pending") return;
       if (outcome.status === "accepted") {
         this.set({ ...this.current, submit: "accepted", outcome });
