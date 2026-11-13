@@ -26,7 +26,7 @@ Pure planning lives in `src/renderer/link-move.ts` (`assertValidMove`, `collectM
 - `from === to` and moving a folder into itself/a descendant are rejected.
 - Source must exist in the vault index.
 - Target must not exist in the index **or** on disk (`vault.adapter.exists`, so case-insensitive filesystems are covered).
-  A case-only rename (`a.md` -> `A.md`) is therefore refused on a case-insensitive filesystem.
+  A case-only rename (`a.md` -> `A.md`) is allowed: the disk match is the source itself, and only an indexed entry at the target counts as a collision.
 - No ancestor of the target may be a file. Missing ancestor folders are created.
 - If any affected open note (moved or rewritten) is in conflict read-only recovery state, the move is refused.
 - Every rewrite is computed from current note text before the first write. Writes then run as: create parents, one

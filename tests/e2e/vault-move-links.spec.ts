@@ -176,6 +176,12 @@ test("moving a folder through the plugin-facing API rewrites links and nothing e
     expect([...sourcesAfter].sort()).toEqual([
       "Archive/Alpha/Deep/Leaf.md", "Archive/Alpha/Other.md", "Outside/Links.md", "Outside/Plain.md",
     ]);
+
+    // Case-only rename of the same file must not be treated as an overwrite.
+    const caseOnly = await window.evaluate(() => (window as any).app.fileManager.moveWithLinkUpdate("Outside/Plain.md", "Outside/plain.md"));
+    expect(caseOnly).toEqual({ moved: [{ from: "Outside/Plain.md", to: "Outside/plain.md" }], updatedNotes: [] });
+    expect(fs.readdirSync(path.join(vaultDir, "Outside")).sort()).toEqual(["Links.md", "plain.md"]);
+    expect(fs.readFileSync(path.join(vaultDir, "Outside/plain.md"), "utf8")).toBe(FILES["Outside/Plain.md"]);
   } finally {
     await app.close();
     fs.rmSync(vaultDir, { recursive: true, force: true });

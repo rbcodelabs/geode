@@ -5,7 +5,7 @@ import { MarkdownView } from "../../src/renderer/views/markdown-view";
 import { pathName, pathParent, splitExt } from "../../src/renderer/types";
 
 /** Minimal in-memory vault with the surface `App.moveVaultPath` uses. */
-function fakeVault(initial: Record<string, string>, extraDiskOnly: string[] = []) {
+function fakeVault(initial: Record<string, string>, extraDiskOnly: string[] = [], caseInsensitive = false) {
   const files = new Map<string, any>();
   const folders = new Set<string>();
   const content = new Map<string, string>();
@@ -22,7 +22,11 @@ function fakeVault(initial: Record<string, string>, extraDiskOnly: string[] = []
     getFileByPath: (p: string) => files.get(p) ?? null,
     getFiles: () => [...files.values()],
     getMarkdownFiles: () => [...files.values()].filter((f) => f.extension === "md"),
-    adapter: { exists: async (p: string) => files.has(p) || folders.has(p) || extraDiskOnly.includes(p) },
+    adapter: { exists: async (p: string) => {
+      if (!caseInsensitive) return files.has(p) || folders.has(p) || extraDiskOnly.includes(p);
+      const lower = p.toLowerCase();
+      return [...files.keys(), ...folders, ...extraDiskOnly].some((k) => k.toLowerCase() === lower);
+    } },
     createFolder: vi.fn(async (p: string) => { addFolder(p); writes.push(`mkdir ${p}`); }),
     read: async (f: any) => content.get(f.path)!,
     modify: vi.fn(async (f: any, text: string) => { content.set(f.path, text); writes.push(`modify ${f.path}`); }),
@@ -121,6 +125,28 @@ describe("App.moveVaultPath", () => {
     await fakeApp(vault, [{ view, group: { renderTabs } }]).moveVaultPath("Projects/Alpha", "Archive/Alpha");
     expect(setFile).toHaveBeenCalledWith(vault.files.get("Archive/Alpha/Note.md"));
     expect(renderTabs).toHaveBeenCalled();
+  });
+});
+
+describe("App.moveVaultPath case-only renames on a case-insensitive filesystem", () => {
+  it("allows renaming a file to a different case of itself (case-insensitive links still resolve, so none change)", async () => {
+    const vault = fakeVault({ "low.md": "x", "Ref.md": "[[low]] [[low.md]]" }, [], true);
+    const result = await fakeApp(vault).moveVaultPath("low.md", "Low.md");
+    expect(result).toEqual({ moved: [{ from: "low.md", to: "Low.md" }], updatedNotes: [] });
+    expect(vault.files.has("Low.md")).toBe(true);
+    expect(vault.content.get("Ref.md")).toBe("[[low]] [[low.md]]");
+  });
+
+  it("allows a case-only folder rename", async () => {
+    const vault = fakeVault({ "Docs/A.md": "x" }, [], true);
+    await fakeApp(vault).moveVaultPath("Docs", "docs");
+    expect(vault.files.has("docs/A.md")).toBe(true);
+  });
+
+  it("still refuses when a different file already occupies the case-variant target", async () => {
+    const vault = fakeVault({ "low.md": "x", "Low.md": "y" }, [], true);
+    await expect(fakeApp(vault).moveVaultPath("low.md", "Low.md")).rejects.toThrow(/already exists/);
+    expect(vault.writes).toEqual([]);
   });
 });
 

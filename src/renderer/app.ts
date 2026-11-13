@@ -6571,9 +6571,12 @@ export class App {
     assertValidMove(from, to);
     const item = this.vault.getAbstractFileByPath(from);
     if (!item) throw new Error(`Cannot move: "${from}" does not exist in the vault`);
-    if (this.vault.getAbstractFileByPath(to) || await this.vault.adapter.exists(to)) {
-      throw new Error(`Cannot move "${from}": "${to}" already exists`);
-    }
+    // A case-only rename (low.md -> Low.md) hits itself on a case-insensitive
+    // filesystem: the disk match is the source, not a collision. Only an
+    // indexed entry at `to` can be a different file there.
+    const caseOnly = to !== from && to.toLowerCase() === from.toLowerCase();
+    const occupied = caseOnly ? this.vault.getAbstractFileByPath(to) : this.vault.getAbstractFileByPath(to) || await this.vault.adapter.exists(to);
+    if (occupied) throw new Error(`Cannot move "${from}": "${to}" already exists`);
     const missingParents: string[] = [];
     for (let parent = pathParent(to); parent; parent = pathParent(parent)) {
       const existing = this.vault.getAbstractFileByPath(parent);
