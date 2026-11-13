@@ -207,6 +207,7 @@ export function parseMetadata(
     const start = bodyOffset + m.index!;
     const link: LinkCache = {
       link: target,
+      original: m[0],
       displayText: display,
       position: offsetToLoc(lineStarts, start, start + m[0].length),
       isEmbed,
@@ -360,7 +361,7 @@ export function parseMetadata(
 
 /** Internal graph projection; property positions are actual YAML source spans. */
 export function metadataReferences(metadata: CachedMetadata): LinkCache[] {
-  return [...metadata.links, ...metadata.embeds, ...(metadata.frontmatterLinks ?? []).flatMap(link => link.position ? [{ link: link.link, displayText: link.displayText ?? link.link, position: link.position, isEmbed: false }] : [])]
+  return [...metadata.links, ...metadata.embeds, ...(metadata.frontmatterLinks ?? []).flatMap(link => link.position ? [{ link: link.link, original: link.original, displayText: link.displayText ?? link.link, position: link.position, isEmbed: false }] : [])]
     .sort((a, b) => a.position.start.offset - b.position.start.offset);
 }
 export function isExternalReference(target: string): boolean {

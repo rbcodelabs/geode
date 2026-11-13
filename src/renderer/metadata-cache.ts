@@ -10,6 +10,7 @@ import {
   CachedMetadata,
   HeadingCache,
   LinkCache,
+  Loc,
   TFile,
   pathName,
   splitExt,
@@ -58,7 +59,7 @@ export const METADATA_CACHE_SCHEMA_VERSION = METADATA_INDEX_SCHEMA_VERSION;
  * A snapshot with no stamp (written before the stamp existed, or by the
  * desktop utility process) is accepted as the baseline version 1.
  */
-export const METADATA_PARSER_VERSION = 2;
+export const METADATA_PARSER_VERSION = 3;
 
 function toLinkRecord(counts: Map<string, number>): Record<string, number> {
   const record: Record<string, number> = Object.create(null);
@@ -519,6 +520,20 @@ export function findUnlinkedMentions(text: string, names: string[]): UnlinkedMen
   return out;
 }
 
+
+export interface BacklinkReference {
+  link: string;
+  original: string;
+  displayText?: string;
+  position: Loc;
+}
+
+/** Shape of Obsidian's `metadataCache.getBacklinksForFile` result (data is a Map keyed by source path). */
+export interface BacklinksForFile {
+  data: Map<string, BacklinkReference[]>;
+  get(key: string): BacklinkReference[] | undefined;
+  keys(): string[];
+}
 
 /** Lowercased basename + full-name keys a file path contributes to `byBasename`. */
 function nameKeysFor(path: string): { basenameKey: string; nameKey: string } {
@@ -1630,6 +1645,34 @@ export class MetadataCache extends Events {
       }
     }
     return out.sort((a, b) => a.source.basename.localeCompare(b.source.basename));
+  }
+
+  /**
+   * Obsidian-compatible `getBacklinksForFile`: `data` maps each source path to
+   * the individual link/embed references (markdown links included) in that
+   * source that resolve to `file`. Same source set as `getBacklinks`, so a
+   * self-link is reported iff `getBacklinks` reports it.
+   */
+  getBacklinksForFile(file: TFile): BacklinksForFile {
+    const data = new Map<string, BacklinkReference[]>();
+    for (const [src, targets] of this.resolvedLinkMap) {
+      if (!targets.get(file.path)) continue;
+      const meta = this.cache.get(src);
+      if (!meta) continue;
+      const refs: BacklinkReference[] = [];
+      for (const link of metadataReferences(meta)) {
+        if (isExternalReference(link.link)) continue;
+        if (this.getFirstLinkpathDest(link.link, src)?.path !== file.path) continue;
+        refs.push({
+          link: link.link,
+          original: link.original ?? `${link.isEmbed ? "!" : ""}[[${link.link}${link.displayText && link.displayText !== link.link ? `|${link.displayText}` : ""}]]`,
+          displayText: link.displayText,
+          position: link.position,
+        });
+      }
+      if (refs.length) data.set(src, refs);
+    }
+    return { data, get: (key) => data.get(key), keys: () => [...data.keys()] };
   }
 
   /**

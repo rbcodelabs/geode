@@ -87,7 +87,7 @@ import { ChromeCookieImportModal } from "./modals/chrome-cookie-modal";
 import { renderPerformanceTab } from "./settings/performance-tab";
 import { renderExternalRootsTab } from "./settings/external-roots-tab";
 import { renderGithubTab } from "./settings/github-tab";
-import { FileSystemAdapter, IMAGE_EXTENSIONS, TFile, TFolder, isTFile, pathName, type HeadingCache } from "./types";
+import { FileSystemAdapter, IMAGE_EXTENSIONS, TFile, TFolder, isTFile, pathName, pathParent, type HeadingCache } from "./types";
 import { RenderContext } from "./api/bases-values";
 import { registerBasesViewIn, unregisterBasesViewIn, type BasesViewRegistration } from "./api/bases-view";
 import {
@@ -102,7 +102,9 @@ import {
   type BookmarkLink,
   type BookmarksRoot,
 } from "./bookmarks";
-import { renamePathForBasename, rewriteWikilinksForRename } from "./rename";
+import { renamePathForBasename } from "./rename";
+import { assertValidMove, collectMoves, planLinkRewrites } from "./link-move";
+import { metadataReferences } from "../wiki/metadata";
 import { buildConflictPath, formatConflictTimestamp, type ReconcileChange } from "./reconciliation";
 import {
   ActionRegistry,
@@ -177,6 +179,13 @@ import { applyThemeWithFade, normalizeThemeSetting, osPrefersDark, resolveTheme,
  * How a clicked local-file link was resolved. "rejected" means nothing was
  * opened, so a caller with its own fallback may still act on the path.
  */
+export interface VaultMoveResult {
+  /** The requested move (one entry; a folder move is one entry for the folder). */
+  moved: { from: string; to: string }[];
+  /** Vault paths (after the move) of notes whose content was rewritten. */
+  updatedNotes: string[];
+}
+
 export type LocalFileLinkOutcome = "vault" | "external-resource" | "external" | "rejected";
 
 /** Web Viewer settings (Settings → Web Viewer). Matches Obsidian's Web Viewer core plugin surface, plus Geode's Chrome cookie import. */
@@ -6538,40 +6547,91 @@ export class App {
     });
   }
 
-  /** Rename a file and rewrite wikilinks in all notes that reference it. */
+  /**
+   * Rename a file and rewrite links in every note that references it. Thin
+   * wrapper over `moveVaultPath`, the single link-updating move path.
+   */
   async renameFileWithLinkUpdate(file: TFile, newPath: string): Promise<void> {
     this.workspace.iterateLeaves(leaf => {
       const view = leaf.view;
       if (view instanceof MarkdownView && view.file?.path === file.path && view.isConflictReadOnly()) throw new Error("Resolve this note's local recovery before renaming it.");
     });
-    const oldBasename = file.basename;
-    const oldPathNoExt = file.path.replace(/\.md$/, "");
-    const oldPath = file.path;
-    const referencers = this.metadataCache
-      .getBacklinks(file)
-      .map((b) => b.source)
-      .filter((f) => f.path !== file.path);
-    const affectedPaths = new Set([file.path, ...referencers.map(ref => ref.path)]);
+    await this.moveVaultPath(file.path, newPath);
+  }
+
+  /**
+   * Move or rename a vault file OR folder and keep links valid: the one code
+   * path behind the file explorer drag, the rename UIs, `FileManager` and
+   * plugin tools. Everything is validated (paths, source exists, target free
+   * in the index AND on disk, no read-only-conflict notes affected) and every
+   * rewrite is computed before the first write. Returns the requested move and
+   * the vault paths (post-move) of notes whose content changed.
+   */
+  async moveVaultPath(from: string, to: string): Promise<VaultMoveResult> {
+    assertValidMove(from, to);
+    const item = this.vault.getAbstractFileByPath(from);
+    if (!item) throw new Error(`Cannot move: "${from}" does not exist in the vault`);
+    if (this.vault.getAbstractFileByPath(to) || await this.vault.adapter.exists(to)) {
+      throw new Error(`Cannot move "${from}": "${to}" already exists`);
+    }
+    const missingParents: string[] = [];
+    for (let parent = pathParent(to); parent; parent = pathParent(parent)) {
+      const existing = this.vault.getAbstractFileByPath(parent);
+      if (existing && existing.kind === "file") throw new Error(`Cannot move to "${to}": "${parent}" is a file`);
+      if (!existing) missingParents.unshift(parent);
+    }
+
+    const allFiles = this.vault.getFiles().map(file => file.path);
+    const moves = collectMoves(allFiles, from, to, item.kind === "folder");
+    const nameKeys = new Set<string>();
+    for (const oldPath of moves.keys()) {
+      const name = pathName(oldPath).toLowerCase();
+      nameKeys.add(name);
+      nameKeys.add(name.replace(/\.md$/, ""));
+    }
+    const sourceFiles = this.vault.getMarkdownFiles().filter(note => moves.has(note.path) || this.mentionsAnyName(note.path, nameKeys));
+    const sources: { path: string; text: string }[] = [];
+    for (const note of sourceFiles) sources.push({ path: note.path, text: await this.vault.read(note) });
+    const rewrites = planLinkRewrites({ files: allFiles, moves, sources });
+
+    const affected = new Set<string>([...moves.keys(), ...rewrites.keys()]);
+    const leavesToRefresh: { view: MarkdownView; group: { renderTabs(): void }; oldPath: string }[] = [];
     this.workspace.iterateLeaves(leaf => {
       const view = leaf.view;
-      if (view instanceof MarkdownView && view.file && affectedPaths.has(view.file.path) && view.isConflictReadOnly()) throw new Error("Resolve affected notes' local recovery before renaming this file.");
+      if (!(view instanceof MarkdownView) || !view.file || !affected.has(view.file.path)) return;
+      if (view.isConflictReadOnly()) throw new Error("Resolve affected notes' local recovery before renaming this file.");
+      if (moves.has(view.file.path)) leavesToRefresh.push({ view, group: leaf.group, oldPath: view.file.path });
     });
-    await this.vault.rename(file, newPath);
-    const renamed = this.vault.getFileByPath(newPath);
-    if (!renamed) return;
-    const newBasename = renamed.basename;
-    for (const ref of referencers) {
-      const text = await this.vault.read(ref);
-      const updated = rewriteWikilinksForRename(text, oldBasename, oldPathNoExt, oldPath, newBasename);
-      if (updated !== text) await this.vault.modify(ref, updated);
+
+    for (const parent of missingParents) await this.vault.createFolder(parent);
+    await this.vault.rename(item as TFile | TFolder, to);
+    const updatedNotes: string[] = [];
+    for (const [oldPath, text] of rewrites) {
+      const newPath = moves.get(oldPath) ?? oldPath;
+      const note = this.vault.getFileByPath(newPath);
+      if (!note) throw new Error(`Moved "${from}" but could not update links in "${newPath}"`);
+      await this.vault.modify(note, text);
+      updatedNotes.push(newPath);
     }
-    // Refresh any open view of the renamed file
-    const leaf = this.workspace.findLeafForFile(newPath) ?? this.workspace.findLeafForFile(file.path);
-    if (leaf?.view instanceof MarkdownView) {
-      try { await leaf.view.setFile(renamed); }
+    for (const { view, group, oldPath } of leavesToRefresh) {
+      const moved = this.vault.getFileByPath(moves.get(oldPath)!);
+      if (!moved) continue;
+      try { await view.setFile(moved); }
       catch (error) { this.notify(`The file was renamed, but its pane could not refresh: ${error instanceof Error ? error.message : "presentation unavailable"}`); }
-      leaf.group.renderTabs();
+      group.renderTabs();
     }
+    return { moved: [{ from, to }], updatedNotes: updatedNotes.sort() };
+  }
+
+  /** True when a cached link in `path` targets a file whose (lowercased) name is in `nameKeys`; uncached notes count as possible. */
+  private mentionsAnyName(path: string, nameKeys: ReadonlySet<string>): boolean {
+    const meta = this.metadataCache.getCache(path);
+    if (!meta) return true;
+    for (const ref of metadataReferences(meta)) {
+      const last = ref.link.split("#")[0].split("^")[0].split("/").pop()!.trim().toLowerCase();
+      if (nameKeys.has(last) || nameKeys.has(last.replace(/\.md$/, ""))) return true;
+    }
+    return false;
   }
 
   /** One validated rename path shared by inline title, menus, explorer, and commands. */
@@ -6616,7 +6676,7 @@ export class App {
           return;
         }
         try {
-          await this.vault.rename(resource, newPath);
+          await this.moveVaultPath(resource.path, newPath);
         } catch (error) {
           console.error("Failed to rename folder", error);
           this.notify(`Could not rename "${resource.name}"`);
