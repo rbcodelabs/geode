@@ -11,6 +11,7 @@ export class ImageParserTransport implements OwnedImageParseTransport {
   private readonly frame: HTMLIFrameElement;
   private readonly channel: MessageChannel;
   private readonly session: ParserSession;
+  private readonly parseDeadlineMs: number;
   private ready = false;
   private loaded = false;
   private disposed = false;
@@ -21,7 +22,15 @@ export class ImageParserTransport implements OwnedImageParseTransport {
   private closing?: Promise<void>;
   private resolveClose?: () => void;
   private rejectClose?: (error: Error) => void;
-  constructor(doc: Document = document) {
+  /**
+   * `parseDeadlineMs` exists only for an owned proof of the worst-case source ceiling, whose
+   * nested-bracket parse is quadratic inside @lezer/markdown and runs close to the shipped
+   * `PARSE_MS` on slow hosted runners. Product callers keep the default.
+   */
+  constructor(doc: Document = document, options: { parseDeadlineMs?: number } = {}) {
+    const parseDeadlineMs = options.parseDeadlineMs ?? PARSE_MS;
+    if (!Number.isFinite(parseDeadlineMs) || typeof parseDeadlineMs !== "number" || parseDeadlineMs <= 0) throw new Error("Invalid image parser parse budget.");
+    this.parseDeadlineMs = parseDeadlineMs;
     const body = doc.body;
     if (!body) throw new Error("Image parser document body unavailable.");
     const bytes = crypto.getRandomValues(new Uint8Array(32));
@@ -109,7 +118,7 @@ export class ImageParserTransport implements OwnedImageParseTransport {
       this.finish(cancelled());return;
     }
     if (active.phase === "cancelling") return;
-    if (value.kind === "worker-ready" && active.phase === "starting") { active.phase = "parsing";this.arm(PARSE_MS, "parse");return; }
+    if (value.kind === "worker-ready" && active.phase === "starting") { active.phase = "parsing";this.arm(this.parseDeadlineMs, "parse");return; }
     if (value.kind === "parsed" && active.phase === "parsing") {
       try { const packed = validatePackedImages(active.source, value.payload);this.finish(undefined, packed); }
       catch { this.fail(new Error("Image parser protocol invalid result.")); }
