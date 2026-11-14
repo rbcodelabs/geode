@@ -2966,6 +2966,8 @@ export class App {
   private vaultSwitchTarget: string | null = null;
   private reconcileInFlight: Promise<void> | null = null;
   private reconcileGeneration = 0;
+  /** The one refresh queued behind the running scan; see reconcileVault. */
+  private reconcileFollowUp: Promise<void> | null = null;
   private suppressReconcileModify = new Set<string>();
   private externalModifyInFlight = new Map<string, Promise<void>>();
   private webViewerLifecycleEnabled = false;
@@ -4294,7 +4296,20 @@ export class App {
       await this.vaultSwitchInFlight;
       return;
     }
-    if (this.reconcileInFlight) return this.reconcileInFlight;
+    if (this.reconcileInFlight) {
+      // The running scan may have listed the vault before the change this request is about, so folding the request into it
+      // would report a refresh that never saw that change. Queue exactly one more scan behind it; further requests share it.
+      if (!this.reconcileFollowUp) {
+        const generation = this.reconcileGeneration;
+        this.reconcileFollowUp = this.reconcileInFlight.catch(() => undefined).then(() => {
+          this.reconcileFollowUp = null;
+          // The vault session was disposed or replaced while this waited: its refresh is no longer wanted.
+          if (generation !== this.reconcileGeneration) return;
+          return this.reconcileVault(_reason);
+        });
+      }
+      return this.reconcileFollowUp;
+    }
     const generation = this.reconcileGeneration;
     const operation = this.performReconcile(generation);
     const tracked = operation.finally(() => {
