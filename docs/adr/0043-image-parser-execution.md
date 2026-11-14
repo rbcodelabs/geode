@@ -198,6 +198,15 @@ deadlines, not execution guarantees. Timeout invalidates, requests termination
 and reports explicit failure. It does not lower the source ceiling or return an
 empty gallery as success.
 
+Measured 2026-11-13 (CI run 43516813218, 43381115093): the 300000-unit nested-delimiter
+ceiling takes 23 to 28 seconds on hosted macOS and about 8.7 seconds on an Apple
+silicon laptop. The cost is quadratic inside `@lezer/markdown` `LinkEnd`, which
+re-scans every earlier open marker on each closing bracket (0.57 s at 80000 units,
+2.3 s at 160000, 8.3 s at 300000). On slow hosted runners that sits within seconds of
+the thirty-second budget, so the owned packed proof gives only its own transport a
+wider `parseDeadlineMs`; the shipped default is unchanged and pinned by unit tests.
+Lowering the cost needs an upstream or parser-configuration change and is not done here.
+
 Cancellation is independent of parse completion. Exact-owner close, source/session
 invalidation and App cleanup synchronously stop admission and invalidate pending
 intents before cleanup. Cleanup cannot wait for synchronous parsing to return

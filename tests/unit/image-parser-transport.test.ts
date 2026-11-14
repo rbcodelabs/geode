@@ -103,3 +103,19 @@ it("refuses a missing document body before allocating channels or frame handlers
  try { expect(()=>new ImageParserTransport({...b.doc,body:null} as unknown as Document)).toThrow(/body|initialization/i);expect(create).not.toHaveBeenCalled();expect(b.frame.contentWindow.postMessage).not.toHaveBeenCalled(); }
  finally {create.mockRestore();}
 });
+it("accepts a wider parse budget for an explicitly owned long proof while keeping the shipped default",async()=>{
+ vi.useFakeTimers();const timer=vi.spyOn(globalThis,"setTimeout");
+ try {
+  const b=browser(),transport=new ImageParserTransport(b.doc,{parseDeadlineMs:90000}),parsed=transport.parse("");const failed=expect(parsed).rejects.toThrow(/parse deadline/i);
+  await b.ready();await vi.waitFor(()=>expect(b.messages.some(message=>message.kind==="parse")).toBe(true));
+  b.reply({kind:"worker-ready",request:1});await vi.waitFor(()=>expect(timer.mock.calls.some(call=>call[1]===90000)).toBe(true));
+  expect(timer.mock.calls.some(call=>call[1]===30000)).toBe(false);
+  await vi.advanceTimersByTimeAsync(89000);expect(b.frame.removed).toBe(false);
+  await vi.advanceTimersByTimeAsync(1000);expect(b.frame.removed).toBe(true);await failed;expect(vi.getTimerCount()).toBe(0);
+ } finally {timer.mockRestore();vi.useRealTimers();}
+});
+it.each([0,-1,Number.NaN,Number.POSITIVE_INFINITY,"90000" as unknown as number])("rejects an invalid parse budget %s before creating any frame",value=>{
+ const b=browser(),append=b.doc.body.append as ReturnType<typeof vi.fn>;
+ expect(()=>new ImageParserTransport(b.doc,{parseDeadlineMs:value})).toThrow(/parse budget/i);
+ expect(append).not.toHaveBeenCalled();
+});
