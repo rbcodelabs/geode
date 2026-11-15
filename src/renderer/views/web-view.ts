@@ -171,6 +171,15 @@ function sameNavigation(url: string | null, other: string | null): boolean {
   return navigationKey(url) === navigationKey(other);
 }
 
+function createViewSessionId(): string {
+  if (typeof globalThis.crypto?.randomUUID === "function") {
+    return globalThis.crypto.randomUUID();
+  }
+  const bytes = new Uint8Array(16);
+  globalThis.crypto.getRandomValues(bytes);
+  return `wv_${Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("")}`;
+}
+
 /**
  * Web Viewer view (Obsidian core plugin compat, shipped in Obsidian 1.8.3):
  * an in-app browser tab hosting an Electron `<webview>`. `viewType`
@@ -266,10 +275,7 @@ export class WebView implements View, ReloadableView {
     private app: App,
     private leaf: WorkspaceLeaf
   ) {
-    this.viewSessionId =
-      typeof crypto?.randomUUID === "function"
-        ? crypto.randomUUID()
-        : `wv_${Math.random().toString(36).slice(2)}_${Date.now().toString(36)}`;
+    this.viewSessionId = createViewSessionId();
     this.currentUrl = DEFAULT_URL;
     this.containerEl = document.createElement("div");
     this.containerEl.className = "web-view is-fill";
