@@ -503,7 +503,10 @@ export class PickPopover {
     return opt;
   }
 
-  private computeThreadStatus(): { blocked: boolean; status: { text: string; alert: boolean } | null } {
+  private computeThreadStatus(displayName: string): {
+    blocked: boolean;
+    status: { text: string; alert: boolean } | null;
+  } {
     if (!this.webViewerOptions) return { blocked: false, status: null };
     if (this.threadListState.status === "loading") {
       if (this.selectedThreadId === null) {
@@ -521,10 +524,11 @@ export class PickPopover {
       };
     }
     if (this.selectedThreadId === null) {
+      const pluginLabel = displayName.trim() || "the feedback plugin";
       return {
         blocked: true,
         status: {
-          text: "No target threads are available. Open or allow a new thread in Agent Threads, then refresh.",
+          text: `No target threads are available. Open or allow a new thread in ${pluginLabel}, then refresh.`,
           alert: false,
         },
       };
@@ -563,7 +567,7 @@ export class PickPopover {
     this.area.readOnly = pending || accepted;
     this.el.setAttribute("aria-busy", String(pending));
 
-    const threadGate = this.computeThreadStatus();
+    const threadGate = this.computeThreadStatus(displayName);
     if (this.threadSelect && this.threadRefreshBtn) {
       const loadingThreads = this.threadListState.status === "loading";
       const selectEmpty = this.selectedThreadId === null;

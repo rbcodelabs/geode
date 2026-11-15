@@ -232,14 +232,22 @@ describe("PickPopover Web Viewer thread switcher and readiness gates", () => {
     expect(popover.getSelectedThreadId()).toBe(WEB_VIEWER_NEW_THREAD_ID);
     expect(q<HTMLButtonElement>(".pick-popover-send").disabled).toBe(false);
 
-    // When neither a thread nor allowNewThread is available, disables Send with status message
+    // When neither a thread nor allowNewThread is available, disables Send with plugin-neutral status message
+    popover.render(makeBaseState(), "Custom Reviewer");
     popover.setThreadListState({
       status: "ready",
       list: { threads: [], allowNewThread: false },
     });
     expect(popover.getSelectedThreadId()).toBeNull();
     expect(q<HTMLButtonElement>(".pick-popover-send").disabled).toBe(true);
-    expect(q(".pick-popover-status").textContent).toContain("No target threads are available");
+    expect(q(".pick-popover-status").textContent).toBe(
+      "No target threads are available. Open or allow a new thread in Custom Reviewer, then refresh.",
+    );
+
+    popover.render(makeBaseState(), "");
+    expect(q(".pick-popover-status").textContent).toBe(
+      "No target threads are available. Open or allow a new thread in the feedback plugin, then refresh.",
+    );
   });
 
   it("renders hostile XSS strings in origin and thread labels literally via textContent and supports queued outcome", () => {

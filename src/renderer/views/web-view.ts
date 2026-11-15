@@ -255,7 +255,7 @@ export class WebView implements View, ReloadableView {
   private liveRectFor: WebViewerSelectionSnapshot | null = null;
   private pointerInPopover = false;
   private offscreen = false;
-  private handlerName = "Agent Threads";
+  private handlerName = "the feedback plugin";
   private lastPickPhase: WebPickState["phase"] = "off";
   private lastSubmit: WebPickState["submit"] = "idle";
   private lastAcceptedOutcome: WebViewerFeedbackOutcome | null = null;
@@ -882,7 +882,20 @@ export class WebView implements View, ReloadableView {
     const pick = this.pick;
     if (!pick || pick.state.phase === "off" || event.defaultPrevented || event.isComposing) return;
     if (!this.containerEl.isConnected || this.containerEl.getClientRects().length === 0) return;
-    if (isEditableElement(document.activeElement)) return;
+    const active = document.activeElement;
+    const focusInThisPane =
+      active !== null &&
+      (this.containerEl.contains(active) || (this.popover?.el.contains(active) ?? false));
+    const focusInOtherPane =
+      !focusInThisPane &&
+      active !== null &&
+      active !== document.body &&
+      active !== document.documentElement &&
+      active.closest?.(".web-view, .pick-popover") !== null;
+    const ownsFocus =
+      focusInThisPane || (!focusInOtherPane && this.app.workspace?.activeLeaf === this.leaf);
+    if (!ownsFocus) return;
+    if (isEditableElement(active)) return;
     if (event.key === "Escape") {
       if (pick.escape()) {
         event.preventDefault();
@@ -933,6 +946,7 @@ export class WebView implements View, ReloadableView {
     // overlay is cleared here and deliberately NOT in dom-ready, which would
     // otherwise hide the error the instant it was shown.
     const onNavigateSuccess = (e: Event) => {
+      if ((e as unknown as { isMainFrame?: boolean }).isMainFrame === false) return;
       const url = onNavigate(e);
       if (url === null) return;
       this.clearError();
@@ -1128,6 +1142,7 @@ export class WebView implements View, ReloadableView {
       this.reloadCurrent(true);
       return;
     }
+    this.clearCommittedHealthyUrl();
     this.autoRecovered = false;
     this.clearRecoverTimer();
     this.addressInput.value = this.targetUrl;

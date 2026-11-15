@@ -5168,9 +5168,16 @@ export class App {
       id: "artifact.toggle-pick",
       label: "Toggle element picker",
       icon: "mouse-pointer-click",
-      // Offered only while the Pick button is: a static artifact, an attached inspector and a handler.
-      isAvailable: (context) => context.artifact?.canTogglePick() === true,
-      run: (context) => context.artifact!.togglePick("keyboard"),
+      // Offered only while the Pick button is: a static artifact or healthy Web Viewer page with an attached handler.
+      isAvailable: (context) =>
+        context.artifact?.canTogglePick() === true || context.webView?.canTogglePick() === true,
+      run: (context) => {
+        if (context.artifact?.canTogglePick() === true) {
+          context.artifact.togglePick("keyboard");
+        } else if (context.webView?.canTogglePick() === true) {
+          context.webView.togglePick("keyboard");
+        }
+      },
     });
     this.actions.register({
       id: "artifact.toggle-comments",
