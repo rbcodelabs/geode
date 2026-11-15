@@ -137,6 +137,8 @@ import { Keymap } from "./api/keymap";
 import { setIcon } from "./api/icons";
 import { ArtifactFeedbackService, createReadOnlyFeedbackView } from "./artifacts/feedback-registry";
 import type { ArtifactFeedbackRegistry } from "../artifacts/feedback-contract";
+import { WebViewerFeedbackService, createReadOnlyWebViewerFeedbackView } from "./web-viewer/feedback-registry";
+import type { WebViewerFeedbackRegistry } from "../web-viewer/feedback-contract";
 import { collectQuickSwitcherItems, type QuickSwitcherPluginItem, type QuickSwitcherProvider } from "./quick-switcher-providers";
 import { FileManager } from "./file-manager";
 import { measureOperation } from "./perf-instrumentation";
@@ -2886,6 +2888,13 @@ export class App {
   readonly artifactFeedback: ArtifactFeedbackRegistry;
   /** Internal: the full service (register, submit, describeHandler). Plugins are typed against `artifactFeedback` only. */
   readonly artifactFeedbackService: ArtifactFeedbackService;
+  /**
+   * Plugin-facing and read-only (`has`, `onDidChange`, `contractVersions`) view of Web Viewer element feedback (ADR 0056).
+   * Registration goes through `Plugin.registerWebViewerFeedbackHandler`.
+   */
+  readonly webViewerFeedback: WebViewerFeedbackRegistry;
+  /** Internal: the full service (`register`, `listThreads`, `submit`, `describeHandler`). */
+  readonly webViewerFeedbackService: WebViewerFeedbackService;
   workspace!: Workspace;
   statusBar!: StatusBar;
   private ribbonActionsEl!: HTMLElement;
@@ -2985,6 +2994,10 @@ export class App {
     // Tolerant of minimal test hosts without a capabilities table; real hosts always declare `artifacts`.
     this.artifactFeedbackService = new ArtifactFeedbackService({ enabled: host.capabilities?.artifacts !== false });
     this.artifactFeedback = createReadOnlyFeedbackView(this.artifactFeedbackService);
+    this.webViewerFeedbackService = new WebViewerFeedbackService({
+      enabled: host.capabilities?.embeddedWebContent !== false,
+    });
+    this.webViewerFeedback = createReadOnlyWebViewerFeedbackView(this.webViewerFeedbackService);
     this.propertyTypes.onError(() => this.notify("Could not save property types. Check the assignment and try again."));
     this.dailyNotes = new DailyNotesService(host.config);
     this.templates = new TemplatesService(host.config);
