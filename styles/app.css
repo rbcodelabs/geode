@@ -5875,6 +5875,65 @@ body.is-mobile .empty-state-action-hint {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.geode-pick-origin-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: var(--font-ui-smaller);
+}
+.geode-pick-origin {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-family: var(--font-monospace);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.geode-pick-origin-badge {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  border: 1px solid color-mix(in srgb, var(--text-warning) 55%, var(--background-modifier-border));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-warning) 14%, transparent);
+  color: var(--text-warning);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+.geode-pick-origin-badge[hidden] { display: none; }
+.geode-pick-thread-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.geode-pick-thread-label {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+.geode-pick-thread-select {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--background-modifier-border-hover);
+  border-radius: var(--radius-s);
+  background: var(--background-primary);
+  color: var(--text-normal);
+  font: inherit;
+  font-size: var(--font-ui-smaller);
+}
+.geode-pick-thread-select:disabled { opacity: 0.65; }
+.geode-pick-thread-refresh {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+}
+.geode-pick-thread-refresh:disabled { opacity: 0.4; cursor: default; }
 .pick-popover-comment {
   box-sizing: border-box;
   width: 100%;
@@ -5887,6 +5946,8 @@ body.is-mobile .empty-state-action-hint {
   font: inherit;
 }
 .pick-popover-comment[readonly] { opacity: 0.7; }
+.geode-pick-thread-select:focus-visible,
+.geode-pick-thread-refresh:focus-visible,
 .pick-popover-comment:focus-visible,
 .pick-popover-details summary:focus-visible,
 .pick-popover-actions button:focus-visible { outline: 2px solid var(--interactive-accent); outline-offset: 1px; }

@@ -1,5 +1,8 @@
 import type { ArtifactFeedbackOutcome } from "./feedback-registry";
 import type { SelectionSnapshot } from "../views/artifact-inspector-bridge";
+import type { WebViewerFeedbackOutcome } from "../web-viewer/feedback-registry";
+
+export type PickOutcome = ArtifactFeedbackOutcome | WebViewerFeedbackOutcome;
 
 /**
  * The element-picker state machine (ADR 0006 D8). Pure and DOM-free: the view
@@ -22,16 +25,16 @@ export type PickAction = "send" | "pin";
 /** Which element held focus when the user picked; where focus returns when the popover is cancelled. */
 export type FocusOrigin = "toggle" | "guest";
 
-export interface PickState {
+export interface PickState<TSnapshot = SelectionSnapshot, TOutcome extends PickOutcome = ArtifactFeedbackOutcome> {
   readonly phase: PickPhase;
   readonly submit: PopoverSubmitState;
   /** The action the submit state describes (Retry applies to this one). */
   readonly action: PickAction;
   /** The routed handler is v2 and its provider answers list: the popover offers Pin (v1 handlers never do). */
   readonly pinAvailable: boolean;
-  readonly snapshot: SelectionSnapshot | null;
+  readonly snapshot: TSnapshot | null;
   readonly comment: string;
-  readonly outcome: ArtifactFeedbackOutcome | null;
+  readonly outcome: TOutcome | null;
   /** The page reloaded while the popover was open; the selection may describe a different document. */
   readonly stale: boolean;
   /** No handler can receive this comment any more; Send is disabled. */
@@ -40,19 +43,21 @@ export interface PickState {
   readonly elementGone: boolean;
 }
 
-export interface PickControllerHost {
+export interface PickControllerHost<TSnapshot = SelectionSnapshot, TOutcome extends PickOutcome = ArtifactFeedbackOutcome> {
   setGuestMode(mode: "pick" | "off"): void;
-  submit(snapshot: SelectionSnapshot, comment: string): Promise<ArtifactFeedbackOutcome>;
+  submit(snapshot: TSnapshot, comment: string): Promise<TOutcome>;
   /** Phase 2b-i: save the comment as a pin instead of sending it. Absent on a host that cannot pin. */
-  pin?(snapshot: SelectionSnapshot, comment: string): Promise<ArtifactFeedbackOutcome>;
+  pin?(snapshot: TSnapshot, comment: string): Promise<TOutcome>;
+  /** Optional host readiness gate for Send (e.g. target thread selected in Web Viewer). */
+  canSend?(): boolean;
   focus(target: FocusTarget): void;
-  changed(state: PickState): void;
+  changed(state: PickState<TSnapshot, TOutcome>): void;
 }
 
-const IDLE: PickState = { phase: "off", submit: "idle", action: "send", pinAvailable: false, snapshot: null, comment: "", outcome: null, stale: false, handlerGone: false, elementGone: false };
+const IDLE: PickState<never, never> = { phase: "off", submit: "idle", action: "send", pinAvailable: false, snapshot: null, comment: "", outcome: null, stale: false, handlerGone: false, elementGone: false };
 
-export class PickController {
-  private current: PickState = IDLE;
+export class PickController<TSnapshot = SelectionSnapshot, TOutcome extends PickOutcome = ArtifactFeedbackOutcome> {
+  private current: PickState<TSnapshot, TOutcome> = IDLE;
   private origin: FocusOrigin = "toggle";
   /** Bumped whenever a submit's result should no longer be applied. */
   private token = 0;
@@ -62,9 +67,9 @@ export class PickController {
   /** A gone report that arrived after the select but before the popover exists (the screenshot await); applied on open. */
   private pendingGone = false;
 
-  constructor(private readonly host: PickControllerHost) {}
+  constructor(private readonly host: PickControllerHost<TSnapshot, TOutcome>) {}
 
-  get state(): PickState { return this.current; }
+  get state(): PickState<TSnapshot, TOutcome> { return this.current; }
 
   toggle(via: "pointer" | "keyboard"): void {
     if (this.current.phase === "off") this.enter(via);
@@ -80,7 +85,7 @@ export class PickController {
   }
 
   /** A validated selection from the guest. The bridge is already in hold. */
-  selected(snapshot: SelectionSnapshot, origin: FocusOrigin): void {
+  selected(snapshot: TSnapshot, origin: FocusOrigin): void {
     if (this.disposed || this.current.phase !== "pick") return;
     this.origin = origin;
     const draft = this.draft;
@@ -99,7 +104,10 @@ export class PickController {
 
   canSend(): boolean {
     const { phase, submit, comment, handlerGone } = this.current;
-    return phase === "popover" && (submit === "idle" || submit === "rejected") && !handlerGone && !this.current.elementGone && comment.trim().length > 0;
+    if (phase !== "popover" || (submit !== "idle" && submit !== "rejected") || handlerGone || this.current.elementGone || comment.trim().length === 0) {
+      return false;
+    }
+    return this.host.canSend ? this.host.canSend() : true;
   }
 
   canCancel(): boolean {
@@ -124,15 +132,15 @@ export class PickController {
     this.begin("pin", (host) => host.pin!(snapshot, this.current.comment));
   }
 
-  private begin(action: PickAction, run: (host: PickControllerHost) => Promise<ArtifactFeedbackOutcome>): void {
+  private begin(action: PickAction, run: (host: PickControllerHost<TSnapshot, TOutcome>) => Promise<TOutcome>): void {
     const token = ++this.token;
     this.set({ ...this.current, submit: "pending", action, outcome: null });
     // A host that rejects (it should not) must not leave the popover pending for ever.
-    let started: Promise<ArtifactFeedbackOutcome>;
+    let started: Promise<TOutcome>;
     try { started = run(this.host); } catch (error) { started = Promise.reject(error); } // the host call itself stays synchronous
-    const settled = started.catch((error): ArtifactFeedbackOutcome => {
+    const settled = started.catch((error): TOutcome => {
       console.warn("[artifact-feedback] a popover action failed", error);
-      return { status: "rejected", reason: "failed", message: "That could not be completed.", source: "handler" };
+      return { status: "rejected", reason: "failed", message: "That could not be completed.", source: "handler" } as TOutcome;
     });
     void settled.then((outcome) => {
       if (this.disposed || token !== this.token || this.current.submit !== "pending") return;
@@ -247,6 +255,18 @@ export class PickController {
     if (this.current.handlerGone) this.set({ ...this.current, handlerGone: false });
   }
 
+  /** Immediately leave pick/popover mode (e.g. when Web Viewer starts a cross-document navigation or fails load). */
+  forceExit(): void {
+    if (this.disposed || this.current.phase === "off") return;
+    this.exit(null);
+  }
+
+  /** Refresh host-dependent view state (e.g. when async thread list readiness changes). */
+  notifyChanged(): void {
+    if (this.disposed) return;
+    this.host.changed(this.current);
+  }
+
   dispose(): void {
     this.disposed = true;
     this.token++;
@@ -261,7 +281,7 @@ export class PickController {
     if (focus) this.host.focus(focus);
   }
 
-  private set(next: PickState): void {
+  private set(next: PickState<TSnapshot, TOutcome>): void {
     this.current = next;
     this.host.changed(next);
   }
