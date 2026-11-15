@@ -203,8 +203,11 @@ export function createWikiSnapshot(captured: readonly CapturedFile[], captureInf
     const note = notes.get(path);
     if (!note?.metadata) return { status: "unknown", reason: "content-unavailable" };
     const block = selector.startsWith("^");
+    const blockId = block ? selector.slice(1) : "";
     const positions = block
-      ? [...(note.metadata.sections ?? []), ...(note.metadata.listItems ?? [])].filter(i => i.id === selector.slice(1)).map(i => i.position)
+      ? (note.metadata.sections !== undefined || note.metadata.listItems !== undefined
+          ? [...(note.metadata.sections ?? []), ...(note.metadata.listItems ?? [])].filter(i => i.id === blockId).map(i => i.position)
+          : note.metadata.blocks?.[blockId] ? [note.metadata.blocks[blockId].position] : [])
       : note.metadata.headings.filter(h => h.heading === selector).map(h => h.position);
     // A section and item can describe the same block; count unique source positions.
     const unique = [...new Map(positions.map(p => [p.start.offset, p])).values()];

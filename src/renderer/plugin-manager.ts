@@ -130,7 +130,7 @@ interface LoadedPlugin {
   manifest: PluginManifest;
   instance: Plugin;
   code: string;
-  files: PluginFileSet;
+  files?: PluginFileSet;
 }
 
 /**
@@ -358,7 +358,7 @@ export class PluginManager {
         await compileMobilePluginModule(nextCode, id);
       } catch (validationError) {
         replacementManifestSource ??= this.manifestSources.get(id);
-        if (!replacementManifestSource) throw validationError;
+        if (!replacementManifestSource || !previous.files) throw validationError;
         await this.restorePluginFiles(id, replacementManifestSource, previous.files);
         this.manifests.set(id, previous.manifest);
         this.manifestSources.set(id, previous.files.manifest);
@@ -368,7 +368,7 @@ export class PluginManager {
       try {
         await this.enable(id, { persist: false });
       } catch (updateError) {
-        if (!replacementManifestSource) throw updateError;
+        if (!replacementManifestSource || !previous.files) throw updateError;
         await this.restorePluginFiles(id, replacementManifestSource, previous.files);
         delete this.quarantine[id];
         await window.geode.writeConfig(QUARANTINE_KEY, this.quarantine);
@@ -455,11 +455,14 @@ export class PluginManager {
     instance.activateHostGeneration();
     this.loadErrors.delete(id);
     const styles = await measureOperation(`plugin-style-load:${id}`, () => this.injectStyles(id));
+    const retainRollbackFiles = this.isMobileRuntime();
     this.loaded.set(id, {
       manifest,
       instance,
-      code,
-      files: { manifest: this.manifestSources.get(id) ?? JSON.stringify(manifest), main: code, ...(entry === "main.js" ? {} : { entry }), styles },
+      code: retainRollbackFiles ? code : "",
+      files: retainRollbackFiles
+        ? { manifest: this.manifestSources.get(id) ?? JSON.stringify(manifest), main: code, ...(entry === "main.js" ? {} : { entry }), styles }
+        : undefined,
     });
 
     let onloadResult: void | Promise<unknown>;

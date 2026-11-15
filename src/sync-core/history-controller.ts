@@ -313,10 +313,18 @@ function folderSignatures(resources: HistoryLocalResource[]): Map<string, string
 }
 /** Thrown by run() until the user has approved a preview; callers must treat it as "waiting for the user", not a failure to retry. */
 export const PREVIEW_REQUIRED_MESSAGE = 'Preview this exact sync before approving it';
+export const MAX_COMPLETED_OPERATIONS = 2_000;
+
+function trimCompletedOperations(ids: readonly string[]): string[] {
+    const unique = [...new Set(ids)];
+    return unique.length > MAX_COMPLETED_OPERATIONS ? unique.slice(-MAX_COMPLETED_OPERATIONS) : unique;
+}
 
 export class HistoryController {
     private active = false;
+    private lastRunProgressed = false;
     constructor(private readonly options: HistoryControllerOptions) { }
+    didLastRunProgress(): boolean { return this.lastRunProgressed; }
     private get ports() { return this.options.ports; }
     /**
      * Publishes one progress tick. Synchronous by construction: it introduces no
@@ -356,7 +364,10 @@ export class HistoryController {
             throw new Error('Unsupported sync state; reconnect with a fresh preview');
         return state;
     }
-    private save(state: HistoryControllerState, signal: AbortSignal) { return this.checked(signal, () => this.ports.save(state)); }
+    private save(state: HistoryControllerState, signal: AbortSignal) {
+        state.completedOperations = trimCompletedOperations(state.completedOperations);
+        return this.checked(signal, () => this.ports.save(state));
+    }
     async getState(signal: AbortSignal): Promise<HistoryControllerState> { return this.exclusive(signal, () => this.load(signal)); }
     async abandonPending(signal: AbortSignal): Promise<HistoryPreview> {
         return this.exclusive(signal, async () => {
@@ -379,7 +390,20 @@ export class HistoryController {
         beforeExecute?: (plan: Pick<HistoryPreview, 'deletions' | 'uploads' | 'downloads' | 'signature'>) => void | Promise<void>;
     }, signal: AbortSignal): Promise<HistoryPreview> {
         return this.exclusive(signal, async () => {
+            this.lastRunProgressed = false;
             const state = await this.load(signal);
+            const hadPendingBatch = Boolean(state.pendingBatch?.length);
+            const hadPreviewSignature = state.previewSignature !== undefined;
+            const prevApproved = state.approved;
+            const prevCursor = state.cursor;
+            const prevScopeKey = state.scopeKey;
+            const prevRecordCount = Object.keys(state.history.records).length;
+            const prevQuarantinedCount = Object.keys(state.history.quarantined).length;
+            const prevBlobAvailability = JSON.stringify(state.blobAvailability ?? {});
+            const prevRecoveryIssues = JSON.stringify(state.recoveryIssues ?? []);
+            const prevReservedEntities = JSON.stringify(state.reservedEntities);
+            const prevConflicts = JSON.stringify(state.conflicts);
+            const prevBlocked = JSON.stringify(state.blocked);
             if (state.pendingBatch?.length)
                 await this.recover(state, signal);
             const plan = await this.plan(state, signal);
@@ -391,9 +415,24 @@ export class HistoryController {
             state.approved = true;
             delete state.previewSignature;
             // Idle fast path: an approved device whose plan holds no action and no adoption has nothing to execute, and the
-            // re-plan after executing would be this same plan again (same snapshot, same history). Skip the second walk of the vault.
+            // re-plan after executing would be this same plan again (same snapshot, same history). Skip the second walk of the vault,
+            // and skip rewriting device-state when no durable field changed.
             if (wasApproved && !plan.actions.length && !Object.keys(plan.adoptions).length) {
-                await this.save(state, signal);
+                const unchanged = !hadPendingBatch
+                    && !hadPreviewSignature
+                    && state.approved === prevApproved
+                    && state.cursor === prevCursor
+                    && state.scopeKey === prevScopeKey
+                    && Object.keys(state.history.records).length === prevRecordCount
+                    && Object.keys(state.history.quarantined).length === prevQuarantinedCount
+                    && JSON.stringify(state.blobAvailability ?? {}) === prevBlobAvailability
+                    && JSON.stringify(state.recoveryIssues ?? []) === prevRecoveryIssues
+                    && JSON.stringify(state.reservedEntities) === prevReservedEntities
+                    && JSON.stringify(state.conflicts) === prevConflicts
+                    && JSON.stringify(state.blocked) === prevBlocked;
+                if (!unchanged) {
+                    await this.save(state, signal);
+                }
                 return plan.preview;
             }
             const demoted = await this.execute(state, plan, signal);
@@ -676,7 +715,13 @@ export class HistoryController {
             }
             const localChanged = !matches(local, base), remoteChanged = !sameHeads(base.heads, entity.heads) || base.path !== path;
             if (same) {
-                adoptions[id] = remoteBase;
+                const alreadyAdopted = base.namespace === remoteBase.namespace
+                    && base.path === remoteBase.path
+                    && base.kind === remoteBase.kind
+                    && base.present === remoteBase.present
+                    && base.sha256 === remoteBase.sha256
+                    && sameHeads(base.heads, remoteBase.heads);
+                if (!alreadyAdopted) adoptions[id] = remoteBase;
                 continue;
             }
             if (local && local.kind !== r.kind) {
@@ -866,6 +911,8 @@ export class HistoryController {
         state.pendingBatch = operations.map(op => op.id);
         await this.save(state, signal);
         await this.performAll(operations, plan.snapshot, signal);
+        if (operations.some(op => op.phase === 'committed') || Object.keys(plan.adoptions).length > 0)
+            this.lastRunProgressed = true;
         this.finish(state, operations);
         Object.assign(state.baseline, plan.adoptions);
         await this.save(state, signal);
@@ -1143,7 +1190,7 @@ export class HistoryController {
         for (const operation of operations)
             if (operation.phase === 'committed' && operation.baseline)
                 state.baseline[operation.entityId] = operation.baseline;
-        state.completedOperations = [...new Set([...state.completedOperations, ...operations.map(o => o.id)])];
+        state.completedOperations = trimCompletedOperations([...state.completedOperations, ...operations.map(o => o.id)]);
         delete state.pendingBatch;
     }
     private async recover(state: HistoryControllerState, signal: AbortSignal) {
@@ -1160,6 +1207,8 @@ export class HistoryController {
         this.report('planning', 0, 0);
         const snapshot = await this.snapshot(signal, 'planning');
         await this.performAll(operations, snapshot, signal);
+        if (operations.some(op => op.phase === 'committed'))
+            this.lastRunProgressed = true;
         this.finish(state, operations);
         await this.save(state, signal);
         await this.releaseTerminal(operations, signal);

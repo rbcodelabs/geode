@@ -1,5 +1,7 @@
 import { buildLineStarts, offsetToLoc, maskCode, parseMetadata, metadataReferences, isExternalReference } from "../wiki/metadata";
 export { buildLineStarts, offsetToLoc, parseMetadata } from "../wiki/metadata";
+import { FRONTMATTER_BLOCK_RE, METADATA_PARSER_VERSION } from "../wiki/constants";
+export { METADATA_PARSER_VERSION } from "../wiki/constants";
 import { resolveFirstLinkpathDest } from "../wiki/link-resolution";
 import { Events } from "./events";
 import { Vault } from "./vault";
@@ -51,15 +53,6 @@ function yieldToEventLoop(): Promise<void> {
  * each batch's synchronous-parse jank window bigger. */
 export const INDEX_CONCURRENCY = 16;
 export const METADATA_CACHE_SCHEMA_VERSION = METADATA_INDEX_SCHEMA_VERSION;
-/**
- * Stamp on every renderer-written persisted cache. Bump it whenever the output
- * of `parseMetadata` or `extractMentionIndexKeys` changes for the same input
- * (tests/unit/metadata-parser-fingerprint.test.ts fails until you do), so a
- * newer build re-parses instead of trusting rows an older parser produced.
- * A snapshot with no stamp (written before the stamp existed, or by the
- * desktop utility process) is accepted as the baseline version 1.
- */
-export const METADATA_PARSER_VERSION = 3;
 
 function toLinkRecord(counts: Map<string, number>): Record<string, number> {
   const record: Record<string, number> = Object.create(null);
@@ -658,10 +651,12 @@ export class MetadataCache extends Events {
   /** Paths mutated during hydration, retained even after dirty queues flush. */
   private hydrationMutations: Set<string> | null = null;
   private cancelHydration: (() => Promise<void>) | null = null;
-  /** Compact token/punctuation key -> Markdown source paths that contain it. */
+  /** Compact token/punctuation key -> Markdown source paths that contain it (used only on hosts without SQLite mention queries). */
   private mentionSourcesByKey = new Map<string, Set<string>>();
-  /** Authoritative per-file keys, persisted and computed by the utility process. */
+  /** Authoritative per-file keys (used only on hosts without SQLite mention queries). */
   private mentionKeysBySource = new Map<string, string[]>();
+  /** Session-local mention-key overrides for paths flushed/deleted in the renderer when SQLite mention queries are active. */
+  private localMentionOverrides = new Map<string, Set<string> | null>();
   private mentionIndexReady = false;
   private mentionIndexGeneration = 0;
   /** basename/name (lowercase) -> file paths, path-sorted */
@@ -735,6 +730,19 @@ export class MetadataCache extends Events {
     this.scanCapBytes = resolveMetadataScanCapBytes(bytes);
   }
 
+  private getQueryMentionCandidates(): ((keys: string[]) => Promise<string[]>) | undefined {
+    const hostQuery = (this.vault as Vault).host?.metadataIndex?.queryMentionCandidates;
+    if (hostQuery) return (keys) => hostQuery(keys);
+    const api = typeof window === "undefined" ? undefined : window.geode;
+    return api?.queryMetadataMentionCandidates
+      ? (keys) => api.queryMetadataMentionCandidates!(keys)
+      : undefined;
+  }
+
+  private extractBoundedMentionKeys(text: string): string[] {
+    return extractMentionIndexKeys(text);
+  }
+
   private scheduleBackground(task: () => Promise<void>): void {
     this.backgroundTask = this.backgroundTask.then(task).catch((error) => {
       console.error("Background metadata refresh failed", error);
@@ -768,6 +776,7 @@ export class MetadataCache extends Events {
       token = begin.token;
       this.cancelHydration = () => api.cancelMetadataCacheRead!(begin.token);
       if (begin.schemaVersion !== METADATA_CACHE_SCHEMA_VERSION) throw Error("Unsupported cache schema");
+      const usesHostMentionQuery = !!this.getQueryMentionCandidates();
       for (let sequence = 0; !this.disposed; sequence++) {
         const page = await api.readMetadataCachePage(token, sequence);
         if (page.sequence !== sequence || typeof page.done !== "boolean" || !isPersistedMetadataIndexSnapshot(page)) throw Error("Invalid cache page");
@@ -776,7 +785,7 @@ export class MetadataCache extends Events {
           const file = this.vault.getFileByPath(path);
           if (!file || file.extension !== "md" || this.hydrationMutations?.has(path) || entry.mtimeMs !== file.mtime || entry.size !== file.size) continue;
           this.cache.set(path, entry.metadata);
-          if (entry.mentionKeys) this.setMentionSourceKeys(path, entry.mentionKeys);
+          if (!usesHostMentionQuery && entry.mentionKeys) this.setMentionSourceKeys(path, entry.mentionKeys);
         }
         if (page.done) break;
         await yieldToEventLoop();
@@ -839,11 +848,12 @@ export class MetadataCache extends Events {
         for (const file of files) {
           const metadata = this.cache.get(file.path);
           if (!metadata || this.isCacheRowPending(file.path)) continue;
+          const override = this.localMentionOverrides.get(file.path);
           const entry: PersistedMetadataEntry = {
             mtimeMs: file.mtime,
             size: file.size,
             metadata,
-            mentionKeys: this.mentionKeysBySource.get(file.path),
+            mentionKeys: this.mentionKeysBySource.get(file.path) ?? (override ? [...override] : undefined),
           };
           const entryBytes = estimateEntryBytes(entry);
           if (batchCount && (batchCount >= METADATA_SNAPSHOT_CHUNK_MAX_ENTRIES || batchBytes + entryBytes > METADATA_SNAPSHOT_CHUNK_MAX_BYTES)) {
@@ -866,11 +876,12 @@ export class MetadataCache extends Events {
       for (const file of files) {
         const metadata = this.cache.get(file.path);
         if (metadata && !this.isCacheRowPending(file.path)) {
+          const override = this.localMentionOverrides.get(file.path);
           entries[file.path] = {
             mtimeMs: file.mtime,
             size: file.size,
             metadata,
-            mentionKeys: this.mentionKeysBySource.get(file.path),
+            mentionKeys: this.mentionKeysBySource.get(file.path) ?? (override ? [...override] : undefined),
           };
         }
       }
@@ -907,6 +918,12 @@ export class MetadataCache extends Events {
   }
 
   private setMentionSourceKeys(path: string, keys: string[] | undefined): void {
+    if (this.getQueryMentionCandidates()) {
+      if (isMdPath(path)) this.localMentionOverrides.set(path, keys ? new Set(keys) : null);
+      else this.localMentionOverrides.delete(path);
+      this.mentionIndexGeneration += 1;
+      return;
+    }
     const previous = this.mentionKeysBySource.get(path) ?? [];
     if (this.mentionIndexReady) this.removeMentionSourceFromReverseIndex(path, previous);
     if (keys && isMdPath(path)) this.mentionKeysBySource.set(path, keys);
@@ -921,6 +938,13 @@ export class MetadataCache extends Events {
    * from the current authoritative per-file keys, preventing stale entries.
    */
   private async rebuildMentionIndex(): Promise<void> {
+    if (this.getQueryMentionCandidates()) {
+      this.mentionSourcesByKey.clear();
+      this.mentionKeysBySource.clear();
+      this.mentionIndexReady = true;
+      if (this.initialized) this.trigger("resolved");
+      return;
+    }
     this.mentionIndexReady = false;
     do {
       const generation = this.mentionIndexGeneration;
@@ -993,6 +1017,9 @@ export class MetadataCache extends Events {
     this.activeUnlinkedMentionScans.clear();
     this.stopIndexerMessages?.();
     this.stopIndexerMessages = null;
+    this.workerEntries.clear();
+    this.localMentionOverrides.clear();
+    this.unlinkedMentionsCache.clear();
   }
 
   private onIndexerMessage(message: any): void {
@@ -1036,7 +1063,9 @@ export class MetadataCache extends Events {
     }
     if (message?.type !== "delta") return;
     this.hydrationMutations?.add(message.path);
-    if (message.entry) {
+    if (message.deleted) {
+      this.workerEntries.delete(message.path);
+    } else if (message.entry) {
       this.workerEntries.set(message.path, message.entry);
     }
     // The raw vault event normally arrives first and records the public
@@ -1139,7 +1168,7 @@ export class MetadataCache extends Events {
           } else {
             const content = await this.vault.cachedRead(file);
             newMeta.set(path, parseMetadata(content, this.scanCapBytes));
-            newMentionKeys.set(path, extractMentionIndexKeys(content));
+            newMentionKeys.set(path, this.extractBoundedMentionKeys(content));
           }
         } catch (err) {
           failed.add(path);
@@ -1229,7 +1258,10 @@ export class MetadataCache extends Events {
 
     });
 
-    for (const path of dirty.keys()) this.flushingPaths.delete(path);
+    for (const path of dirty.keys()) {
+      this.flushingPaths.delete(path);
+      if (!this.dirty.has(path)) this.workerEntries.delete(path);
+    }
 
     // Fire `changed` once per changed file (skipping reads that failed), so
     // BaseView per-file semantics + the public plugin contract are preserved.
@@ -1271,6 +1303,7 @@ export class MetadataCache extends Events {
           if (this.initialized) this.scheduleBackground(() => this.applyRendererFallback());
         });
       }
+      const usesHostMentionQuery = !!this.getQueryMentionCandidates();
       const paged = !!(api?.beginMetadataCacheRead || api?.readMetadataCachePage || api?.cancelMetadataCacheRead);
       this.hydrationMutations = paged ? new Set() : null;
       const persisted = paged ? null : await this.loadPersistedCache();
@@ -1279,6 +1312,7 @@ export class MetadataCache extends Events {
         this.canvasLinkContexts.clear();
         this.mentionSourcesByKey.clear();
         this.mentionKeysBySource.clear();
+        this.localMentionOverrides.clear();
         this.mentionIndexReady = false;
         if (paged) await this.hydratePersistedPages();
         let persistedHits = 0;
@@ -1288,7 +1322,7 @@ export class MetadataCache extends Events {
           const entry = persisted?.entries[file.path];
           if (entry && entry.mtimeMs === file.mtime && entry.size === file.size) {
             this.cache.set(file.path, entry.metadata);
-            if (entry.mentionKeys) this.setMentionSourceKeys(file.path, entry.mentionKeys);
+            if (!usesHostMentionQuery && entry.mentionKeys) this.setMentionSourceKeys(file.path, entry.mentionKeys);
             persistedHits += 1;
           } else if ((!attemptedBackground || paged) && !this.cache.has(file.path)) {
             (paged && attemptedBackground ? deferredMisses : toRead).push(file);
@@ -1297,7 +1331,7 @@ export class MetadataCache extends Events {
         this.persistedCacheInSync = !paged && !!persisted &&
           persistedHits === markdownFiles.length &&
           Object.keys(persisted.entries).length === persistedHits &&
-          markdownFiles.every((file) => !!persisted.entries[file.path]?.mentionKeys);
+          (usesHostMentionQuery || markdownFiles.every((file) => !!persisted.entries[file.path]?.mentionKeys));
         // Canvas projection is renderer-only and intentionally never enters the
         // utility-process or persisted Markdown cache schema.
         toRead.push(...canvasFiles);
@@ -1317,7 +1351,7 @@ export class MetadataCache extends Events {
               this.canvasLinkContexts.set(f.path, parsed.contexts);
             } else {
               this.cache.set(f.path, parseMetadata(text, this.scanCapBytes));
-              this.setMentionSourceKeys(f.path, extractMentionIndexKeys(text));
+              this.setMentionSourceKeys(f.path, this.extractBoundedMentionKeys(text));
             }
           } catch (err) {
             if (!isBenignEnoent(err)) console.error(`Failed to index ${f.path}`, err);
@@ -1340,7 +1374,9 @@ export class MetadataCache extends Events {
         };
       });
       if (!recoverPagedMisses) this.hydrationMutations = null;
-      completePersistedMentionIndex = this.mentionKeysBySource.size === markdownFiles.length;
+      completePersistedMentionIndex = usesHostMentionQuery
+        ? !recoverPagedMisses && markdownFiles.every((file) => this.cache.has(file.path))
+        : this.mentionKeysBySource.size === markdownFiles.length;
       withPerfMark("metadata-renderer-resolve", () => {
         this.rebuildNameIndex();
         this.resolveAll();
@@ -1380,11 +1416,14 @@ export class MetadataCache extends Events {
     this.backgroundRefreshPending = false;
     this.backgroundIndexerActive = true;
     try {
+      const usesHostMentionQuery = !!this.getQueryMentionCandidates();
       const currentMarkdown = new Map(this.vault.getMarkdownFiles().map((file) => [file.path, file]));
       this.mentionIndexReady = false;
       this.mentionSourcesByKey.clear();
-      for (const path of this.mentionKeysBySource.keys()) {
-        if (!currentMarkdown.has(path)) this.setMentionSourceKeys(path, undefined);
+      if (!usesHostMentionQuery) {
+        for (const path of this.mentionKeysBySource.keys()) {
+          if (!currentMarkdown.has(path)) this.setMentionSourceKeys(path, undefined);
+        }
       }
       const entries = Object.entries(snapshot.entries);
       await processInBatches(entries, 50, async ([path, snapshotEntry]) => {
@@ -1396,26 +1435,38 @@ export class MetadataCache extends Events {
           ? live
           : snapshotEntry;
         this.cache.set(path, entry.metadata);
-        // mentionKeys is always populated by current indexer writes; the
-        // `?? []` guard is only defensive typing, not a real fallback path.
-        this.setMentionSourceKeys(path, entry.mentionKeys ?? []);
+        if (!usesHostMentionQuery) {
+          this.setMentionSourceKeys(path, entry.mentionKeys ?? []);
+        } else if (live) {
+          this.setMentionSourceKeys(path, live.mentionKeys ?? []);
+        } else if (!this.dirty.has(path)) {
+          this.localMentionOverrides.delete(path);
+        }
       });
       // Oversized entries are deliberately omitted from utility snapshot IPC.
       // Fill only those missing paths here, one file per yielded batch, so a
       // legacy cache upgrade remains complete without recreating one giant
       // renderer task over the whole vault.
       const missing = [...currentMarkdown.values()].filter((file) =>
-        !this.cache.has(file.path) || !this.mentionKeysBySource.has(file.path)
+        !this.cache.has(file.path) || (!usesHostMentionQuery && !this.mentionKeysBySource.has(file.path))
       );
       await processInBatches(missing, 1, async (file) => {
         try {
           const content = await this.vault.cachedRead(file);
           if (!this.cache.has(file.path)) this.cache.set(file.path, parseMetadata(content, this.scanCapBytes));
-          this.setMentionSourceKeys(file.path, extractMentionIndexKeys(content));
+          this.setMentionSourceKeys(file.path, this.extractBoundedMentionKeys(content));
         } catch (err) {
           if (!isBenignEnoent(err)) console.error(`Failed to index ${file.path}`, err);
         }
       });
+      // Release snapshot entry map once merged while keeping backgroundSnapshot
+      // truthy for diagnostic/sample callers checking completion.
+      if (this.backgroundSnapshot === snapshot) {
+        this.backgroundSnapshot = { schemaVersion: snapshot.schemaVersion, entries: {} };
+      }
+      for (const path of this.workerEntries.keys()) {
+        if (!this.dirty.has(path)) this.workerEntries.delete(path);
+      }
       await yieldToEventLoop();
       withPerfMark("metadata-background-resolve", () => {
         this.rebuildNameIndex();
@@ -1442,6 +1493,7 @@ export class MetadataCache extends Events {
   private async applyRendererFallback(): Promise<void> {
     if (!this.backgroundUnavailable) return;
     this.backgroundUnavailable = false;
+    const usesHostMentionQuery = !!this.getQueryMentionCandidates();
     const files = this.vault.getMarkdownFiles();
     const reason = this.backgroundUnavailableReason ?? "unknown";
     this.backgroundUnavailableReason = null;
@@ -1452,7 +1504,7 @@ export class MetadataCache extends Events {
     // then flow through the incremental path, so a row that is present (with
     // its mention keys) is trusted and the file is not read again. Only new,
     // changed (stat mismatch) or incompletely-cached files are parsed.
-    const stale = files.filter((file) => !this.cache.has(file.path) || !this.mentionKeysBySource.has(file.path));
+    const stale = files.filter((file) => !this.cache.has(file.path) || (!usesHostMentionQuery && !this.mentionKeysBySource.has(file.path)));
     this.mentionIndexReady = false;
     this.mentionSourcesByKey.clear();
     let parsed = 0;
@@ -1460,7 +1512,7 @@ export class MetadataCache extends Events {
       try {
         const content = await this.vault.cachedRead(file);
         this.cache.set(file.path, parseMetadata(content, this.scanCapBytes));
-        this.setMentionSourceKeys(file.path, extractMentionIndexKeys(content));
+        this.setMentionSourceKeys(file.path, this.extractBoundedMentionKeys(content));
         parsed += 1;
       } catch (err) {
         if (!isBenignEnoent(err)) console.error(`Failed to index ${file.path}`, err);
@@ -1792,25 +1844,44 @@ export class MetadataCache extends Events {
 
     try {
       const candidates = new Set<string>();
-      let candidateOperations = 0;
-      for (const name of names) {
-        assertCurrent();
-        const keys = extractMentionIndexKeys(name.trim());
-        if (!keys.length) continue;
-        const sourceSets = keys.map((key) => this.mentionSourcesByKey.get(key) ?? new Set<string>());
-        sourceSets.sort((a, b) => a.size - b.size);
-        for (const src of sourceSets[0]) {
-          let presentInEverySet = true;
-          for (const sources of sourceSets) {
-            presentInEverySet &&= sources.has(src);
-            candidateOperations += 1;
-            if (candidateOperations % UNLINKED_MENTION_CANDIDATE_SLICE === 0) {
-              await yieldFn();
-              assertCurrent();
-            }
-            if (!presentInEverySet) break;
+      const queryCandidates = this.getQueryMentionCandidates();
+      if (queryCandidates) {
+        for (const name of names) {
+          assertCurrent();
+          const keys = extractMentionIndexKeys(name.trim());
+          if (!keys.length) continue;
+          const dbMatches = await queryCandidates(keys);
+          assertCurrent();
+          for (const src of dbMatches) {
+            if (!this.localMentionOverrides.has(src)) candidates.add(src);
           }
-          if (presentInEverySet) candidates.add(src);
+          for (const [src, override] of this.localMentionOverrides) {
+            if (override !== null && keys.every((key) => override.has(key))) {
+              candidates.add(src);
+            }
+          }
+        }
+      } else {
+        let candidateOperations = 0;
+        for (const name of names) {
+          assertCurrent();
+          const keys = extractMentionIndexKeys(name.trim());
+          if (!keys.length) continue;
+          const sourceSets = keys.map((key) => this.mentionSourcesByKey.get(key) ?? new Set<string>());
+          sourceSets.sort((a, b) => a.size - b.size);
+          for (const src of sourceSets[0]) {
+            let presentInEverySet = true;
+            for (const sources of sourceSets) {
+              presentInEverySet &&= sources.has(src);
+              candidateOperations += 1;
+              if (candidateOperations % UNLINKED_MENTION_CANDIDATE_SLICE === 0) {
+                await yieldFn();
+                assertCurrent();
+              }
+              if (!presentInEverySet) break;
+            }
+            if (presentInEverySet) candidates.add(src);
+          }
         }
       }
 

@@ -54,20 +54,19 @@ export class MetadataCacheReaders {
       if (!Number.isSafeInteger(sequence) || sequence !== reader.sequence) throw Error("Invalid metadata page sequence");
       const page: MetadataCachePage = { schemaVersion: METADATA_INDEX_SCHEMA_VERSION, sequence, entries: Object.create(null), examined: 0, omitted: { corrupt: 0, oversized: 0 }, done: false };
       const next = reader.db.prepare(`SELECT path, mtime_ms AS mtimeMs, size,
-        length(CAST(metadata_json AS BLOB)) AS metadataBytes,
-        coalesce(length(CAST(mention_keys_json AS BLOB)),0) AS mentionBytes
+        length(CAST(metadata_json AS BLOB)) AS metadataBytes
         FROM metadata_entries ${reader.after === null ? "" : "WHERE path > ?"} ORDER BY path LIMIT ${MAX_ROWS}`);
-      const rows = (reader.after === null ? next.all() : next.all(reader.after)) as unknown as { path: string; mtimeMs: number; size: number; metadataBytes: number; mentionBytes: number }[];
+      const rows = (reader.after === null ? next.all() : next.all(reader.after)) as unknown as { path: string; mtimeMs: number; size: number; metadataBytes: number }[];
       for (const row of rows) {
         page.examined++;
         // Preflight blob byte lengths before fetching any potentially giant JSON.
-        if (row.metadataBytes + row.mentionBytes + Buffer.byteLength(JSON.stringify(row.path)) > MAX_BYTES - 256) {
+        if (row.metadataBytes + Buffer.byteLength(JSON.stringify(row.path)) > MAX_BYTES - 256) {
           page.omitted.oversized++; reader.after = row.path; continue;
         }
         let entry: PersistedMetadataIndexEntry;
-        const data = reader.db.prepare("SELECT metadata_json, mention_keys_json FROM metadata_entries WHERE path = ?").get(row.path) as { metadata_json: string; mention_keys_json: string | null };
+        const data = reader.db.prepare("SELECT metadata_json FROM metadata_entries WHERE path = ?").get(row.path) as { metadata_json: string };
         try {
-          entry = { mtimeMs: row.mtimeMs, size: row.size, metadata: JSON.parse(data.metadata_json), ...(data.mention_keys_json ? { mentionKeys: JSON.parse(data.mention_keys_json) } : {}) };
+          entry = { mtimeMs: row.mtimeMs, size: row.size, metadata: JSON.parse(data.metadata_json) };
           if (!isPersistedMetadataIndexSnapshot({ schemaVersion: METADATA_INDEX_SCHEMA_VERSION, entries: { [row.path]: entry } })) throw Error("Invalid persisted entry");
         } catch { page.omitted.corrupt++; reader.after = row.path; continue; }
         page.entries[row.path] = entry;

@@ -1,6 +1,7 @@
 import * as path from "node:path";
 import * as fs from "node:fs";
 import { DatabaseSync } from "node:sqlite";
+import { METADATA_PARSER_VERSION } from "../wiki/constants";
 import { METADATA_INDEX_SCHEMA_VERSION } from "../indexer/metadata-indexer";
 import type {
   MetadataFileStat,
@@ -53,9 +54,26 @@ export function initializeMetadataSchema(db: DatabaseSync): void {
         provider_id   TEXT    NOT NULL
       )
     `);
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS metadata_meta (
+        key   TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      )
+    `);
+    const previousParserVersion = (
+      db.prepare("SELECT value FROM metadata_meta WHERE key = 'parser_version'").get() as { value?: string } | undefined
+    )?.value;
     // Matching file timestamps do not make rows from an older parser valid.
     // Only derived metadata is rebuilt; synchronization hashes remain intact.
-    if (previousVersion !== METADATA_INDEX_SCHEMA_VERSION) db.exec("DELETE FROM metadata_entries");
+    if (
+      previousVersion !== METADATA_INDEX_SCHEMA_VERSION ||
+      previousParserVersion !== String(METADATA_PARSER_VERSION)
+    ) {
+      db.exec("DELETE FROM metadata_entries");
+    }
+    db.prepare(
+      "INSERT INTO metadata_meta (key, value) VALUES ('parser_version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+    ).run(String(METADATA_PARSER_VERSION));
     db.exec(`PRAGMA user_version = ${METADATA_INDEX_SCHEMA_VERSION}`);
     db.exec("COMMIT");
   } catch (error) { db.exec("ROLLBACK"); throw error; }
@@ -130,15 +148,23 @@ export function readMetadataStats(db: DatabaseSync): MetadataFileStat[] {
 }
 
 /** Full content-less snapshot of every row — the renderer's warm-start hydration read and the main-process fallback read. */
-export function readAllMetadataEntries(db: DatabaseSync): PersistedMetadataIndexSnapshot {
+export function readAllMetadataEntries(
+  db: DatabaseSync,
+  options?: { includeMentionKeys?: boolean }
+): PersistedMetadataIndexSnapshot {
+  const includeMentionKeys = options?.includeMentionKeys ?? true;
   const rows = db
-    .prepare("SELECT path, mtime_ms AS mtimeMs, size, metadata_json, mention_keys_json FROM metadata_entries")
+    .prepare(
+      includeMentionKeys
+        ? "SELECT path, mtime_ms AS mtimeMs, size, metadata_json, mention_keys_json FROM metadata_entries"
+        : "SELECT path, mtime_ms AS mtimeMs, size, metadata_json FROM metadata_entries"
+    )
     .all() as unknown as {
     path: string;
     mtimeMs: number;
     size: number;
     metadata_json: string;
-    mention_keys_json: string | null;
+    mention_keys_json?: string | null;
   }[];
   const entries: Record<string, PersistedMetadataIndexEntry> = {};
   for (const row of rows) {
@@ -146,10 +172,38 @@ export function readAllMetadataEntries(db: DatabaseSync): PersistedMetadataIndex
       mtimeMs: row.mtimeMs,
       size: row.size,
       metadata: JSON.parse(row.metadata_json),
-      ...(row.mention_keys_json ? { mentionKeys: JSON.parse(row.mention_keys_json) } : {}),
+      ...(includeMentionKeys && row.mention_keys_json ? { mentionKeys: JSON.parse(row.mention_keys_json) } : {}),
     };
   }
   return { schemaVersion: METADATA_INDEX_SCHEMA_VERSION, entries };
+}
+
+/**
+ * Query SQLite directly for markdown paths whose persisted `mention_keys_json`
+ * contains every requested token/punctuation key, avoiding hydrating the
+ * vault-wide reverse mention map into renderer V8 heap.
+ */
+export function queryMentionCandidates(db: DatabaseSync, keys: readonly string[]): string[] {
+  const uniqueKeys = [...new Set(keys)];
+  if (uniqueKeys.length === 0) return [];
+  const escapeLike = (s: string) => s.replace(/[\\%_]/g, "\\$&");
+  const patterns = uniqueKeys.map((key) => `%${escapeLike(JSON.stringify(key))}%`);
+  const where = patterns.map(() => "mention_keys_json LIKE ? ESCAPE '\\'").join(" AND ");
+  const rows = db
+    .prepare(`SELECT path, mention_keys_json FROM metadata_entries WHERE mention_keys_json IS NOT NULL AND ${where}`)
+    .all(...patterns) as unknown as { path: string; mention_keys_json: string }[];
+  const out: string[] = [];
+  for (const row of rows) {
+    try {
+      const parsed = JSON.parse(row.mention_keys_json);
+      if (!Array.isArray(parsed)) continue;
+      const set = new Set<string>(parsed);
+      if (uniqueKeys.every((key) => set.has(key))) out.push(row.path);
+    } catch {
+      // Ignore corrupt row; exact candidate check fails closed.
+    }
+  }
+  return out.sort();
 }
 
 /**
@@ -203,7 +257,7 @@ function upsertStatement(db: DatabaseSync) {
       mtime_ms = excluded.mtime_ms,
       size = excluded.size,
       metadata_json = excluded.metadata_json,
-      mention_keys_json = excluded.mention_keys_json
+      mention_keys_json = COALESCE(excluded.mention_keys_json, metadata_entries.mention_keys_json)
   `);
 }
 

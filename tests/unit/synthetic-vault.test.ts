@@ -130,7 +130,9 @@ describe("synthetic vault generator", () => {
         expect(note.references.filter(reference => reference.syntax === "markdown")).toEqual([{ link: notePath(101), target: notePath(101), embed: false, syntax: "markdown" }]);
         expect(metadata.aliases).toContain("Shared alias 3");
         expect(metadata.headings.length).toBeGreaterThan(0);
-        expect(metadata.listItems?.some(item => item.id === "anchor")).toBe(true);
+        expect(metadata.listItems).toBeUndefined();
+        expect(metadata.sections).toBeUndefined();
+        expect(metadata.blocks?.anchor).toBeDefined();
         expect(Buffer.byteLength(note.content)).toBeGreaterThanOrEqual(128 * 1024);
         expect(notePath(0)).not.toBe(notePath(64));
         expect(notePath(0).split("/").at(-1)).toBe(notePath(64).split("/").at(-1));

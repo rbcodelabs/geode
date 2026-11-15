@@ -3,7 +3,12 @@ import { maskMarkdownCode } from "./code-mask";
 import { markdownReferences } from "./markdown-references";
 import { scanFootnotes } from "./footnote-scan";
 import { maskCommentMetadata, stripCommentMarkerSyntax } from "../renderer/comments/model";
-import { DEFAULT_METADATA_SCAN_CAP_BYTES, FRONTMATTER_BLOCK_RE } from "./constants";
+import {
+  DEFAULT_METADATA_SCAN_CAP_BYTES,
+  DEFAULT_STRUCTURE_SCAN_CAP_BYTES,
+  FRONTMATTER_BLOCK_RE,
+} from "./constants";
+export { DEFAULT_STRUCTURE_SCAN_CAP_BYTES } from "./constants";
 import type { CachedMetadata, FrontmatterLinkCache, FootnoteRefCache, LinkCache, ListItemCache, Loc, Pos, ReferenceLinkCache, SectionCache } from "./types";
 
 function isEscaped(text: string, position: number): boolean {
@@ -93,7 +98,8 @@ export function maskCode(text: string): string {
  */
 export function parseMetadata(
   text: string,
-  maxBodyBytesForScan: number = DEFAULT_METADATA_SCAN_CAP_BYTES
+  maxBodyBytesForScan: number = DEFAULT_METADATA_SCAN_CAP_BYTES,
+  maxBodyBytesForStructure: number = DEFAULT_STRUCTURE_SCAN_CAP_BYTES
 ): CachedMetadata {
   // Retain raw offsets while recovering heading prose without marker padding.
   const rawText = text;
@@ -241,11 +247,14 @@ export function parseMetadata(
   const definitions = scanFootnotes(text.slice(0, bodyOffset) + body, bodyOffset).definitions;
   if (definitions.length) meta.footnotes = definitions.map(definition => ({ id: definition.id, position: offsetToLoc(lineStarts, definition.from, definition.to) }));
 
+  const includeStructure = body.length <= maxBodyBytesForStructure;
   let offset = bodyOffset;
   let inFence = false;
   let listRoot: number | null = null;
   const listItems: ListItemCache[] = [];
   const sections: SectionCache[] = [];
+  const blocks: NonNullable<CachedMetadata["blocks"]> = Object.create(null);
+  const deferredSectionBlocks: { id: string; position: Loc }[] = [];
   // Ancestor stack for resolving list nesting by indentation: each entry is a
   // still-open ancestor item's (indent width, absolute line). A new item's
   // parent is the nearest shallower ancestor; a shallower/non-list line pops
@@ -255,14 +264,21 @@ export function parseMetadata(
   // same-type lines). Flushed on a blank line, a type change, or EOF.
   let cur: { type: string; start: number; end: number } | null = null;
   const flush = () => {
-    if (cur) {
+    if (!cur) return;
+    if (includeStructure) {
       sections.push({ type: cur.type, position: offsetToLoc(lineStarts, cur.start, cur.end) });
-      cur = null;
+    } else if (cur.type === "paragraph") {
+      const content = masked.slice(cur.start - bodyOffset, cur.end - bodyOffset);
+      const id = content.match(BLOCK_ID_RE)?.[1];
+      if (id) {
+        deferredSectionBlocks.push({ id, position: offsetToLoc(lineStarts, cur.start, cur.end) });
+      }
     }
+    cur = null;
   };
 
   // Frontmatter is its own "yaml" section, matching Obsidian.
-  if (meta.frontmatter && meta.frontmatterEndOffset > 0) {
+  if (includeStructure && meta.frontmatter && meta.frontmatterEndOffset > 0) {
     sections.push({
       type: "yaml",
       position: offsetToLoc(lineStarts, 0, Math.max(0, meta.frontmatterEndOffset - 1)),
@@ -301,14 +317,20 @@ export function parseMetadata(
       if (type === "heading") {
         flush();
         stack.length = 0;
-      listRoot = null;
+        listRoot = null;
         const cleanHeading = stripCommentMarkerSyntax(rawText.slice(lineStart, lineEnd)).match(HEADING_RE);
+        const position = offsetToLoc(lineStarts, lineStart, lineEnd);
         meta.headings.push({
           heading: (cleanHeading?.[2] ?? h![2]).trim(),
           level: h![1].length,
-          position: offsetToLoc(lineStarts, lineStart, lineEnd),
+          position,
         });
-        sections.push({ type: "heading", position: offsetToLoc(lineStarts, lineStart, lineEnd) });
+        if (includeStructure) {
+          sections.push({ type: "heading", position });
+        } else {
+          const id = masked.slice(lineStart - bodyOffset, lineEnd - bodyOffset).match(BLOCK_ID_RE)?.[1];
+          if (id) deferredSectionBlocks.push({ id, position });
+        }
       } else {
         // Extend the current same-type section, or start a new one.
         if (cur && cur.type === type) cur.end = lineEnd;
@@ -318,24 +340,31 @@ export function parseMetadata(
         }
 
         if (type === "list") {
-          const indent = li![1].length;
-          const pos = offsetToLoc(lineStarts, lineStart, lineEnd);
-          const lineNo = pos.start.line;
-          // Discard ancestors at this indent or deeper — they can't be parents.
-          while (stack.length && stack[stack.length - 1].indent >= indent) stack.pop();
-          if (listRoot === null) listRoot = lineNo;
-          const parent = stack.length ? stack[stack.length - 1].line : -listRoot;
-          const item: ListItemCache = { position: pos, parent };
-          // li[2] is the checkbox char (only for `[x]`-style task items).
-          if (li![2] !== undefined) item.task = li![2];
-          const blockId = line.match(BLOCK_ID_RE);
-          if (blockId) item.id = blockId[1];
-          listItems.push(item);
-          stack.push({ indent, line: lineNo });
+          if (includeStructure) {
+            const indent = li![1].length;
+            const pos = offsetToLoc(lineStarts, lineStart, lineEnd);
+            const lineNo = pos.start.line;
+            // Discard ancestors at this indent or deeper — they can't be parents.
+            while (stack.length && stack[stack.length - 1].indent >= indent) stack.pop();
+            if (listRoot === null) listRoot = lineNo;
+            const parent = stack.length ? stack[stack.length - 1].line : -listRoot;
+            const item: ListItemCache = { position: pos, parent };
+            // li[2] is the checkbox char (only for `[x]`-style task items).
+            if (li![2] !== undefined) item.task = li![2];
+            const blockId = line.match(BLOCK_ID_RE);
+            if (blockId) item.id = blockId[1];
+            listItems.push(item);
+            stack.push({ indent, line: lineNo });
+          } else {
+            const blockId = line.match(BLOCK_ID_RE);
+            if (blockId) {
+              blocks[blockId[1]] = { id: blockId[1], position: offsetToLoc(lineStarts, lineStart, lineEnd) };
+            }
+          }
         } else {
           // A paragraph line ends any list nesting context.
           stack.length = 0;
-      listRoot = null;
+          listRoot = null;
         }
       }
     }
@@ -343,16 +372,19 @@ export function parseMetadata(
   }
   flush();
 
-  // Obsidian-faithful: present only when the note actually has content.
-  if (listItems.length) meta.listItems = listItems;
-  if (sections.length) meta.sections = sections;
-  const blocks: NonNullable<CachedMetadata["blocks"]> = Object.create(null);
-  for (const item of listItems) if (item.id) blocks[item.id] = { id: item.id, position: item.position };
-  for (const section of sections) {
-    if (section.type === "code" || section.type === "yaml" || section.type === "list") continue;
-    const content = masked.slice(section.position.start.offset - bodyOffset, section.position.end.offset - bodyOffset);
-    const id = content.match(BLOCK_ID_RE)?.[1];
-    if (id) { section.id = id; blocks[id] = { id, position: section.position }; }
+  if (includeStructure) {
+    // Obsidian-faithful: present only when the note actually has content.
+    if (listItems.length) meta.listItems = listItems;
+    if (sections.length) meta.sections = sections;
+    for (const item of listItems) if (item.id) blocks[item.id] = { id: item.id, position: item.position };
+    for (const section of sections) {
+      if (section.type === "code" || section.type === "yaml" || section.type === "list") continue;
+      const content = masked.slice(section.position.start.offset - bodyOffset, section.position.end.offset - bodyOffset);
+      const id = content.match(BLOCK_ID_RE)?.[1];
+      if (id) { section.id = id; blocks[id] = { id, position: section.position }; }
+    }
+  } else {
+    for (const block of deferredSectionBlocks) blocks[block.id] = block;
   }
   if (Object.keys(blocks).length) meta.blocks = blocks;
 

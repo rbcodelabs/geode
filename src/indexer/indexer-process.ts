@@ -64,6 +64,10 @@ const writer = new DebouncedMetadataCacheWriter(async (dirty) => {
   parentPort.postMessage({ type: "error", message: `metadata cache write failed (attempt ${consecutiveFailures}): ${String(error)}` });
 });
 
+function extractBoundedMentionKeys(content: string): string[] {
+  return extractMentionIndexKeys(content);
+}
+
 async function initialize(message: InitMessage): Promise<void> {
   initializing = true;
   root = message.root;
@@ -71,12 +75,9 @@ async function initialize(message: InitMessage): Promise<void> {
   db = openMetadataDb(root);
   const started = performance.now();
   let reconcileStats;
-  // Accumulates only the CHANGED/NEW entries found during reconcile (small on
-  // a warm relaunch, same size as today's full metadata-only snapshot on a
-  // cold one — metadata-only data was never the memory problem, see plan).
-  // Unchanged entries are already correct in the DB and are picked up by the
-  // renderer's own independent warm-start read of the same database, so they
-  // never need to round-trip through this process's memory or the wire.
+  // Accumulates only the CHANGED/NEW entries found during reconcile, omitting
+  // mentionKeys from the outbound IPC snapshot (they are persisted in SQLite by
+  // store.upsertBatch and queried on demand via metadata-cache-query-mentions).
   const changed: Record<string, PersistedMetadataIndexEntry> = {};
   const store: MetadataReconcileStore = {
     readStats: () => readMetadataStats(db!),
@@ -88,9 +89,13 @@ async function initialize(message: InitMessage): Promise<void> {
     store,
     readForIndex,
     (content) => parseMetadata(content, scanCapBytes),
-    (batch) => { Object.assign(changed, batch); },
+    (batch) => {
+      for (const [entryPath, entry] of Object.entries(batch)) {
+        changed[entryPath] = { mtimeMs: entry.mtimeMs, size: entry.size, metadata: entry.metadata };
+      }
+    },
     (stats) => { reconcileStats = stats; },
-    extractMentionIndexKeys,
+    (content) => extractBoundedMentionKeys(content),
   );
   parentPort.postMessage({
     type: "performance",
@@ -120,7 +125,7 @@ async function applyVaultEvent(message: VaultMessage): Promise<void> {
       mtimeMs: stat.mtimeMs,
       size: stat.size,
       metadata,
-      mentionKeys: extractMentionIndexKeys(content),
+      mentionKeys: extractBoundedMentionKeys(content),
     };
     writer.schedule(message.path, entry);
     parentPort.postMessage({ type: "performance", operation: "metadata-worker-read-parse", duration: performance.now() - started });

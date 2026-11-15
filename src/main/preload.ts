@@ -220,6 +220,8 @@ const api = {
   beginMetadataCacheRead: (): Promise<{ token: string; schemaVersion: number }> => ipcRenderer.invoke("metadata-cache-begin"),
   readMetadataCachePage: (token: string, sequence: number): Promise<import("./metadata-cache-reader").MetadataCachePage> => ipcRenderer.invoke("metadata-cache-page", token, sequence),
   cancelMetadataCacheRead: (token: string): Promise<void> => ipcRenderer.invoke("metadata-cache-cancel", token),
+  queryMetadataMentionCandidates: (keys: string[]): Promise<string[]> =>
+    ipcRenderer.invoke("metadata-cache-query-mentions", keys),
   writeMetadataCache: (data: unknown): Promise<void> => ipcRenderer.invoke("metadata-cache-write", data),
   /**
    * Upsert one bounded batch of entries (a partial snapshot, not the whole
@@ -484,7 +486,7 @@ export type GeodeApi = Omit<
   "audioCaptureWorklet" | "upsertMetadataCacheEntries" | "pruneMetadataCache" | "reportMetadataFallback" | "externalRoots" |
   "requestUrl" | "pluginFetch" | "getSupportedPluginCatalog" | "installSupportedPlugin" |
   "readSecretsSync" | "getSecret" | "listSecrets" | "setSecret" | "deleteSecret" | "readAppSecret" | "writeAppSecret" | "removeAppSecret" |
-  "isSecretEncryptionAvailable" | "beginMetadataCacheRead" | "readMetadataCachePage" | "cancelMetadataCacheRead" |
+  "isSecretEncryptionAvailable" | "beginMetadataCacheRead" | "readMetadataCachePage" | "cancelMetadataCacheRead" | "queryMetadataMentionCandidates" |
   "readHashCache" | "upsertHashCacheEntries" | "pruneHashCache" | "browserHeaderRules" | "githubAuth" | "isHeadless" | "pairing" | "vaultPack"
 > & {
   /** Desktop only: absent on mobile/browser hosts. */
@@ -497,6 +499,7 @@ export type GeodeApi = Omit<
   beginMetadataCacheRead?: ElectronOnlyGeodeApi["beginMetadataCacheRead"];
   readMetadataCachePage?: ElectronOnlyGeodeApi["readMetadataCachePage"];
   cancelMetadataCacheRead?: ElectronOnlyGeodeApi["cancelMetadataCacheRead"];
+  queryMetadataMentionCandidates?: ElectronOnlyGeodeApi["queryMetadataMentionCandidates"];
   externalRoots?: ExternalRootsHost;
   upsertMetadataCacheEntries?: ElectronOnlyGeodeApi["upsertMetadataCacheEntries"];
   pruneMetadataCache?: ElectronOnlyGeodeApi["pruneMetadataCache"];

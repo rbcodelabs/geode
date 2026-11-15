@@ -83,6 +83,24 @@ export const FRONTMATTER_OPEN_RE = /^---\r?\n/;
 export const DEFAULT_METADATA_SCAN_CAP_BYTES = 300_000;
 
 /**
+ * Cap on body length (in UTF-16 code units) for retaining full `sections` and
+ * `listItems` position-span arrays in `CachedMetadata`. Notes above this size
+ * (up to `maxBodyBytesForScan`) still extract frontmatter, links, embeds, tags,
+ * headings, footnotes, and explicit `^block-id` anchors, while omitting the
+ * per-paragraph/per-bullet span arrays that otherwise dominate V8 heap in
+ * vaults with long AI transcripts or logs.
+ */
+export const DEFAULT_STRUCTURE_SCAN_CAP_BYTES = 64 * 1024;
+
+/**
+ * Persisted metadata parser version. Bump whenever `parseMetadata` or
+ * `extractMentionIndexKeys` changes output for existing notes so persisted
+ * SQLite and renderer caches rebuild stale `metadata_entries` rows while
+ * keeping `hash_cache_entries` intact.
+ */
+export const METADATA_PARSER_VERSION = 4;
+
+/**
  * Floor for the configurable cap: intentionally low enough to place no
  * real-world restriction on how aggressively a user can shrink it, while
  * still ruling out 0/negative — which would skip the body scan on every

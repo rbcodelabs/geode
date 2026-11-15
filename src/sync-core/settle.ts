@@ -18,6 +18,7 @@ export interface SettleRule {
 }
 
 export const SETTLE_REASON = "unsettled";
+export const DEFAULT_SETTLE_MS = 2_000;
 export const DEFAULT_LOG_SETTLE_MS = 10 * 60_000;
 export const DEFAULT_SETTLE_RULES: readonly SettleRule[] = [
   { match: "Claude/logs", ms: DEFAULT_LOG_SETTLE_MS },
@@ -42,6 +43,12 @@ export function settleMsFor(path: string, rules: readonly SettleRule[]): number 
     if (score >= best && score >= 0) { best = score; ms = rule.ms; } // later rule wins a tie
   }
   return ms;
+}
+
+/** Debounce/settle delay in ms for `path`: matching positive rule `ms`, or `DEFAULT_SETTLE_MS` (2 s) otherwise. */
+export function settleDelayMs(path: string, rules: readonly SettleRule[] = DEFAULT_SETTLE_RULES): number {
+  const ms = settleMsFor(path, rules);
+  return ms > 0 ? ms : DEFAULT_SETTLE_MS;
 }
 
 /** Parses `<folder-or-*.ext>=<ms>` (the CLI's `--settle-rule`). Returns an error string when malformed. */
