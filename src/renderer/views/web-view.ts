@@ -2,10 +2,51 @@ import type { App } from "../app";
 import type { ReloadableView, View, WorkspaceLeaf } from "../workspace";
 import { setIcon } from "../api/icons";
 import { describeGuestCrashCause } from "./web-view-crash-message";
+import {
+  VIEWPORTS,
+  VIEWPORT_CONTROLS,
+  VIEWPORT_PRESET_ORDER,
+  normalizeViewport,
+  type Viewport,
+  type ViewportPreset,
+} from "./viewport-presets";
+import type { InspectRectMessage } from "../../artifacts/inspector-protocol";
+import type { WebViewerPageTarget } from "../../web-viewer/feedback-contract";
+import {
+  cleanThreadLabel,
+  type WebViewerFeedbackOutcome,
+} from "../web-viewer/feedback-registry";
+import {
+  WebViewerInspectorBridge,
+  type InspectorHover,
+  type InspectorWebview,
+  type WebViewerSelectionSnapshot,
+} from "./web-viewer-inspector-bridge";
+import { PickController, type FocusTarget, type PickState } from "../artifacts/pick-controller";
+import {
+  PickPopover,
+  choosePopoverBounds,
+  clampIntoWindow,
+  hoverChipText,
+  isElementOffscreen,
+  popoverMaxHeight,
+  popoverPosition,
+  shouldMovePopover,
+} from "../artifacts/pick-popover";
+import { createRectCoalescer, type RectCoalescer } from "../artifacts/rect-coalescer";
+import { selectionBoxToStage, type BoxRect, type GuestViewport } from "../artifacts/pin-collapse";
 
-/** State shape matches Obsidian's Web Viewer exactly, so `leaf.setViewState({ type: "webviewer", state: { url } })` from any hosted plugin (e.g. Threads' `obsidian_open_url`) works unmodified. */
+export type { Viewport, ViewportPreset };
+
+/**
+ * State shape matches Obsidian's Web Viewer (`{ url }`) in the default `fill`
+ * mode so `leaf.setViewState({ type: "webviewer", state: { url } })` from any
+ * hosted plugin works unmodified, while persisting an optional `viewport` when
+ * a non-fill responsive preset is active.
+ */
 export interface WebViewState {
   url: string;
+  viewport?: Viewport;
 }
 
 /** True when `input` already looks like a URL or a bare/pathed domain — the two branches `resolveWebInput` resolves without going through the search engine. */
@@ -28,6 +69,34 @@ export function resolveWebInput(input: string, searchEngine: string): string {
 }
 
 /**
+ * Parses an embedder-observed main-frame URL, accepting only committed `http:`
+ * and `https:` pages with a non-opaque origin (`<= 2048` UTF-16 units).
+ */
+export function parseHttpPageUrl(rawUrl: string): { url: string; origin: string } | null {
+  if (typeof rawUrl !== "string" || !rawUrl || rawUrl.length > 2048) return null;
+  try {
+    const parsed = new URL(rawUrl);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
+    if (!parsed.origin || parsed.origin === "null") return null;
+    return { url: parsed.href, origin: parsed.origin };
+  } catch {
+    return null;
+  }
+}
+
+function isEditableElement(el: Element | null): boolean {
+  if (!el) return false;
+  if (
+    el instanceof HTMLInputElement ||
+    el instanceof HTMLTextAreaElement ||
+    el instanceof HTMLSelectElement
+  ) {
+    return true;
+  }
+  return (el as HTMLElement).isContentEditable === true;
+}
+
+/**
  * The subset of the `<webview>` tag's API this view uses. Declared locally
  * (rather than pulling in the full `Electron.WebviewTag` ambient type)
  * because the renderer doesn't otherwise depend on Electron's DOM typings.
@@ -44,6 +113,7 @@ interface WebviewElement extends HTMLElement {
   canGoForward(): boolean;
   reload(): void;
   stop(): void;
+  send(channel: string, ...args: unknown[]): void;
 }
 
 /**
@@ -75,9 +145,12 @@ type DidStartNavigationEventLike = DidRedirectNavigationEventLike;
 const ERR_ABORTED = -3;
 /** One automatic recovery attempt is scheduled this long after a hard crash. */
 const AUTO_RECOVER_DELAY_MS = 300;
+const PAGE_TITLE_MAX_UNITS = 500;
 
 const DEFAULT_URL = "https://duckduckgo.com/";
 const BOOTSTRAP_URL = "about:blank";
+
+type WebPickState = PickState<WebViewerSelectionSnapshot, WebViewerFeedbackOutcome>;
 
 /**
  * Electron reports committed navigation URLs in canonical browser form (for
@@ -112,15 +185,29 @@ export class WebView implements View, ReloadableView {
   readonly reloadLabel = "Reload page";
   containerEl: HTMLElement;
   private webview: WebviewElement;
+  private stageEl: HTMLElement;
+  private overlayEl: HTMLElement;
+  private selectionBoxEl: HTMLElement;
   private addressInput: HTMLInputElement;
   private backBtn: HTMLButtonElement;
   private forwardBtn: HTMLButtonElement;
   private reloadBtn: HTMLButtonElement;
+  private pickBtn: HTMLButtonElement;
+  private hoverEl: HTMLElement;
+  private sentChipEl: HTMLElement;
   private errorEl: HTMLElement;
   // Assigned in buildErrorOverlay(), invoked from the constructor.
   private errorTitleEl!: HTMLElement;
   private errorDetailEl!: HTMLElement;
+  private viewport: Viewport = { ...VIEWPORTS.fill };
   private currentUrl: string;
+  /**
+   * Origin-E committed main-frame HTTP(S) URL. Starts `null` on `about:blank`,
+   * set only on main-frame `did-navigate` and `did-navigate-in-page` when
+   * `parseHttpPageUrl` succeeds, and cleared immediately on cross-document
+   * `did-start-navigation`, main-frame `did-fail-load`, or guest crash.
+   */
+  private committedHealthyUrl: string | null = null;
   /**
    * The URL of the most recent failed main-frame load, or null while the
    * guest is healthy. `did-navigate` deliberately does not fire on a failed
@@ -154,13 +241,38 @@ export class WebView implements View, ReloadableView {
   private crashHandled = false;
   private recoverTimer: ReturnType<typeof setTimeout> | null = null;
 
+  // ---- Element picker (ADR 0056) ----
+  private readonly viewSessionId: string;
+  private bridge: WebViewerInspectorBridge | null = null;
+  private pick: PickController<WebViewerSelectionSnapshot, WebViewerFeedbackOutcome> | null = null;
+  private popover: PickPopover | null = null;
+  private layoutObserver: ResizeObserver | undefined;
+  private rectCoalescer: RectCoalescer<BoxRect> | null = null;
+  private liveRect: BoxRect | null = null;
+  private liveViewport: GuestViewport | null = null;
+  private pendingViewport: GuestViewport | null = null;
+  private earlyRect: BoxRect | null = null;
+  private liveRectFor: WebViewerSelectionSnapshot | null = null;
+  private pointerInPopover = false;
+  private offscreen = false;
+  private handlerName = "Agent Threads";
+  private lastPickPhase: WebPickState["phase"] = "off";
+  private lastSubmit: WebPickState["submit"] = "idle";
+  private lastAcceptedOutcome: WebViewerFeedbackOutcome | null = null;
+  private threadRequestToken = 0;
+  private closed = false;
+
   constructor(
     private app: App,
     private leaf: WorkspaceLeaf
   ) {
+    this.viewSessionId =
+      typeof crypto?.randomUUID === "function"
+        ? crypto.randomUUID()
+        : `wv_${Math.random().toString(36).slice(2)}_${Date.now().toString(36)}`;
     this.currentUrl = DEFAULT_URL;
     this.containerEl = document.createElement("div");
-    this.containerEl.className = "web-view";
+    this.containerEl.className = "web-view is-fill";
 
     const toolbar = document.createElement("div");
     toolbar.className = "web-view-toolbar";
@@ -181,10 +293,50 @@ export class WebView implements View, ReloadableView {
       }
     });
 
-    toolbar.appendChild(this.backBtn);
-    toolbar.appendChild(this.forwardBtn);
-    toolbar.appendChild(this.reloadBtn);
-    toolbar.appendChild(this.addressInput);
+    const viewports = document.createElement("div");
+    viewports.className = "web-view-viewports";
+    viewports.setAttribute("role", "group");
+    viewports.setAttribute("aria-label", "Viewport size");
+    for (const preset of VIEWPORT_PRESET_ORDER) {
+      const meta = VIEWPORT_CONTROLS[preset];
+      const button = document.createElement("button");
+      button.className = "clickable-icon web-view-viewport-btn";
+      button.type = "button";
+      button.dataset.viewportPreset = preset;
+      button.title =
+        preset === "fill"
+          ? meta.label
+          : `${meta.label} (${VIEWPORTS[preset].width} × ${VIEWPORTS[preset].height})`;
+      button.setAttribute("aria-label", `${meta.label} viewport`);
+      button.setAttribute("aria-pressed", String(preset === "fill"));
+      if (preset === "fill") button.classList.add("is-active");
+      setIcon(button, meta.icon);
+      button.addEventListener("click", () => this.applyViewport(VIEWPORTS[preset], true));
+      viewports.appendChild(button);
+    }
+
+    this.pickBtn = document.createElement("button");
+    this.pickBtn.className = "clickable-icon web-view-toolbar-btn web-view-pick-btn";
+    this.pickBtn.type = "button";
+    this.pickBtn.title = "Pick element";
+    this.pickBtn.setAttribute("aria-label", "Pick element");
+    this.pickBtn.setAttribute("aria-pressed", "false");
+    this.pickBtn.setAttribute("data-testid", "web-view-pick-btn");
+    this.pickBtn.hidden = true;
+    this.pickBtn.disabled = true;
+    setIcon(this.pickBtn, "mouse-pointer-click");
+    this.pickBtn.addEventListener("click", (event) => {
+      this.togglePick(event.detail === 0 ? "keyboard" : "pointer");
+    });
+
+    this.hoverEl = document.createElement("span");
+    this.hoverEl.className = "web-view-hover";
+    this.hoverEl.hidden = true;
+
+    this.sentChipEl = document.createElement("span");
+    this.sentChipEl.className = "web-view-sent";
+    this.sentChipEl.hidden = true;
+
     // Spec: Web Viewer address-bar three-dot menu → Bookmark. A single "More
     // options" affordance keeps room for future page actions. The items come
     // from App rather than from a direct actions.ts import: views compose
@@ -195,14 +347,33 @@ export class WebView implements View, ReloadableView {
         horizontalAlign: "end",
       });
     });
+
+    toolbar.appendChild(this.backBtn);
+    toolbar.appendChild(this.forwardBtn);
+    toolbar.appendChild(this.reloadBtn);
+    toolbar.appendChild(this.addressInput);
+    toolbar.appendChild(viewports);
+    toolbar.appendChild(this.pickBtn);
+    toolbar.appendChild(this.hoverEl);
+    toolbar.appendChild(this.sentChipEl);
     toolbar.appendChild(moreBtn);
     this.containerEl.appendChild(toolbar);
 
-    // The frame and the error overlay share a positioned body so the overlay
-    // covers only the (possibly dead-gray) frame surface while the toolbar —
-    // including the address bar used to recover — stays interactive.
+    // The stage, picker overlay, and crash/error overlay share a positioned
+    // body so `.web-view-overlay` (z-index: 5) tracks the stage while
+    // `.web-view-error` (z-index: 10) covers everything below the toolbar.
     const body = document.createElement("div");
     body.className = "web-view-body";
+
+    this.stageEl = document.createElement("div");
+    this.stageEl.className = "web-view-stage";
+
+    this.overlayEl = document.createElement("div");
+    this.overlayEl.className = "web-view-overlay";
+    this.selectionBoxEl = document.createElement("div");
+    this.selectionBoxEl.className = "web-view-selection-box";
+    this.selectionBoxEl.hidden = true;
+    this.overlayEl.appendChild(this.selectionBoxEl);
 
     this.webview = document.createElement("webview") as unknown as WebviewElement;
     this.webview.classList.add("web-view-frame");
@@ -214,9 +385,13 @@ export class WebView implements View, ReloadableView {
     // `did-attach` can fire as the element is inserted. Install every guest
     // listener first so the queued real navigation cannot be missed.
     this.attachWebviewEvents();
-    body.appendChild(this.webview);
+    this.attachInspector();
+    this.stageEl.appendChild(this.webview);
+    body.appendChild(this.stageEl);
+    body.appendChild(this.overlayEl);
     body.appendChild(this.errorEl);
     this.containerEl.appendChild(body);
+    this.applyViewport(this.viewport, false);
   }
 
   /** Hidden-by-default error overlay shown on a guest crash or main-frame load failure. */
@@ -258,17 +433,477 @@ export class WebView implements View, ReloadableView {
   private makeButton(icon: string, title: string, onClick: (e: MouseEvent) => void): HTMLButtonElement {
     const btn = document.createElement("button");
     btn.className = "web-view-toolbar-btn clickable-icon";
+    btn.type = "button";
     btn.title = title;
     setIcon(btn, icon);
     btn.addEventListener("click", onClick);
     return btn;
   }
 
+  private applyViewport(viewport: Viewport, persist: boolean): void {
+    this.viewport = { ...viewport };
+    const fill = viewport.preset === "fill";
+    this.webview.style.width = fill ? "100%" : `${viewport.width}px`;
+    this.webview.style.height = fill ? "100%" : `${viewport.height}px`;
+    this.containerEl.classList.toggle("is-fill", fill);
+    for (const button of this.containerEl.querySelectorAll<HTMLElement>("[data-viewport-preset]")) {
+      const active = button.dataset.viewportPreset === viewport.preset;
+      button.classList.toggle("is-active", active);
+      button.setAttribute("aria-pressed", String(active));
+    }
+    this.repositionPick("layout");
+    if (persist) this.persistState();
+  }
+
+  // --- Origin-E committed page verification & element picker ----------------
+
+  /**
+   * Returns the embedder-verified HTTP(S) `WebViewerPageTarget` for the healthy
+   * main-frame document currently rendered in `<webview>`, or `null` when the
+   * guest is on `about:blank`, a non-HTTP(S) scheme, mid-navigation, crashed,
+   * or showing a failed-load overlay.
+   */
+  getHealthyPageTarget(): WebViewerPageTarget | null {
+    if (!this.committedHealthyUrl || this.guestDead || this.crashHandled || this.failedUrl !== null) {
+      return null;
+    }
+    const committed = parseHttpPageUrl(this.committedHealthyUrl);
+    if (!committed) return null;
+    let liveRaw = "";
+    try {
+      liveRaw = this.webview.getURL();
+    } catch {
+      return null;
+    }
+    if (!liveRaw) return null;
+    const live = parseHttpPageUrl(liveRaw);
+    if (!live || live.origin !== committed.origin) return null;
+    const rawTitle = this.title || this.safeGetWebviewTitle();
+    const title = cleanThreadLabel(rawTitle, PAGE_TITLE_MAX_UNITS);
+    return {
+      url: live.url,
+      origin: committed.origin,
+      title,
+    };
+  }
+
+  private safeGetWebviewTitle(): string {
+    try {
+      return this.webview.getTitle() || "";
+    } catch {
+      return "";
+    }
+  }
+
+  private clearCommittedHealthyUrl(): void {
+    const hadUrl = this.committedHealthyUrl !== null;
+    this.committedHealthyUrl = null;
+    this.threadRequestToken++;
+    this.pick?.forceExit();
+    if (hadUrl || !this.pickBtn.hidden || !this.pickBtn.disabled) {
+      this.updatePickAvailability();
+    }
+  }
+
+  canTogglePick(): boolean {
+    return !this.pickBtn.hidden && !this.pickBtn.disabled;
+  }
+
+  togglePick(via: "pointer" | "keyboard"): void {
+    if (this.canTogglePick()) this.pick?.toggle(via);
+  }
+
+  private updatePickAvailability(): void {
+    const service = this.app.webViewerFeedbackService;
+    if (!service || !service.hasAnyHandler()) {
+      this.pickBtn.hidden = true;
+      this.pickBtn.disabled = true;
+      this.pick?.setAvailable(false);
+      return;
+    }
+    const target = this.getHealthyPageTarget();
+    const available = target !== null && this.app.webViewerFeedback.has(target);
+    if (target && available) {
+      this.handlerName = service.describeHandler(target) ?? this.handlerName;
+    }
+    this.pickBtn.hidden = !available;
+    this.pickBtn.disabled = !available;
+    this.pick?.setAvailable(available);
+  }
+
+  private attachInspector(): void {
+    const registry = this.app.webViewerFeedbackService;
+    if (!registry || !this.app.webViewerFeedback) return;
+    const bridge = new WebViewerInspectorBridge({
+      webview: this.webview as unknown as InspectorWebview,
+      viewSessionId: this.viewSessionId,
+      registry,
+      getPageTarget: () => this.getHealthyPageTarget(),
+      getViewportPreset: () => this.viewport.preset,
+      callbacks: {
+        onHover: (hover) => this.showHover(hover),
+        onSelect: (snapshot) => this.onElementSelected(snapshot),
+        onCancel: () => {
+          this.pick?.cancelFromGuest();
+        },
+        onRect: (report) => this.onGuestRect(report),
+      },
+    });
+
+    const controller = new PickController<WebViewerSelectionSnapshot, WebViewerFeedbackOutcome>({
+      setGuestMode: (mode) => bridge.setMode(mode),
+      submit: async (snapshot, comment) => {
+        const threadId = this.popover?.getSelectedThreadId();
+        if (!threadId) {
+          return {
+            status: "rejected",
+            reason: "invalid",
+            message: "Choose a target thread before sending.",
+            source: "invalid-result",
+          };
+        }
+        return bridge.submit(snapshot, comment, threadId);
+      },
+      canSend: () => Boolean(this.popover?.getSelectedThreadId()),
+      focus: (where) => this.focusPick(where),
+      changed: (state) => this.renderPick(state),
+    });
+
+    const popover = new PickPopover(
+      document,
+      {
+        onComment: (text) => controller.setComment(text),
+        onSend: () => controller.send(),
+        onCancel: () => {
+          controller.cancel();
+        },
+        onDone: () => controller.done(),
+        onEscape: () => {
+          controller.escape();
+        },
+        onRepick: () => {
+          controller.repick();
+        },
+      },
+      {
+        webViewer: {
+          onThreadChange: () => controller.notifyChanged(),
+          onRefreshThreads: () => {
+            const page = this.getHealthyPageTarget() ?? this.pick?.state.snapshot?.page ?? null;
+            if (page) void this.loadThreadsForPage(page, false);
+          },
+        },
+      },
+    );
+    popover.el.hidden = true;
+    document.body.appendChild(popover.el);
+
+    this.rectCoalescer = createRectCoalescer({
+      schedule: (cb) => window.requestAnimationFrame(cb),
+      cancel: (h) => window.cancelAnimationFrame(h),
+      apply: (box) => {
+        if (this.pick?.state.phase === "popover") {
+          this.liveRect = box;
+          this.liveViewport = this.pendingViewport;
+          this.repositionPick("rect");
+        } else {
+          this.earlyRect = box;
+        }
+      },
+    });
+
+    popover.el.addEventListener("mouseenter", () => {
+      this.pointerInPopover = true;
+    });
+    popover.el.addEventListener("mouseleave", () => {
+      this.pointerInPopover = false;
+      this.repositionPick("settle");
+    });
+    popover.el.addEventListener("focusout", () => {
+      window.setTimeout(() => this.repositionPick("settle"), 0);
+    });
+
+    if (typeof ResizeObserver !== "undefined") {
+      this.layoutObserver = new ResizeObserver(() => this.repositionPick("layout"));
+      this.layoutObserver.observe(this.containerEl);
+      this.layoutObserver.observe(this.stageEl);
+      this.layoutObserver.observe(this.webview);
+      this.layoutObserver.observe(popover.el);
+    }
+
+    const onWindowResize = () => this.repositionPick("layout");
+    const onStageScroll = () => this.repositionPick("layout");
+    const onWindowKeydown = (event: KeyboardEvent) => this.onWindowKeydown(event);
+    window.addEventListener("resize", onWindowResize);
+    window.addEventListener("keydown", onWindowKeydown);
+    this.stageEl.addEventListener("scroll", onStageScroll, { passive: true });
+    const unsubFeedback = this.app.webViewerFeedback.onDidChange(() => this.updatePickAvailability());
+    const unsubLeaf = (this.app.workspace?.on?.("active-leaf-change", () => {
+      this.repositionPick("layout");
+    }) ?? undefined) as unknown as (() => void) | undefined;
+
+    this.cleanups.push(
+      () => window.removeEventListener("resize", onWindowResize),
+      () => window.removeEventListener("keydown", onWindowKeydown),
+      () => this.stageEl.removeEventListener("scroll", onStageScroll),
+      () => unsubFeedback(),
+      () => {
+        try {
+          unsubLeaf?.();
+        } catch {
+          /* workspace tearing down */
+        }
+      },
+    );
+
+    this.bridge = bridge;
+    this.pick = controller;
+    this.popover = popover;
+    this.updatePickAvailability();
+  }
+
+  private detachInspector(): void {
+    this.threadRequestToken++;
+    this.layoutObserver?.disconnect();
+    this.layoutObserver = undefined;
+    this.rectCoalescer?.dispose();
+    this.rectCoalescer = null;
+    this.pick?.dispose();
+    this.bridge?.dispose();
+    this.popover?.dispose();
+    this.popover?.el.remove();
+    this.pick = null;
+    this.bridge = null;
+    this.popover = null;
+    this.liveRect = null;
+    this.liveViewport = null;
+    this.pendingViewport = null;
+    this.earlyRect = null;
+    this.liveRectFor = null;
+    this.pointerInPopover = false;
+    this.offscreen = false;
+  }
+
+  private onElementSelected(snapshot: WebViewerSelectionSnapshot): void {
+    if (this.closed || !this.pick || !this.popover) return;
+    this.popover.setOrigin(snapshot.page.origin);
+    this.popover.setThreadListState({ status: "loading", reset: true });
+    this.pick.selected(snapshot, document.activeElement === this.webview ? "guest" : "toggle");
+    void this.loadThreadsForPage(snapshot.page, false);
+  }
+
+  private async loadThreadsForPage(page: WebViewerPageTarget, reset: boolean): Promise<void> {
+    if (!this.popover || this.closed) return;
+    const token = ++this.threadRequestToken;
+    this.popover.setThreadListState({ status: "loading", reset });
+    const outcome = await this.app.webViewerFeedbackService.listThreads(page);
+    if (this.closed || token !== this.threadRequestToken || !this.popover) return;
+    if (outcome.status === "ok") {
+      this.popover.setThreadListState({ status: "ready", list: outcome.value });
+    } else {
+      this.popover.setThreadListState({ status: "error", message: outcome.message });
+    }
+    this.repositionPick("layout");
+  }
+
+  private focusPick(where: FocusTarget): void {
+    if (where === "toggle") this.pickBtn.focus();
+    else if (where === "guest") this.webview.focus();
+    else if (where === "comment") this.popover?.focusComment();
+    else if (where === "done") this.popover?.focusDone();
+  }
+
+  private showHover(hover: InspectorHover): void {
+    this.hoverEl.hidden = false;
+    const text = hoverChipText(hover);
+    if (this.hoverEl.textContent !== text) this.hoverEl.textContent = text;
+    this.hoverEl.setAttribute("aria-live", hover.via === "keyboard" ? "polite" : "off");
+  }
+
+  private renderPick(state: WebPickState): void {
+    const picking = state.phase !== "off";
+    this.pickBtn.setAttribute("aria-pressed", String(picking));
+    this.pickBtn.classList.toggle("is-active", picking);
+    this.containerEl.classList.toggle("is-picking", picking);
+    if (state.phase !== "pick") {
+      this.hoverEl.hidden = true;
+      this.hoverEl.textContent = "";
+    }
+    if (state.phase === "pick" && this.lastPickPhase === "off") {
+      this.sentChipEl.hidden = true;
+    }
+    if (state.phase === "off" && this.lastPickPhase === "popover" && this.lastSubmit === "accepted") {
+      this.showSentChip();
+    }
+    this.lastPickPhase = state.phase;
+    this.lastSubmit = state.submit;
+    if (state.submit === "accepted" && state.outcome) {
+      this.lastAcceptedOutcome = state.outcome;
+    }
+    if (state.snapshot !== this.liveRectFor) {
+      this.liveRectFor = state.snapshot;
+      this.liveRect = state.snapshot ? this.earlyRect : null;
+      this.liveViewport = this.liveRect ? this.pendingViewport : null;
+      this.earlyRect = null;
+      this.rectCoalescer?.reset();
+      this.offscreen = false;
+    }
+    if (!state.snapshot) this.earlyRect = null;
+    const popover = this.popover;
+    if (!popover) return;
+    popover.el.hidden = state.phase !== "popover";
+    this.selectionBoxEl.hidden = state.phase !== "popover" || state.elementGone;
+    if (state.phase === "popover") {
+      popover.render(state, this.handlerName, { offscreen: this.offscreen });
+      this.positionPopover(state, "layout");
+    }
+  }
+
+  private showSentChip(): void {
+    const chip = this.sentChipEl;
+    const outcome = this.lastAcceptedOutcome;
+    const queued = outcome?.status === "accepted" && outcome.delivery === "queued";
+    chip.title = `Feedback ${queued ? "queued for" : "sent to"} ${this.handlerName}`;
+    const icon = document.createElement("span");
+    icon.className = "web-view-sent-icon";
+    icon.setAttribute("aria-hidden", "true");
+    setIcon(icon, "circle-check");
+    const text = document.createElement("span");
+    text.textContent = outcome?.message || (queued ? "Queued" : "Sent");
+    chip.replaceChildren(icon, text);
+    chip.hidden = false;
+  }
+
+  private onGuestRect(report: InspectRectMessage): void {
+    if (report.target === "hover") {
+      if (!report.connected || !report.rect) {
+        this.hoverEl.hidden = true;
+        this.hoverEl.textContent = "";
+        return;
+      }
+      if (report.tag) this.showHover({ tag: report.tag, rect: report.rect, via: "pointer" });
+      return;
+    }
+    if (!report.connected || !report.rect) {
+      this.pick?.elementChanged();
+      return;
+    }
+    this.pick?.elementReturned();
+    this.pendingViewport = report.viewport ?? null;
+    this.rectCoalescer?.push(report.rect);
+  }
+
+  private repositionPick(reason: "layout" | "rect" | "settle"): void {
+    const state = this.pick?.state;
+    if (state && state.phase === "popover") this.positionPopover(state, reason);
+  }
+
+  private positionPopover(state: WebPickState, reason: "layout" | "rect" | "settle"): void {
+    const popover = this.popover;
+    const snapshot = state.snapshot;
+    if (!popover || !snapshot) return;
+    const overlayRect = this.overlayEl.getBoundingClientRect();
+    const showing =
+      overlayRect.width > 0 &&
+      overlayRect.height > 0 &&
+      this.containerEl.getClientRects().length > 0 &&
+      this.errorEl.classList.contains("is-hidden");
+    popover.el.style.visibility = showing ? "" : "hidden";
+    this.selectionBoxEl.style.visibility = showing ? "" : "hidden";
+    if (!showing) return;
+
+    const frame = this.webview.getBoundingClientRect();
+    const box = this.liveRect ?? snapshot.selection.boundingBox.viewport;
+    const origin = {
+      left: frame.left,
+      top: frame.top,
+      clientLeft: this.webview.clientLeft,
+      clientTop: this.webview.clientTop,
+      clientWidth: this.webview.clientWidth,
+      clientHeight: this.webview.clientHeight,
+    };
+    const guestViewport = (this.liveRect ? this.liveViewport : null) ?? snapshot.selection.viewport;
+    const mapped = selectionBoxToStage(box, origin, overlayRect, guestViewport);
+    this.selectionBoxEl.style.left = `${mapped.left}px`;
+    this.selectionBoxEl.style.top = `${mapped.top}px`;
+    this.selectionBoxEl.style.width = `${mapped.width}px`;
+    this.selectionBoxEl.style.height = `${mapped.height}px`;
+
+    const offscreen =
+      !state.elementGone &&
+      isElementOffscreen(
+        {
+          left: overlayRect.left + mapped.left,
+          top: overlayRect.top + mapped.top,
+          right: overlayRect.left + mapped.left + mapped.width,
+          bottom: overlayRect.top + mapped.top + mapped.height,
+        },
+        {
+          left: overlayRect.left,
+          top: overlayRect.top,
+          right: overlayRect.right,
+          bottom: overlayRect.bottom,
+        },
+      );
+    if (offscreen !== this.offscreen) {
+      this.offscreen = offscreen;
+      popover.render(state, this.handlerName, { offscreen });
+    }
+
+    const focusInside = popover.el.contains(document.activeElement);
+    if (!shouldMovePopover({ reason, pointerInside: this.pointerInPopover, focusInside })) return;
+    const win = { width: window.innerWidth, height: window.innerHeight };
+    const bounds = choosePopoverBounds(overlayRect, win);
+    popover.el.style.maxHeight = `${popoverMaxHeight(bounds)}px`;
+    const size = {
+      width: popover.el.offsetWidth,
+      height: Math.min(popover.el.offsetHeight, popoverMaxHeight(bounds)),
+    };
+    const placed = popoverPosition(
+      {
+        x: overlayRect.left + mapped.left - bounds.left,
+        y: overlayRect.top + mapped.top - bounds.top,
+        width: mapped.width,
+        height: mapped.height,
+      },
+      size,
+      { width: bounds.width, height: bounds.height },
+    );
+    const final = clampIntoWindow(
+      { left: bounds.left + placed.left, top: bounds.top + placed.top },
+      size,
+      win,
+    );
+    popover.el.style.left = `${Math.round(final.left)}px`;
+    popover.el.style.top = `${Math.round(final.top)}px`;
+  }
+
+  private onWindowKeydown(event: KeyboardEvent): void {
+    const pick = this.pick;
+    if (!pick || pick.state.phase === "off" || event.defaultPrevented || event.isComposing) return;
+    if (!this.containerEl.isConnected || this.containerEl.getClientRects().length === 0) return;
+    if (isEditableElement(document.activeElement)) return;
+    if (event.key === "Escape") {
+      if (pick.escape()) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+      return;
+    }
+    if (pick.state.phase !== "pick" || event.metaKey || event.ctrlKey || event.altKey) return;
+    if (event.key === "[" || event.key === "]") {
+      event.preventDefault();
+      this.bridge?.sendKey(event.key === "[" ? "parent" : "child");
+    }
+  }
+
+  // --- Guest WebView lifecycle ---------------------------------------------
+
   private attachWebviewEvents(): void {
-    const onNavigate = (e: Event): boolean => {
+    const onNavigate = (e: Event): string | null => {
       const url = (e as unknown as { url: string }).url;
-      if (this.isBootstrapEvent(url)) return false;
-      if (this.isSupersededUrl(url)) return false;
+      if (this.isBootstrapEvent(url)) return null;
+      if (this.isSupersededUrl(url)) return null;
       this.requestedUrl = url;
       this.dispatchedUrl = url;
       this.supersededUrls.clear();
@@ -282,7 +917,7 @@ export class WebView implements View, ReloadableView {
       }
       this.updateNavButtons();
       this.persistState();
-      return true;
+      return url;
     };
     const onTitleUpdated = (e: Event) => {
       const url = this.webview.getURL();
@@ -298,7 +933,26 @@ export class WebView implements View, ReloadableView {
     // overlay is cleared here and deliberately NOT in dom-ready, which would
     // otherwise hide the error the instant it was shown.
     const onNavigateSuccess = (e: Event) => {
-      if (onNavigate(e)) this.clearError();
+      const url = onNavigate(e);
+      if (url === null) return;
+      this.clearError();
+      this.committedHealthyUrl = parseHttpPageUrl(url)?.url ?? null;
+      if (!this.committedHealthyUrl) this.pick?.forceExit();
+      this.updatePickAvailability();
+    };
+    const onNavigateInPage = (e: Event) => {
+      const detail = e as unknown as { url: string; isMainFrame?: boolean };
+      if (detail.isMainFrame === false) return;
+      const url = onNavigate(e);
+      if (url === null) return;
+      const parsed = parseHttpPageUrl(url);
+      this.committedHealthyUrl = parsed?.url ?? null;
+      if (!this.committedHealthyUrl) {
+        this.pick?.forceExit();
+      } else {
+        this.pick?.pageReloaded();
+      }
+      this.updatePickAvailability();
     };
     const onAttach = () => {
       this.guestAttached = true;
@@ -306,9 +960,14 @@ export class WebView implements View, ReloadableView {
     const onStartNavigation = (e: Event) => {
       const { url, isInPlace, isMainFrame } = e as unknown as DidStartNavigationEventLike;
       if (this.isBootstrapEvent(url)) return;
-      if (isMainFrame && !isInPlace && sameNavigation(url, this.dispatchedUrl)) {
-        this.activeNavigationStarted = true;
-        this.activeNavigationUrls = new Set([navigationKey(url)]);
+      if (isMainFrame && !isInPlace) {
+        if (!this.isSupersededUrl(url)) {
+          this.clearCommittedHealthyUrl();
+        }
+        if (sameNavigation(url, this.dispatchedUrl)) {
+          this.activeNavigationStarted = true;
+          this.activeNavigationUrls = new Set([navigationKey(url)]);
+        }
       }
     };
     const onRedirect = (e: Event) => {
@@ -331,6 +990,7 @@ export class WebView implements View, ReloadableView {
         this.dispatchNavigation(this.requestedUrl);
       }
       this.updateNavButtons();
+      this.updatePickAvailability();
     };
 
     // Guest renderer died (crash, OOM, kill). Electron 42 nests the payload
@@ -356,26 +1016,15 @@ export class WebView implements View, ReloadableView {
       this.activeNavigationUrls.clear();
       this.activeNavigationStarted = false;
       this.failedUrl = failedUrl || this.currentUrl;
+      this.clearCommittedHealthyUrl();
       this.showError(
         "This page failed to load",
         `${errorDescription || "Load failed"} (${this.failedUrl})`
       );
     };
 
-    // The guest called `window.close()`. Chromium destroys a real popup window
-    // at this point; a `<webview>` guest instead just emits this and keeps
-    // rendering, so without handling it a page that closes itself — an OAuth
-    // popup finishing its handshake, a "print then close" flow — leaves a
-    // dead-looking tab behind. Detaching the leaf is the tab-hosting
+    // The guest called `window.close()`. Detaching the leaf is the tab-hosting
     // equivalent of closing the window.
-    //
-    // Deliberately unconditional, and knowingly more permissive than a browser:
-    // Chromium ignores `window.close()` on a window script did not open, but
-    // Geode denies real popups and reparents them into ordinary tabs (see
-    // main.ts's window-open handler), so there is no surviving record of which
-    // tabs were script-opened to gate on. Honoring every `window.close()` keeps
-    // self-closing pages working; the cost is that a page can close its own
-    // tab even when the user opened it, which is visible and recoverable.
     const onGuestClose = () => {
       void this.leaf.detach().catch(() => { /* leaf already gone */ });
     };
@@ -387,7 +1036,7 @@ export class WebView implements View, ReloadableView {
     this.webview.addEventListener("did-start-navigation", onStartNavigation);
     this.webview.addEventListener("did-redirect-navigation", onRedirect);
     this.webview.addEventListener("did-navigate", onNavigateSuccess);
-    this.webview.addEventListener("did-navigate-in-page", onNavigate);
+    this.webview.addEventListener("did-navigate-in-page", onNavigateInPage);
     this.webview.addEventListener("page-title-updated", onTitleUpdated);
     this.webview.addEventListener("dom-ready", onDomReady);
     this.webview.addEventListener("render-process-gone", onRenderProcessGone);
@@ -401,7 +1050,7 @@ export class WebView implements View, ReloadableView {
       () => this.webview.removeEventListener("did-start-navigation", onStartNavigation),
       () => this.webview.removeEventListener("did-redirect-navigation", onRedirect),
       () => this.webview.removeEventListener("did-navigate", onNavigateSuccess),
-      () => this.webview.removeEventListener("did-navigate-in-page", onNavigate),
+      () => this.webview.removeEventListener("did-navigate-in-page", onNavigateInPage),
       () => this.webview.removeEventListener("page-title-updated", onTitleUpdated),
       () => this.webview.removeEventListener("dom-ready", onDomReady),
       () => this.webview.removeEventListener("render-process-gone", onRenderProcessGone),
@@ -427,6 +1076,7 @@ export class WebView implements View, ReloadableView {
     this.dispatchedUrl = null;
     this.activeNavigationUrls.clear();
     this.activeNavigationStarted = false;
+    this.clearCommittedHealthyUrl();
 
     const exit = exitCode !== undefined ? ` (exit code ${exitCode})` : "";
     this.showError("This page crashed", `${reason}${exit} at ${this.currentUrl}`);
@@ -441,16 +1091,12 @@ export class WebView implements View, ReloadableView {
 
   /**
    * Refine the crash overlay when file-descriptor exhaustion is the real
-   * cause (see describeGuestCrashCause). Best effort and deliberately after
-   * the fact: the generic overlay is shown first so the user is never left
-   * staring at nothing while the probe resolves.
+   * cause (see describeGuestCrashCause).
    */
   private async explainResourceExhaustion(summary: string): Promise<void> {
     const probe = window.geode?.getFdPressure;
     if (typeof probe !== "function") return;
     const message = describeGuestCrashCause(summary, await probe().catch(() => null));
-    // A reload (manual or automatic) may have cleared the overlay while the
-    // probe was in flight; do not resurrect it.
     if (!message || !this.crashHandled) return;
     this.showError(message.title, message.detail);
   }
@@ -459,6 +1105,7 @@ export class WebView implements View, ReloadableView {
     this.errorTitleEl.textContent = title;
     this.errorDetailEl.textContent = detail;
     this.errorEl.classList.remove("is-hidden");
+    this.repositionPick("layout");
   }
 
   /** Hide the overlay and re-arm the crash de-dupe once the guest is healthy again. */
@@ -476,29 +1123,13 @@ export class WebView implements View, ReloadableView {
     return this.failedUrl ?? this.currentUrl;
   }
 
-  /**
-   * User-initiated reload, driving the toolbar button, the error overlay's
-   * Reload, the tab context menu and Cmd+R (`web.reload`).
-   *
-   * Deliberately not `reloadCurrent()`: that assigns `src`, which is a
-   * browser-initiated *navigation*. Whether Chromium collapses it into a
-   * reload is version-dependent, so history state and POST resubmission are
-   * not guaranteed to behave — and on a never-navigated view `currentUrl` is
-   * still the default home page, so it would navigate somewhere the user
-   * never was. A real `reload()` has none of those problems. The one case
-   * that genuinely needs a respawn is a dead guest, handled first.
-   */
   reload(): void {
     if (this.crashHandled) {
-      // A crashed guest WebContents is not reliably reusable, so rebuild it.
       this.reloadCurrent(true);
       return;
     }
-    // The user's attempt gets its own fresh auto-recovery budget.
     this.autoRecovered = false;
     this.clearRecoverTimer();
-    // Discard uncommitted address-bar typing: this is "reload what I'm
-    // looking at", not "go to what I half-typed".
     this.addressInput.value = this.targetUrl;
     this.webview.reload();
   }
@@ -510,23 +1141,13 @@ export class WebView implements View, ReloadableView {
     }
   }
 
-  /**
-   * Respawn the current page. A crashed guest WebContents isn't reliably
-   * reusable across every Electron/macOS build, so a fresh `src` assignment
-   * (which builds a new guest) is used rather than `reload()` — same reasoning
-   * as main.ts's "crashed WebContents is not reliably reusable" window replace.
-   *
-   * @param resetGuard true only for user-initiated reloads, which get a fresh
-   *   single-shot auto-recovery budget. The automatic-recovery path passes
-   *   false so it can't re-arm itself into a loop.
-   */
   private reloadCurrent(resetGuard = false): void {
-    // Read before the state reset below: this is the URL being respawned.
     const url = this.targetUrl;
     this.clearRecoverTimer();
     if (resetGuard) this.autoRecovered = false;
     this.crashHandled = false;
     this.errorEl.classList.add("is-hidden");
+    this.clearCommittedHealthyUrl();
     this.requestedUrl = url;
     this.dispatchedUrl = url;
     this.guestCanLoadUrl = false;
@@ -541,9 +1162,9 @@ export class WebView implements View, ReloadableView {
     this.forwardBtn.classList.toggle("is-disabled", !this.webview.canGoForward());
   }
 
-  /** Persist the current URL into the leaf's view state so session restore reopens to the same page, not just the URL the tab was first opened with. */
+  /** Persist the current URL (and non-fill viewport) into the leaf's view state. */
   private persistState(): void {
-    this.leaf.setPersistedState({ url: this.currentUrl });
+    this.leaf.setPersistedState(this.getState());
     this.app.workspace.trigger("layout-change");
   }
 
@@ -574,17 +1195,13 @@ export class WebView implements View, ReloadableView {
     try {
       navigation = this.webview.loadURL(url);
     } catch {
-      // A guest may disappear between a readiness event and this call. Leave
-      // the latest request queued for the recovered guest's next dom-ready.
       this.guestCanLoadUrl = false;
       this.dispatchedUrl = null;
       this.activeNavigationUrls.clear();
       return;
     }
     void navigation.catch(() => {
-      // Main-frame failures are rendered from did-fail-load. Cancellation of
-      // a superseded request also rejects this promise and is intentionally
-      // silent here.
+      // Main-frame failures are rendered from did-fail-load.
     });
   }
 
@@ -596,10 +1213,12 @@ export class WebView implements View, ReloadableView {
         this.supersededUrls.add(activeUrl);
       }
     }
+    if (!sameNavigation(this.committedHealthyUrl, url)) {
+      this.clearCommittedHealthyUrl();
+    }
     this.requestedUrl = url;
     this.currentUrl = url;
     this.addressInput.value = url;
-    // A fresh navigation gets a clean recovery budget and no stale overlay.
     this.clearRecoverTimer();
     this.autoRecovered = false;
     this.crashHandled = false;
@@ -618,11 +1237,6 @@ export class WebView implements View, ReloadableView {
 
   // --- View / state-round-trip ---------------------------------------------
 
-  /**
-   * The page's own `<title>`, empty until one arrives. Deliberately not
-   * `getDisplayText()`, which falls back to the URL host: a bookmark made
-   * before the title lands should read as the URL, not as "example.com".
-   */
   get pageTitle(): string {
     return this.title;
   }
@@ -642,17 +1256,27 @@ export class WebView implements View, ReloadableView {
 
   /** Called by `WorkspaceLeaf.setViewState` after the view is mounted. */
   setState(state: WebViewState): void {
-    if (state?.url) this.loadUrl(state.url);
+    this.applyViewport(normalizeViewport(state?.viewport), false);
+    if (state?.url) {
+      this.loadUrl(state.url);
+    } else {
+      this.persistState();
+    }
   }
 
   getState(): WebViewState {
-    return { url: this.currentUrl };
+    if (this.viewport.preset === "fill") {
+      return { url: this.currentUrl };
+    }
+    return { url: this.currentUrl, viewport: { ...this.viewport } };
   }
 
   onOpen(): void {}
 
   onClose(): void {
+    this.closed = true;
     this.clearRecoverTimer();
+    this.committedHealthyUrl = null;
     this.requestedUrl = null;
     this.dispatchedUrl = null;
     this.guestAttached = false;
@@ -661,6 +1285,7 @@ export class WebView implements View, ReloadableView {
     this.supersededUrls.clear();
     this.activeNavigationUrls.clear();
     this.activeNavigationStarted = false;
+    this.detachInspector();
     for (const cleanup of this.cleanups.splice(0)) cleanup();
     this.webview.remove();
   }

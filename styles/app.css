@@ -5607,6 +5607,7 @@ body.is-mobile .empty-state-action-hint {
 /* ---- Web viewer ---- */
 
 .web-view {
+  position: relative;
   flex: 1;
   min-height: 0;
   min-width: 0;
@@ -5622,6 +5623,15 @@ body.is-mobile .empty-state-action-hint {
   padding: 6px 8px;
   border-bottom: 1px solid var(--background-modifier-border);
   background: var(--background-secondary);
+}
+
+.web-view-toolbar > * {
+  flex-shrink: 0;
+}
+
+.web-view-toolbar > .web-view-address {
+  flex: 1 1 120px;
+  min-width: 80px;
 }
 
 .web-view-toolbar-btn.is-disabled {
@@ -5644,8 +5654,81 @@ body.is-mobile .empty-state-action-hint {
   border-color: var(--interactive-accent);
 }
 
-/* Positioned container so the crash/failure overlay can cover just the frame
-   surface while the toolbar (address bar + reload) stays interactive. */
+.web-view-viewports {
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  background: var(--background-primary);
+}
+.web-view-viewport-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-s);
+  background: transparent;
+  color: var(--text-muted);
+  box-shadow: none;
+}
+.web-view-viewport-btn svg { width: 16px; height: 16px; }
+.web-view-viewport-btn:hover { color: var(--text-normal); background: var(--background-modifier-hover); }
+.web-view-viewport-btn.is-active {
+  color: var(--text-normal);
+  background: var(--background-secondary);
+  box-shadow: 0 0 0 1px var(--background-modifier-border);
+}
+.web-view-viewport-btn:focus-visible { outline: 2px solid var(--interactive-accent); outline-offset: 1px; }
+
+.web-view-pick-btn[hidden] { display: none; }
+.web-view-pick-btn:disabled { opacity: 0.35; cursor: default; }
+.web-view-pick-btn[aria-pressed="true"] {
+  color: var(--text-on-accent);
+  background: var(--interactive-accent);
+}
+.web-view-pick-btn:focus-visible { outline: 2px solid var(--interactive-accent); outline-offset: 1px; }
+
+.web-view-hover {
+  flex: 0 1 auto;
+  max-width: 28%;
+  overflow: hidden;
+  padding: 1px 6px;
+  border-radius: var(--radius-s);
+  background: var(--background-primary);
+  color: var(--text-normal);
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-smaller);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.web-view-hover[hidden] { display: none; }
+
+.web-view-sent {
+  display: inline-flex;
+  flex: 0 1 auto;
+  max-width: 30%;
+  align-items: center;
+  gap: 4px;
+  overflow: hidden;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--background-primary);
+  color: var(--text-normal);
+  font-size: var(--font-ui-smaller);
+  white-space: nowrap;
+}
+.web-view-sent[hidden] { display: none; }
+.web-view-sent > span:last-child { overflow: hidden; text-overflow: ellipsis; }
+.web-view-sent-icon { display: inline-flex; color: var(--color-green); }
+.web-view-sent-icon svg { width: 14px; height: 14px; }
+
+/* Positioned container so the picker overlay (z-index: 5) and crash/failure
+   overlay (z-index: 10) cover just the stage while the toolbar stays interactive. */
 .web-view-body {
   position: relative;
   flex: 1;
@@ -5654,12 +5737,63 @@ body.is-mobile .empty-state-action-hint {
   display: flex;
 }
 
-.web-view-frame {
-  flex: 1;
-  min-height: 0;
-  width: 100%;
+.web-view-stage {
   display: flex;
+  flex: 1 1 auto;
+  align-items: flex-start;
+  min-width: 0;
+  min-height: 0;
+  padding: 24px;
+  overflow: auto;
+  background: var(--background-secondary);
 }
+
+.web-view-frame {
+  flex: 0 0 auto;
+  margin: 0 auto;
+  max-width: none;
+  display: flex;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  background: white;
+  box-shadow: 0 12px 32px rgb(0 0 0 / 18%);
+}
+
+.web-view.is-fill .web-view-stage {
+  padding: 0;
+  align-items: stretch;
+  overflow: hidden;
+  background: var(--background-primary);
+}
+
+.web-view.is-fill .web-view-frame {
+  flex: 1 1 auto;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.web-view-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.web-view-selection-box {
+  position: absolute;
+  box-sizing: border-box;
+  border: 2px solid var(--interactive-accent);
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--interactive-accent) 12%, transparent);
+  pointer-events: none;
+}
+.web-view-selection-box[hidden] { display: none; }
 
 .artifact-view {
   display: flex;
@@ -6129,7 +6263,7 @@ body.is-mobile .empty-state-action-hint {
 .web-view-error {
   position: absolute;
   inset: 0;
-  z-index: 1;
+  z-index: 10;
   display: flex;
   flex-direction: column;
   align-items: center;
