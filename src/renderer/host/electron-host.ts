@@ -17,7 +17,7 @@ export type ElectronPreloadApi = Pick<GeodeApi,
 > & Partial<Pick<GeodeApi,
   "getEffectivePolicy" | "removeRecentVault" | "getDefaultVaultLocation" | "chooseParentFolder" | "createVault" | "vaultPack" | "list" | "scanForSync" | "scanForSyncBlocked" | "scanForRefresh" | "httpRequest" | "cancelHttpRequest" | "claimSyncOwner" | "hubSync" | "icloudContainer" | "privateSyncStorage" | "releaseSyncOwner" | "applySyncMutation" | "onSyncPrepare" | "onSyncRelease" | "readDeviceState" | "writeDeviceState" | "removeDeviceState" |
   "externalRoots" | "isSecretStorageAvailable" | "readSecret" | "writeSecret" | "removeSecret" | "readAppSecret" | "writeAppSecret" | "removeAppSecret" |
-  "readHashCache" | "upsertHashCacheEntries" | "pruneHashCache"
+  "readHashCache" | "upsertHashCacheEntries" | "pruneHashCache" | "queryMetadataMentionCandidates"
 >>;
 
 export function createElectronHost(preload: ElectronPreloadApi): HostServices {
@@ -157,6 +157,9 @@ export function createElectronHost(preload: ElectronPreloadApi): HostServices {
       writeCache: (data) => preload.writeMetadataCache(data),
       startBackgroundIndexer: () => preload.startMetadataIndexer(),
       onMessage: (cb) => preload.onMetadataIndexerMessage(cb),
+      ...(preload.queryMetadataMentionCandidates
+        ? { queryMentionCandidates: (keys) => preload.queryMetadataMentionCandidates!(keys) }
+        : {}),
     },
     navigation: {
       openExternal: (url) => preload.openExternal(url),

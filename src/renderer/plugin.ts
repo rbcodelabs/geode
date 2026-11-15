@@ -36,11 +36,25 @@ interface DataSaveState {
   plugin: Plugin; data: unknown; pending: boolean;
   timer?: ReturnType<typeof setTimeout>; inFlight?: Promise<void>;
   waiters: Array<{ resolve: () => void; reject: (error: unknown) => void }>;
-  /** Text this plugin instance last wrote; ignored for other instances, whose view of the disk may differ (reload, vault switch). */
-  lastWritten?: { by: Plugin; text: string };
+  /** Length + 128-bit digest of the payload this plugin instance last wrote; avoids retaining multi-MB JSON strings in memory. */
+  lastWritten?: { by: Plugin; length: number; digest: string };
 }
 const dataSaves = new Map<string, DataSaveState>();
 let unloadHookInstalled = false;
+
+function hashPayloadDigest(text: string): string {
+  let h1 = 0xcbf29ce484222325n;
+  let h2 = 0x84222325cbf29ce4n;
+  const p1 = 0x100000001b3n;
+  const p2 = 0x100000001b5n;
+  const mask = 0xffffffffffffffffn;
+  for (let i = 0; i < text.length; i++) {
+    const code = BigInt(text.charCodeAt(i));
+    h1 = ((h1 ^ code) * p1) & mask;
+    h2 = (((h2 + code) ^ (h1 >> 31n)) * p2) & mask;
+  }
+  return `${h1.toString(16).padStart(16, "0")}${h2.toString(16).padStart(16, "0")}`;
+}
 
 function scheduleDataSave(path: string, plugin: Plugin, data: unknown): Promise<void> {
   installUnloadHook();
@@ -71,13 +85,18 @@ function flushDataSave(path: string): Promise<void> {
   if (state.inFlight) return state.inFlight.then(() => flushDataSave(path), () => flushDataSave(path));
   if (!state.pending) return Promise.resolve();
   const waiters = state.waiters, data = state.data, plugin = state.plugin;
-  state.waiters = []; state.pending = false;
+  state.waiters = []; state.pending = false; state.data = undefined;
   let text: string | undefined;
   try { text = serializeData(data); } catch (error) { for (const w of waiters) w.reject(error); return Promise.resolve(); }
-  if (text === undefined || (state.lastWritten?.by === plugin && text === state.lastWritten.text)) { for (const w of waiters) w.resolve(); return Promise.resolve(); }
+  if (text === undefined) { for (const w of waiters) w.resolve(); return Promise.resolve(); }
+  const digest = hashPayloadDigest(text);
+  if (state.lastWritten?.by === plugin && state.lastWritten.length === text.length && state.lastWritten.digest === digest) {
+    for (const w of waiters) w.resolve();
+    return Promise.resolve();
+  }
   const payload = text;
   const work = window.geode.write(path, payload).then(
-    () => { state.lastWritten = { by: plugin, text: payload }; notifyThreadsDataSaved(plugin, data); for (const w of waiters) w.resolve(); },
+    () => { state.lastWritten = { by: plugin, length: payload.length, digest }; notifyThreadsDataSaved(plugin, data); for (const w of waiters) w.resolve(); },
     (error) => { for (const w of waiters) w.reject(error); },
   ).finally(() => { state.inFlight = undefined; if (state.pending) armDataSave(path, state); });
   state.inFlight = work;
@@ -155,10 +174,17 @@ export abstract class Plugin extends Component {
     this.unload();
     // Flush after unload() so a final save issued from onunload() is included; failures reach saveData() callers.
     await this.flushData().catch(() => {});
-    while (this.pendingTeardowns.size) {
-      const results = await Promise.allSettled([...this.pendingTeardowns]);
-      const failed = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
-      if (failed) throw failed.reason;
+    try {
+      while (this.pendingTeardowns.size) {
+        const results = await Promise.allSettled([...this.pendingTeardowns]);
+        const failed = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
+        if (failed) throw failed.reason;
+      }
+    } finally {
+      const saveState = dataSaves.get(this.dataPath());
+      if (saveState && saveState.plugin === this && !saveState.pending && !saveState.inFlight && !saveState.timer) {
+        dataSaves.delete(this.dataPath());
+      }
     }
   }
 

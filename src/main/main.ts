@@ -54,6 +54,7 @@ import {
   openMetadataDb,
   pruneHashCacheEntries,
   pruneMetadataEntries,
+  queryMentionCandidates,
   readAllMetadataEntries,
   readHashCacheEntries,
   replaceAllMetadataEntries,
@@ -1478,10 +1479,26 @@ function registerIpc() {
     if (!session) return null;
     try {
       session.metadataDb ??= openMetadataDb(session.root);
-      return readAllMetadataEntries(session.metadataDb);
+      return readAllMetadataEntries(session.metadataDb, { includeMentionKeys: false });
     } catch (error) {
       console.error("Failed to read metadata cache", error);
       return null;
+    }
+  });
+
+  ipcMain.handle("metadata-cache-query-mentions", async (e, keys: unknown) => {
+    const win = BrowserWindow.fromWebContents(e.sender);
+    const session = win && sessions.get(win.id);
+    if (!session || session.generation < 0) return [];
+    if (!Array.isArray(keys) || !keys.every((k) => typeof k === "string")) {
+      throw new Error("Invalid mention query keys");
+    }
+    try {
+      session.metadataDb ??= openMetadataDb(session.root);
+      return queryMentionCandidates(session.metadataDb, keys);
+    } catch (error) {
+      console.error("Failed to query metadata mention candidates", error);
+      return [];
     }
   });
 

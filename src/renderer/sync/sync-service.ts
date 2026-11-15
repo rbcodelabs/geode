@@ -10,6 +10,7 @@ import { DEFAULT_SYNC_SCOPE, isPathInSyncScope, validateSyncPath, type SyncScope
 import { projectPortableConfig, serializePortableConfig } from "./portable-config";
 import { buildHistoryPorts, type SyncHostLite } from "../../sync-core/ports";
 import { SyncRailError, deleteLimitRefusal, knownFileCount, shrunkScanRefusal, type SyncRailOverrides } from "../../sync-core/rails";
+import { DEFAULT_SETTLE_MS, DEFAULT_SETTLE_RULES, SETTLE_REASON, settleDelayMs, settleMsFor } from "../../sync-core/settle";
 
 /** Per-attempt rail context handed to the operation of a provider that opted in with `safetyRails`. */
 interface RailContext { overrides: SyncRailOverrides; stats: { known: number; found: number }; stateKey: string }
@@ -39,6 +40,8 @@ export class SyncService extends Events implements SyncApi {
   private lease?: string;
   private generation = 0;
   private debounce?: ReturnType<typeof setTimeout>;
+  private settleTimer?: ReturnType<typeof setTimeout>;
+  private lastBlockedKey = "";
   private polling?: ReturnType<typeof setInterval>;
   /** Retry delays after failed runs: 2s doubling to a 5 minute cap, equal jitter; reset by a completed run. */
   private backoff = new Backoff({ baseMs: 2000, maxMs: 300_000, jitter: "equal" });
@@ -86,7 +89,11 @@ export class SyncService extends Events implements SyncApi {
     if (this.observedRoot !== this.vaultId()) { this.renameHints.clear(); this.observedRoot = this.vaultId(); }
     this.stopObserving ??= this.host.vaultFiles.onChange(event => {
       if (event.renamedFrom) { const original = this.renameHints.get(event.renamedFrom) ?? event.renamedFrom; this.renameHints.delete(event.renamedFrom); this.renameHints.set(event.path, original); }
-      if (!event.mutationId) this.schedule();
+      if (!event.mutationId) {
+        const delay = event.event !== "delete" && !event.renamedFrom ? settleDelayMs(event.path) : DEFAULT_SETTLE_MS;
+        if (delay > DEFAULT_SETTLE_MS) this.scheduleSettle(delay + 250);
+        else this.schedule();
+      }
     });
   }
   register(owner: string, provider: Provider): () => Promise<void> {
@@ -191,14 +198,25 @@ export class SyncService extends Events implements SyncApi {
     this.selected = provider; this.observe();
     if (state.paused) { this.setStatus({ state: "paused", providerId: provider.id, conflicts: 0 }); return; }
     if (!state.binding) { this.setStatus({ state: "preview", providerId: provider.id, conflicts: 0, message: "Create or join a shared vault" }); return; }
-    let resumed = false;
+    let resumed = false, progressed = false;
     const preview = await this.withController(async (controller, signal) => {
       const current = await controller.getState(signal);
-      if (current.approved) { resumed = true; return controller.run({}, signal); }
+      if (current.approved) {
+        resumed = true;
+        const result = await controller.run({}, signal);
+        progressed = controller.didLastRunProgress();
+        return result;
+      }
       return controller.preview(signal);
     });
     this.summarize(preview);
-    if (resumed) { this.polling ??= setInterval(() => this.poll(), 30_000); if (this.status.state === "pending") this.schedule(0); }
+    if (resumed) {
+      this.polling ??= setInterval(() => this.poll(), 30_000);
+      if (this.status.state === "pending") {
+        if (progressed) this.schedule(0);
+        else this.scheduleSettle(this.pendingSettleDelayMs());
+      }
+    }
   }
   async activate(id: string): Promise<void> {
     const provider = this.providers.get(id); if (!provider) throw new Error("Unknown sync provider");
@@ -263,12 +281,15 @@ export class SyncService extends Events implements SyncApi {
     });
   }
   /** Narrow adapter over HostServices for the platform-neutral history engine (src/sync-core). */
-  private liteHost(): SyncHostLite {
+  private liteHost(stateCache?: { key: string; read: () => Promise<HistoryControllerState | null>; write: (value: unknown) => Promise<void> }): SyncHostLite {
     const host = this.host;
     return {
       vault: { reconcileScan: () => host.vaultFiles.reconcileScan(), readBinary: path => host.vaultFiles.readBinary(path) },
       hashCache: host.hashCache && { readAll: () => host.hashCache!.readAll(), upsertBatch: entries => host.hashCache!.upsertBatch(entries), prune: keep => host.hashCache!.prune(keep) },
-      deviceState: { read: key => host.deviceState.read(key), write: (key, value) => host.deviceState.write(key, value) },
+      deviceState: {
+        read: key => (stateCache && key === stateCache.key ? stateCache.read() as Promise<any> : host.deviceState.read(key)),
+        write: (key, value) => (stateCache && key === stateCache.key ? stateCache.write(value) : host.deviceState.write(key, value)),
+      },
       safety: { storage: (token, binding, request) => host.syncSafety!.storage(token, binding, request), apply: (token, input) => host.syncSafety!.apply(token, input) },
       portableConfig: {
         project: async scope => (await projectPortableConfig(host.config, scope)).map(document => ({
@@ -302,7 +323,18 @@ export class SyncService extends Events implements SyncApi {
       this.lease ??= await this.host.syncSafety!.claimOwner() ?? undefined; assertContext(); if (!this.lease) throw new Error("Another window owns sync for this vault");
       const lease = this.lease; const bindingKey = await hash(encoded([provider.id, state.binding])); assertContext();
       const stateKey = `sync-history/${root}/${bindingKey}`; this.historyStateKey = stateKey;
-      const { ports, storage } = buildHistoryPorts(this.liteHost(), { provider, scope: state.scope, bindingVaultId: state.binding.vaultId, bindingKey, stateKey, lease, assertContext, renameHints: this.renameHints, portableChanged: this.portableChanged });
+      let cachedHistoryState: { loaded: boolean; value: HistoryControllerState | null } = { loaded: false, value: null };
+      const readHistoryState = async (): Promise<HistoryControllerState | null> => {
+        if (!cachedHistoryState.loaded) {
+          cachedHistoryState = { loaded: true, value: await this.host.deviceState.read<HistoryControllerState>(stateKey) };
+        }
+        return cachedHistoryState.value;
+      };
+      const writeHistoryState = async (value: unknown): Promise<void> => {
+        await this.host.deviceState.write(stateKey, value);
+        cachedHistoryState = { loaded: true, value: value as HistoryControllerState };
+      };
+      const { ports, storage } = buildHistoryPorts(this.liteHost({ key: stateKey, read: readHistoryState, write: writeHistoryState }), { provider, scope: state.scope, bindingVaultId: state.binding.vaultId, bindingKey, stateKey, lease, assertContext, renameHints: this.renameHints, portableChanged: this.portableChanged });
       // Rails (ADR 0025) for providers that opt in. The shrunk-scan check lives in the snapshot port so it fires in
       // preview and run alike, before anything is planned from the short scan.
       let rails: RailContext | undefined;
@@ -311,7 +343,8 @@ export class SyncService extends Events implements SyncApi {
         const inner = ports.snapshot, stats = rails.stats;
         ports.snapshot = async onProgress => {
           const snapshot = await inner(onProgress);
-          stats.known = knownFileCount(await this.host.deviceState.read<HistoryControllerState>(stateKey));
+          if (!snapshot.authoritative) return snapshot;
+          stats.known = knownFileCount(await readHistoryState());
           const content = (items: Array<{ namespace: string }>) => items.filter(item => item.namespace === "content").length;
           stats.found = snapshot.entries.filter(entry => entry.namespace === "content" && entry.kind === "file").length + content(snapshot.blocked) + content(snapshot.excluded);
           this.lastScan = { ...stats };
@@ -324,7 +357,7 @@ export class SyncService extends Events implements SyncApi {
       // (crash orphans, pre-release leftovers) and stale sibling bindings. Housekeeping
       // only: a failure here must never block a sync, but a lost context must still abort.
       try {
-        const pending = (await this.host.deviceState.read<{ pendingBatch?: string[] }>(stateKey))?.pendingBatch ?? []; assertContext();
+        const pending = (await readHistoryState())?.pendingBatch ?? []; assertContext();
         await storage({ action: "gc", retain: Array.isArray(pending) ? pending : [] });
         await storage({ action: "sweep", keep: [bindingKey], force: false });
       } catch { assertContext(); }
@@ -348,7 +381,11 @@ export class SyncService extends Events implements SyncApi {
   private summarize(value: HistoryPreview): SyncPreview {
     this.details = value;
     // The blocked-file list is easy to miss on a phone layout; keep it in the device log so it can be read from a connected Mac.
-    if (value.blocked.length) console.log("[sync] blocked:", JSON.stringify(value.blocked.slice(0, 50)));
+    const blockedKey = value.blocked.length ? JSON.stringify(value.blocked) : "";
+    if (blockedKey !== this.lastBlockedKey) {
+      this.lastBlockedKey = blockedKey;
+      if (value.blocked.length) console.log("[sync] blocked:", JSON.stringify(value.blocked.slice(0, 50)));
+    }
     const outstanding = value.uploads + value.downloads + value.deletions;
     // upToDate is false whenever any file is blocked, so blocked files must be excluded here or they would read as an integrity failure.
     const integrityBlocked = !value.upToDate && !outstanding && !value.requiresApproval && !value.conflicts.length && !value.blocked.length;
@@ -385,6 +422,7 @@ export class SyncService extends Events implements SyncApi {
   async run(options: { approvePreview?: boolean } = {}): Promise<SyncRunResult> {
     if (!this.selected) return this.withConditional(() => this.conditional.run(options));
     const shown = this.details;
+    let progressed = false;
     const result = this.summarize(await this.withController(async (controller, signal, rails) => {
       if (rails) {
         // Rail (b), before anything is applied. An approved device is judged on the very plan run() is about to execute
@@ -396,11 +434,20 @@ export class SyncService extends Events implements SyncApi {
           if (refusal) throw refusal;
         };
         if (!state.pendingBatch?.length && !state.approved && shown && shown.signature === state.previewSignature) judge(shown);
-        return controller.run({ ...options, ...(!state.pendingBatch?.length && state.approved ? { beforeExecute: judge } : {}) }, signal);
+        const out = await controller.run({ ...options, ...(!state.pendingBatch?.length && state.approved ? { beforeExecute: judge } : {}) }, signal);
+        progressed = controller.didLastRunProgress();
+        return out;
       }
-      return controller.run(options, signal);
+      const out = await controller.run(options, signal);
+      progressed = controller.didLastRunProgress();
+      return out;
     })); this.backoff.reset(); this.backoffUntil = 0; this.failedRuns = 0; this.renameHints.clear(); this.observe();
-    this.polling ??= setInterval(() => this.poll(), 30_000); if (this.status.state === "pending") this.schedule(0); return result;
+    this.polling ??= setInterval(() => this.poll(), 30_000);
+    if (this.status.state === "pending") {
+      if (progressed) this.schedule(0);
+      else this.scheduleSettle(this.pendingSettleDelayMs());
+    }
+    return result;
   }
   async listConflicts(): Promise<SyncConflict[]> {
     if (!this.selected) return this.conditional.listConflicts();
@@ -477,7 +524,24 @@ export class SyncService extends Events implements SyncApi {
       this.setStatus({ state: "error", providerId: provider.id, conflicts: this.details?.conflicts.length ?? 0, message: error instanceof Error ? error.message : "Sync unavailable" }); this.failedRuns++; this.scheduleRetry(); });
     }, delay);
   }
-  async cancel() { this.cancellations++; try { this.generation++; this.stopObserving?.(); this.stopObserving = undefined; clearTimeout(this.debounce); this.debouncePending = false; this.unlistenOnline(); clearInterval(this.polling); this.polling = undefined; this.abort?.abort(); await this.conditional.cancel(); await this.running?.catch(() => {}); if (this.lease) await this.host.syncSafety?.releaseOwner(this.lease); this.lease = undefined; } finally { this.cancellations--; } }
+  private pendingSettleDelayMs(): number {
+    let maxSettle = 0;
+    for (const item of this.details?.blocked ?? []) {
+      if (item.reason === SETTLE_REASON) maxSettle = Math.max(maxSettle, settleMsFor(item.path, DEFAULT_SETTLE_RULES));
+    }
+    return maxSettle > 0 ? maxSettle + 250 : 30_000;
+  }
+  private scheduleSettle(delay: number) {
+    if (!this.selected || this.closing || this.cancellations || this.status.state === "paused" || this.status.state === "preview") return;
+    const provider = this.selected, root = this.vaultId(), generation = this.generation;
+    clearTimeout(this.settleTimer);
+    this.settleTimer = setTimeout(() => {
+      this.settleTimer = undefined;
+      if (this.selected !== provider || this.vaultId() !== root || this.generation !== generation || this.closing || this.cancellations) return;
+      this.schedule(0);
+    }, delay);
+  }
+  async cancel() { this.cancellations++; try { this.generation++; this.stopObserving?.(); this.stopObserving = undefined; clearTimeout(this.debounce); this.debouncePending = false; clearTimeout(this.settleTimer); this.settleTimer = undefined; this.lastBlockedKey = ""; this.unlistenOnline(); clearInterval(this.polling); this.polling = undefined; this.abort?.abort(); await this.conditional.cancel(); await this.running?.catch(() => {}); if (this.lease) await this.host.syncSafety?.releaseOwner(this.lease); this.lease = undefined; } finally { this.cancellations--; } }
   async disconnect() {
     if (this.closing) throw new Error("Sync is already disconnecting");
     this.closing = true;

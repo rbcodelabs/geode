@@ -45,10 +45,22 @@ export interface VaultConfigAdapter {
  * refreshes an entry's recency; `set` evicts the least-recently-used entry
  * once the cap is exceeded.
  */
-class LruContentCache {
+export class LruContentCache {
   private map = new Map<string, string>();
+  private currentBytes = 0;
 
-  constructor(private readonly maxEntries: number) {}
+  constructor(
+    private readonly maxEntries: number = CONTENT_CACHE_MAX_ENTRIES,
+    private readonly maxBytes: number = DEFAULT_CONTENT_CACHE_MAX_BYTES
+  ) {}
+
+  get size(): number {
+    return this.map.size;
+  }
+
+  get byteLength(): number {
+    return this.currentBytes;
+  }
 
   get(path: string): string | undefined {
     const value = this.map.get(path);
@@ -60,26 +72,42 @@ class LruContentCache {
   }
 
   set(path: string, value: string): void {
-    this.map.delete(path);
+    const previous = this.map.get(path);
+    if (previous !== undefined) {
+      this.currentBytes -= previous.length * 2;
+      this.map.delete(path);
+    }
+    const entryBytes = value.length * 2;
+    if (this.maxEntries <= 0 || this.maxBytes <= 0 || entryBytes > this.maxBytes) return;
     this.map.set(path, value);
-    while (this.map.size > this.maxEntries) {
+    this.currentBytes += entryBytes;
+    while (this.map.size > this.maxEntries || this.currentBytes > this.maxBytes) {
       const oldest = this.map.keys().next().value;
       if (oldest === undefined) break;
+      const evicted = this.map.get(oldest)!;
+      this.currentBytes -= evicted.length * 2;
       this.map.delete(oldest);
     }
   }
 
   delete(path: string): void {
-    this.map.delete(path);
+    const previous = this.map.get(path);
+    if (previous !== undefined) {
+      this.currentBytes -= previous.length * 2;
+      this.map.delete(path);
+    }
   }
 
   clear(): void {
     this.map.clear();
+    this.currentBytes = 0;
   }
 }
 
 /** Cap on the number of files' content kept warm at once — see `LruContentCache`. */
 const CONTENT_CACHE_MAX_ENTRIES = 2_000;
+/** Cap on total UTF-16 string bytes kept warm in `Vault` content cache (32 MiB). */
+export const DEFAULT_CONTENT_CACHE_MAX_BYTES = 32 * 1024 * 1024;
 
 /**
  * Renderer-side vault model. Mirrors the on-disk file tree, performs file
@@ -331,6 +359,11 @@ export class Vault extends Events {
     this.stopHostChanges = null;
     this.ownMutationIds.clear();
     this.pendingHostEvents = [];
+    this.files.clear();
+    this.folders.clear();
+    this.contents.clear();
+    this.reconcileBaseline = null;
+    this.acknowledgedPathsSinceManifest.clear();
     await this.host.vaultRegistry.closeVault();
   }
 

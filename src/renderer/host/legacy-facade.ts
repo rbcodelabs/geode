@@ -65,6 +65,9 @@ export function createLegacyGeodeFacade(host: HostServices): GeodeApi {
     writeMetadataCache: (data) => host.metadataIndex.writeCache(data),
     startMetadataIndexer: () => host.metadataIndex.startBackgroundIndexer(),
     onMetadataIndexerMessage: ((cb: (message: unknown) => void) => host.metadataIndex.onMessage(cb)) as never,
+    ...(host.metadataIndex.queryMentionCandidates
+      ? { queryMetadataMentionCandidates: (keys) => host.metadataIndex.queryMentionCandidates!(keys) }
+      : {}),
     readConfig: (name) => host.config.read(name),
     writeConfig: (name, data) => host.config.write(name, data),
     readDeviceState: key => host.deviceState.read(key),

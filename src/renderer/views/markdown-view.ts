@@ -27,6 +27,7 @@ import { frontmatterEndOffset, livePreview } from "../markdown/live-preview";
 import { editorInfoExtension, livePreviewFlagExtension } from "../editor-info-fields";
 import { foldingExtensions, foldRanges, foldCommand, multipleSelectionExtensions, restoreFolds, savedFolds, type FoldAction } from "../markdown/folding";
 import { resolveBlockBoundary } from "../block-boundary";
+import { parseMetadata } from "../../wiki/metadata";
 import { PagePreviewController } from "../page-preview";
 import { commentDecorations, commentInteractions } from "../comments/editor-extension";
 import { CommentFormatError, narrowCommentRange, parseCommentThreads, validateCommentRange } from "../comments/model";
@@ -1090,7 +1091,10 @@ export class MarkdownView implements View {
     const doc = this.editor.state.doc;
     const cursorLine0 = doc.lineAt(this.editor.state.selection.main.head).number - 1;
     const cache = this.app.metadataCache.getFileCache(this.file);
-    const boundary = resolveBlockBoundary(cursorLine0, cache?.sections ?? [], cache?.listItems ?? []);
+    const structure = cache && (cache.sections !== undefined || cache.listItems !== undefined)
+      ? cache
+      : parseMetadata(doc.toString(), Infinity, Infinity);
+    const boundary = resolveBlockBoundary(cursorLine0, structure.sections ?? [], structure.listItems ?? []);
     if (boundary.kind === "refuse") {
       this.app.notify(boundary.reason);
       return;

@@ -226,6 +226,7 @@ export interface MetadataIndexService {
   writeCache(data: unknown): Promise<void>;
   startBackgroundIndexer(): Promise<true | null>;
   onMessage(cb: (message: unknown) => void): () => void;
+  queryMentionCandidates?(keys: string[]): Promise<string[]>;
 }
 
 export interface NavigationService {
