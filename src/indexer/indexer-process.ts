@@ -7,14 +7,13 @@ import { deleteMetadataEntries, openMetadataDb, readMetadataStats, upsertMetadat
 import {
   DebouncedMetadataCacheWriter,
   METADATA_INDEX_SCHEMA_VERSION,
-  chunkMetadataSnapshot,
+  createMetadataSnapshotStreamer,
   reconcileMetadataIndex,
   resolveMetadataScanCapBytes,
   type MetadataDirtyOp,
   type MetadataFileStat,
   type MetadataReconcileStore,
   type PersistedMetadataIndexEntry,
-  type PersistedMetadataIndexSnapshot,
 } from "./metadata-indexer";
 
 type InitMessage = { type: "initialize"; root: string; files: MetadataFileStat[]; scanCapBytes?: number };
@@ -75,10 +74,14 @@ async function initialize(message: InitMessage): Promise<void> {
   db = openMetadataDb(root);
   const started = performance.now();
   let reconcileStats;
-  // Accumulates only the CHANGED/NEW entries found during reconcile, omitting
-  // mentionKeys from the outbound IPC snapshot (they are persisted in SQLite by
-  // store.upsertBatch and queried on demand via metadata-cache-query-mentions).
-  const changed: Record<string, PersistedMetadataIndexEntry> = {};
+  // Streams only CHANGED/NEW entries found during reconcile in bounded IPC
+  // chunks (<= 50 entries / <= 256 KiB), omitting mentionKeys from outbound
+  // IPC (persisted in SQLite by store.upsertBatch and queried via
+  // metadata-cache-query-mentions) and never retaining a whole-vault map.
+  const streamer = createMetadataSnapshotStreamer(
+    METADATA_INDEX_SCHEMA_VERSION,
+    (part) => parentPort.postMessage(part),
+  );
   const store: MetadataReconcileStore = {
     readStats: () => readMetadataStats(db!),
     upsertBatch: (entries) => upsertMetadataEntries(db!, entries),
@@ -90,9 +93,11 @@ async function initialize(message: InitMessage): Promise<void> {
     readForIndex,
     (content) => parseMetadata(content, scanCapBytes),
     (batch) => {
+      const outbound: Record<string, PersistedMetadataIndexEntry> = {};
       for (const [entryPath, entry] of Object.entries(batch)) {
-        changed[entryPath] = { mtimeMs: entry.mtimeMs, size: entry.size, metadata: entry.metadata };
+        outbound[entryPath] = { mtimeMs: entry.mtimeMs, size: entry.size, metadata: entry.metadata };
       }
+      streamer.pushBatch(outbound);
     },
     (stats) => { reconcileStats = stats; },
     (content) => extractBoundedMentionKeys(content),
@@ -103,8 +108,7 @@ async function initialize(message: InitMessage): Promise<void> {
     duration: performance.now() - started,
     counters: reconcileStats,
   });
-  const snapshot: PersistedMetadataIndexSnapshot = { schemaVersion: METADATA_INDEX_SCHEMA_VERSION, entries: changed };
-  for (const part of chunkMetadataSnapshot(snapshot)) parentPort.postMessage(part);
+  streamer.finish();
   initializing = false;
   for (const event of pendingVaultEvents.splice(0)) await applyVaultEvent(event);
 }

@@ -10,6 +10,7 @@ export interface MetadataCachePage {
   entries: Record<string, PersistedMetadataIndexEntry>;
   examined: number;
   omitted: { corrupt: number; oversized: number };
+  omittedPaths: string[];
   done: boolean;
 }
 const MAX_ROWS = 50, MAX_BYTES = 256 * 1024, IDLE_MS = 30000, TOTAL_MS = 300000;
@@ -52,7 +53,42 @@ export class MetadataCacheReaders {
     const reader = this.owned(owner, generation, token);
     try {
       if (!Number.isSafeInteger(sequence) || sequence !== reader.sequence) throw Error("Invalid metadata page sequence");
-      const page: MetadataCachePage = { schemaVersion: METADATA_INDEX_SCHEMA_VERSION, sequence, entries: Object.create(null), examined: 0, omitted: { corrupt: 0, oversized: 0 }, done: false };
+      const page: MetadataCachePage = {
+        schemaVersion: METADATA_INDEX_SCHEMA_VERSION,
+        sequence,
+        entries: Object.create(null),
+        examined: 0,
+        omitted: { corrupt: 0, oversized: 0 },
+        omittedPaths: [],
+        done: false,
+      };
+      const fitsBudget = (
+        candidateEntries: Record<string, PersistedMetadataIndexEntry>,
+        candidateOmittedPaths: string[],
+      ): boolean =>
+        Buffer.byteLength(
+          JSON.stringify({
+            ...page,
+            entries: candidateEntries,
+            examined: MAX_ROWS,
+            omitted: { corrupt: MAX_ROWS, oversized: MAX_ROWS },
+            omittedPaths: candidateOmittedPaths,
+            done: false,
+          }),
+        ) <= MAX_BYTES;
+      const omitRow = (kind: "corrupt" | "oversized", rowPath: string): boolean => {
+        if (
+          (Object.keys(page.entries).length > 0 || page.omittedPaths.length > 0) &&
+          !fitsBudget(page.entries, [...page.omittedPaths, rowPath])
+        ) {
+          page.examined--;
+          return false;
+        }
+        page.omitted[kind]++;
+        page.omittedPaths.push(rowPath);
+        reader.after = rowPath;
+        return true;
+      };
       const next = reader.db.prepare(`SELECT path, mtime_ms AS mtimeMs, size,
         length(CAST(metadata_json AS BLOB)) AS metadataBytes
         FROM metadata_entries ${reader.after === null ? "" : "WHERE path > ?"} ORDER BY path LIMIT ${MAX_ROWS}`);
@@ -61,21 +97,29 @@ export class MetadataCacheReaders {
         page.examined++;
         // Preflight blob byte lengths before fetching any potentially giant JSON.
         if (row.metadataBytes + Buffer.byteLength(JSON.stringify(row.path)) > MAX_BYTES - 256) {
-          page.omitted.oversized++; reader.after = row.path; continue;
+          if (!omitRow("oversized", row.path)) break;
+          continue;
         }
         let entry: PersistedMetadataIndexEntry;
         const data = reader.db.prepare("SELECT metadata_json FROM metadata_entries WHERE path = ?").get(row.path) as { metadata_json: string };
         try {
           entry = { mtimeMs: row.mtimeMs, size: row.size, metadata: JSON.parse(data.metadata_json) };
           if (!isPersistedMetadataIndexSnapshot({ schemaVersion: METADATA_INDEX_SCHEMA_VERSION, entries: { [row.path]: entry } })) throw Error("Invalid persisted entry");
-        } catch { page.omitted.corrupt++; reader.after = row.path; continue; }
+        } catch {
+          if (!omitRow("corrupt", row.path)) break;
+          continue;
+        }
         page.entries[row.path] = entry;
         // Reserve the largest counters this page may still accrue, so later
-        // omissions cannot grow an already-full response beyond its byte cap.
-        if (Buffer.byteLength(JSON.stringify({ ...page, examined: MAX_ROWS, omitted: { corrupt: MAX_ROWS, oversized: MAX_ROWS } })) > MAX_BYTES) {
+        // counts cannot grow an already-full response beyond its byte cap.
+        if (!fitsBudget(page.entries, page.omittedPaths)) {
           delete page.entries[row.path];
-          if (Object.keys(page.entries).length) { page.examined--; break; }
-          page.omitted.oversized++;
+          if (Object.keys(page.entries).length > 0 || page.omittedPaths.length > 0) {
+            page.examined--;
+            break;
+          }
+          if (!omitRow("oversized", row.path)) break;
+          continue;
         }
         reader.after = row.path;
       }
