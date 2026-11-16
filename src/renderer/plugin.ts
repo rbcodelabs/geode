@@ -10,6 +10,7 @@ import type { QuickSwitcherProvider } from "./quick-switcher-providers";
 import type { SyncProvider } from "./sync/types";
 import type { ArtifactFeedbackRegistration } from "../artifacts/feedback-contract";
 import type { AnyArtifactFeedbackHandler } from "../artifacts/feedback-contract-v2";
+import type { WebViewerFeedbackHandler, WebViewerFeedbackRegistration } from "../web-viewer/feedback-contract";
 import { notifyThreadsDataSaved } from "./integrations/threads-projects";
 
 export type { PluginManifest } from "./plugin-manifest";
@@ -297,6 +298,28 @@ export abstract class Plugin extends Component {
     const registry = this.app.artifactFeedbackService;
     if (!registry || typeof registry.register !== "function") {
       return { status: "unavailable", message: "This host does not support artifact feedback.", dispose() {} };
+    }
+    const registration = registry.register({ pluginId: this.manifest.id, displayName: this.manifest.name }, handler);
+    if (registration.status === "registered") this.register(() => registration.dispose());
+    return registration;
+  }
+
+  /**
+   * Geode-only. Offer to receive element feedback from the built-in Web Viewer
+   * (ADR 0056): the user picks an element on an HTTP(S) page, chooses a target
+   * thread (or `+ New thread`), types a comment, and Geode calls `handler.submit`.
+   *
+   * Owner identity is stamped from `this.manifest` (`id`, `name`) and auto-disposed
+   * on `onunload()`. Handler calls (`canHandle`, `listThreads`, `submit`) are
+   * fault-isolated inside `WebViewerFeedbackService` and deliberately NOT wrapped
+   * in `this.guard()` / `errorHandler`, so a handler throw or timeout never
+   * quarantines the plugin.
+   */
+  registerWebViewerFeedbackHandler(handler: WebViewerFeedbackHandler): WebViewerFeedbackRegistration {
+    this.assertHostGeneration();
+    const registry = this.app.webViewerFeedbackService;
+    if (!registry || typeof registry.register !== "function") {
+      return { status: "unavailable", message: "This host does not support Web Viewer feedback.", dispose() {} };
     }
     const registration = registry.register({ pluginId: this.manifest.id, displayName: this.manifest.name }, handler);
     if (registration.status === "registered") this.register(() => registration.dispose());

@@ -31,6 +31,7 @@ import type { InspectRectMessage } from "../../artifacts/inspector-protocol";
 import { selectionBoxToStage, type GuestViewport } from "../artifacts/pin-collapse";
 import { ArtifactNavigation, leavesPage, type NavigationState, type NavigationWebview } from "../artifacts/artifact-navigation";
 import { displayHotkey, legacyHotkeyToBinding } from "../../shared/hotkey";
+import { VIEWPORTS, VIEWPORT_CONTROLS, type Viewport, type ViewportPreset } from "./viewport-presets";
 
 /**
  * Next animation frame, or 100 ms from now when the page is not visible (a hidden or occluded window never runs
@@ -44,8 +45,7 @@ function scheduleFrameOrTimeout(callback: () => void): () => void {
   return () => { done = true; window.cancelAnimationFrame(frame); window.clearTimeout(timer); };
 }
 
-type ViewportPreset = "desktop" | "tablet" | "mobile" | "custom" | "fill";
-interface Viewport { preset: ViewportPreset; width: number; height: number }
+export type { Viewport, ViewportPreset };
 export interface ArtifactViewState {
   root: string;
   viewport?: Viewport;
@@ -62,21 +62,6 @@ function shortcutLabel(combo: string): string {
   const binding = legacyHotkeyToBinding(combo);
   return binding ? displayHotkey(binding) : combo;
 }
-
-const VIEWPORTS: Record<Exclude<ViewportPreset, "custom">, Viewport> = {
-  // Width/height are fallbacks for status text; a fill frame sizes to the pane.
-  fill: { preset: "fill", width: 1440, height: 900 },
-  desktop: { preset: "desktop", width: 1440, height: 900 },
-  tablet: { preset: "tablet", width: 768, height: 1024 },
-  mobile: { preset: "mobile", width: 390, height: 844 },
-};
-
-const VIEWPORT_CONTROLS: Record<Exclude<ViewportPreset, "custom">, { icon: string; label: string }> = {
-  fill: { icon: "maximize-2", label: "Fill pane" },
-  desktop: { icon: "monitor", label: "Desktop" },
-  tablet: { icon: "tablet", label: "Tablet" },
-  mobile: { icon: "smartphone", label: "Mobile" },
-};
 
 export class ArtifactView implements View, ReloadableView {
   readonly viewType = "geode-artifact";

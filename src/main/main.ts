@@ -2087,6 +2087,29 @@ function isWebViewerGuest(guest: Electron.WebContents): boolean {
 }
 
 /**
+ * Registers `artifact-inspector-preload.js` as a session-level frame preload on
+ * `persist:webviewer` alongside `webviewer-bridge-preload.js` (ADR 0056). Runs
+ * in an isolated preload world with zero `contextBridge` globals and stays
+ * inert while `mode === "off"`. Never registered on `persist:canvas-preview` or
+ * `persist:agent-browser`.
+ */
+function registerWebViewerInspectorPreload(): void {
+  const inspectorPreloadPath = path.join(__dirname, "artifact-inspector-preload.js");
+  if (!fs.existsSync(inspectorPreloadPath)) {
+    console.warn(`[web-viewer] inspector preload file is missing (${inspectorPreloadPath}); element picker is unavailable`);
+    return;
+  }
+  try {
+    session.fromPartition(WEBVIEWER_PARTITION).registerPreloadScript({
+      type: "frame",
+      filePath: inspectorPreloadPath,
+    });
+  } catch (error) {
+    console.warn("[web-viewer] inspector preload registration failed; element picker is unavailable", error);
+  }
+}
+
+/**
  * The Claude Threads plugin's "Agent Browser" partition (a separate repo,
  * `rbcodelabs/agent-threads`, out of scope here). Independent literal, same
  * pattern as WEBVIEWER_PARTITION above relative to web-view.ts: Geode cannot
@@ -2799,6 +2822,7 @@ app.whenReady().then(() => {
     if (!dockIcon.isEmpty()) app.dock.setIcon(dockIcon);
   }
   registerIpc();
+  registerWebViewerInspectorPreload();
   // A crash mid-apply can leave a `.geode-pack-*` staging folder in the folder new vaults go to.
   void sweepStaleStaging(process.env.GEODE_DOCUMENTS_DIR || app.getPath("documents"));
   powerMonitor.on("suspend", () => {

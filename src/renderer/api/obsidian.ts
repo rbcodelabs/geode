@@ -2080,6 +2080,24 @@ export type {
   MarkdownSectionInformation,
   MarkdownCodeBlockProcessor,
 } from "../markdown/processor-registry";
+export type {
+  WebViewerElementScreenshot,
+  WebViewerElementSelection,
+  WebViewerFeedbackDelivery,
+  WebViewerFeedbackHandler,
+  WebViewerFeedbackOwner,
+  WebViewerFeedbackRegistration,
+  WebViewerFeedbackRegistry,
+  WebViewerFeedbackRejectReason,
+  WebViewerFeedbackRequest,
+  WebViewerFeedbackResult,
+  WebViewerPageTarget,
+  WebViewerRect,
+  WebViewerScreenshotOmittedReason,
+  WebViewerThreadList,
+  WebViewerThreadOption,
+  WebViewerViewportPreset,
+} from "../../web-viewer/feedback-contract";
 
 /**
  * Static Markdown-rendering helper mirroring Obsidian's `MarkdownRenderer`
