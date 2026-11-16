@@ -106,6 +106,92 @@ export function chunkMetadataSnapshot(
   return messages;
 }
 
+/**
+ * Streaming counterpart to `chunkMetadataSnapshot` for utility-process vault
+ * reconciliation. Buffers at most one chunk (`<= maxEntries`, `<= maxBytes`)
+ * in memory at a time:
+ * - If all pushed entries fit within a single chunk (including 0 entries),
+ *   `finish()` emits `snapshot-start` with exact `totalEntries`, the single
+ *   chunk (when non-empty), and `snapshot-complete`.
+ * - Once a second chunk starts, `snapshot-start` and each full `snapshot-chunk`
+ *   are emitted immediately and dropped so peak heap is O(1 chunk) rather than
+ *   O(vault size).
+ */
+export function createMetadataSnapshotStreamer(
+  schemaVersion: number,
+  emit: (message: MetadataSnapshotMessage) => void,
+  limits: { maxBytes?: number; maxEntries?: number; expectedEntries?: number } = {},
+): {
+  pushEntry(path: string, entry: PersistedMetadataIndexEntry): void;
+  pushBatch(batch: Record<string, PersistedMetadataIndexEntry>): void;
+  finish(): void;
+} {
+  const maxBytes = limits.maxBytes ?? METADATA_SNAPSHOT_CHUNK_MAX_BYTES;
+  const maxEntries = limits.maxEntries ?? METADATA_SNAPSHOT_CHUNK_MAX_ENTRIES;
+  let entries: Record<string, PersistedMetadataIndexEntry> = {};
+  let entryCount = 0;
+  let conservativeBytes = 0;
+  let sequence = 0;
+  let knownTotal = 0;
+  let started = false;
+  let finished = false;
+
+  const ensureStarted = () => {
+    if (started) return;
+    started = true;
+    emit({
+      type: "snapshot-start",
+      schemaVersion,
+      totalEntries: limits.expectedEntries ?? knownTotal,
+    });
+  };
+
+  const flush = () => {
+    if (!entryCount) return;
+    ensureStarted();
+    emit({ type: "snapshot-chunk", sequence: sequence++, entries });
+    entries = {};
+    entryCount = 0;
+    conservativeBytes = 0;
+  };
+
+  const pushInternal = (path: string, entry: PersistedMetadataIndexEntry) => {
+    const singleMessage = { type: "snapshot-chunk", sequence, entries: { [path]: entry } };
+    const singleBytes = Buffer.byteLength(JSON.stringify(singleMessage));
+    if (entryCount && (entryCount >= maxEntries || conservativeBytes + singleBytes > maxBytes)) {
+      flush();
+    }
+    if (singleBytes <= maxBytes) {
+      entries[path] = entry;
+      entryCount += 1;
+      conservativeBytes += singleBytes;
+    }
+  };
+
+  return {
+    pushEntry(path: string, entry: PersistedMetadataIndexEntry): void {
+      if (finished) throw new Error("Metadata snapshot stream already finished");
+      knownTotal += 1;
+      pushInternal(path, entry);
+    },
+    pushBatch(batch: Record<string, PersistedMetadataIndexEntry>): void {
+      if (finished) throw new Error("Metadata snapshot stream already finished");
+      const batchEntries = Object.entries(batch);
+      knownTotal += batchEntries.length;
+      for (const [path, entry] of batchEntries) {
+        pushInternal(path, entry);
+      }
+    },
+    finish(): void {
+      if (finished) return;
+      finished = true;
+      ensureStarted();
+      flush();
+      emit({ type: "snapshot-complete", totalChunks: sequence });
+    },
+  };
+}
+
 export function isPersistedMetadataIndexSnapshot(value: unknown): value is PersistedMetadataIndexSnapshot {
   if (!value || typeof value !== "object") return false;
   const cache = value as Partial<PersistedMetadataIndexSnapshot>;

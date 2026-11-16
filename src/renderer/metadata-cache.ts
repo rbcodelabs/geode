@@ -767,9 +767,16 @@ export class MetadataCache extends Events {
     }
   }
 
-  private async hydratePersistedPages(): Promise<void> {
+  private async hydratePersistedPages(): Promise<{
+    completed: boolean;
+    omittedPaths: Set<string>;
+    hasOmissionAccounting: boolean;
+  }> {
     const api = window.geode;
     let token: string | undefined;
+    let completed = false;
+    const omittedPaths = new Set<string>();
+    let hasOmissionAccounting = true;
     try {
       if (!api.beginMetadataCacheRead || !api.readMetadataCachePage || !api.cancelMetadataCacheRead) throw Error("Incomplete cache paging capability");
       const begin = await api.beginMetadataCacheRead();
@@ -780,14 +787,42 @@ export class MetadataCache extends Events {
       for (let sequence = 0; !this.disposed; sequence++) {
         const page = await api.readMetadataCachePage(token, sequence);
         if (page.sequence !== sequence || typeof page.done !== "boolean" || !isPersistedMetadataIndexSnapshot(page)) throw Error("Invalid cache page");
-        if (this.disposed) return;
+        if (this.disposed) return { completed: false, omittedPaths, hasOmissionAccounting };
+        const rawOmittedPaths = (page as { omittedPaths?: unknown }).omittedPaths;
+        if (Array.isArray(rawOmittedPaths)) {
+          for (const omittedPath of rawOmittedPaths) {
+            if (typeof omittedPath === "string") omittedPaths.add(omittedPath);
+            else hasOmissionAccounting = false;
+          }
+          if (
+            page.omitted &&
+            typeof page.omitted.corrupt === "number" &&
+            typeof page.omitted.oversized === "number" &&
+            rawOmittedPaths.length < page.omitted.corrupt + page.omitted.oversized
+          ) {
+            hasOmissionAccounting = false;
+          }
+        } else if (
+          page.omitted &&
+          typeof page.omitted.corrupt === "number" &&
+          typeof page.omitted.oversized === "number"
+        ) {
+          if (page.omitted.corrupt + page.omitted.oversized > 0) {
+            hasOmissionAccounting = false;
+          }
+        } else {
+          hasOmissionAccounting = false;
+        }
         for (const [path, entry] of Object.entries(page.entries)) {
           const file = this.vault.getFileByPath(path);
           if (!file || file.extension !== "md" || this.hydrationMutations?.has(path) || entry.mtimeMs !== file.mtime || entry.size !== file.size) continue;
           this.cache.set(path, entry.metadata);
           if (!usesHostMentionQuery && entry.mentionKeys) this.setMentionSourceKeys(path, entry.mentionKeys);
         }
-        if (page.done) break;
+        if (page.done) {
+          completed = true;
+          break;
+        }
         await yieldToEventLoop();
       }
     } catch (error) {
@@ -797,6 +832,7 @@ export class MetadataCache extends Events {
       this.cancelHydration = null;
       if (token) await api.cancelMetadataCacheRead?.(token).catch(() => {});
     }
+    return { completed: completed && !this.disposed, omittedPaths, hasOmissionAccounting };
   }
 
   /**
@@ -1017,6 +1053,9 @@ export class MetadataCache extends Events {
     this.activeUnlinkedMentionScans.clear();
     this.stopIndexerMessages?.();
     this.stopIndexerMessages = null;
+    this.backgroundSnapshot = null;
+    this.snapshotReceiving = false;
+    this.deferredIndexerMessages.length = 0;
     this.workerEntries.clear();
     this.localMentionOverrides.clear();
     this.unlinkedMentionsCache.clear();
@@ -1029,6 +1068,10 @@ export class MetadataCache extends Events {
     }
     if (message?.type === "unavailable") {
       this.backgroundIndexerActive = false;
+      this.snapshotReceiving = false;
+      this.backgroundSnapshot = null;
+      const deferred = this.deferredIndexerMessages.splice(0);
+      for (const item of deferred) this.onIndexerMessage(item);
       if (this.dirty.size) this.scheduleFlush();
       return;
     }
@@ -1275,6 +1318,7 @@ export class MetadataCache extends Events {
   }
 
   async initialize(): Promise<void> {
+    this.initialized = false;
     this.initializeStarted = true;
     let attemptedBackground = false;
     let completePersistedMentionIndex = false;
@@ -1314,7 +1358,7 @@ export class MetadataCache extends Events {
         this.mentionKeysBySource.clear();
         this.localMentionOverrides.clear();
         this.mentionIndexReady = false;
-        if (paged) await this.hydratePersistedPages();
+        const hydration = paged ? await this.hydratePersistedPages() : null;
         let persistedHits = 0;
         const toRead: TFile[] = [];
         const deferredMisses: TFile[] = [];
@@ -1324,8 +1368,15 @@ export class MetadataCache extends Events {
             this.cache.set(file.path, entry.metadata);
             if (!usesHostMentionQuery && entry.mentionKeys) this.setMentionSourceKeys(file.path, entry.mentionKeys);
             persistedHits += 1;
-          } else if ((!attemptedBackground || paged) && !this.cache.has(file.path)) {
-            (paged && attemptedBackground ? deferredMisses : toRead).push(file);
+          } else if (!this.cache.has(file.path)) {
+            if (!attemptedBackground) {
+              toRead.push(file);
+            } else if (
+              paged &&
+              (!hydration!.completed || !hydration!.hasOmissionAccounting || hydration!.omittedPaths.has(file.path))
+            ) {
+              deferredMisses.push(file);
+            }
           }
         }
         this.persistedCacheInSync = !paged && !!persisted &&
@@ -1425,8 +1476,11 @@ export class MetadataCache extends Events {
           if (!currentMarkdown.has(path)) this.setMentionSourceKeys(path, undefined);
         }
       }
-      const entries = Object.entries(snapshot.entries);
-      await processInBatches(entries, 50, async ([path, snapshotEntry]) => {
+      const paths = Object.keys(snapshot.entries);
+      await processInBatches(paths, 50, async (path) => {
+        const snapshotEntry = snapshot.entries[path];
+        delete snapshot.entries[path];
+        if (!snapshotEntry) return;
         const file = currentMarkdown.get(path);
         if (!file) return;
         const live = this.workerEntries.get(path);
