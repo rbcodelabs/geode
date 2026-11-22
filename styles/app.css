@@ -7489,7 +7489,10 @@ body.is-mobile .empty-state-action-hint {
 }
 
 .canvas-artboard-webview {
-  display: block;
+  /* Electron sizes a <webview>'s inner iframe with flex (flex: 1 1 auto). With
+     display:block the iframe falls back to its 150px default height, so the
+     guest laid out in a ~150px viewport and painted only a top band. */
+  display: flex;
   width: 100%;
   height: 100%;
   border: 0;

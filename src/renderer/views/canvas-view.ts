@@ -274,6 +274,25 @@ export class CanvasView implements View {
   getDisplayText(): string { return this.file?.basename ?? "Canvas"; }
   getIcon(): string { return "layout-dashboard"; }
   getFile(): TFile | null { return this.file; }
+  /**
+   * View-state identity, matching `BaseView`: the `.canvas` path. Lets the
+   * workspace's Obsidian-compatible `setViewState({ type: "canvas", state:
+   * { file } })` (and a plugin's `host.openView`) open a board in place.
+   */
+  getState(): { file: string | null } { return { file: this.file?.path ?? null }; }
+
+  /**
+   * Restore from `getState()` / a plugin-supplied `{ file }`. Tolerant like
+   * `BaseView.setState`: a missing or non-canvas file leaves the view empty
+   * rather than throwing out of `setViewState`.
+   */
+  async setState(state: unknown): Promise<void> {
+    const filePath = (state as { file?: unknown } | null)?.file;
+    if (typeof filePath !== "string") return;
+    const file = this.app.vault.getFileByPath(filePath);
+    if (!file || file.extension !== "canvas") return;
+    await this.setFile(file);
+  }
   getText(): string { return serializeCanvas(this.document); }
   getLastKnownText(): string { return this.lastKnownText ?? ""; }
   hasUnacknowledgedChanges(): boolean {
