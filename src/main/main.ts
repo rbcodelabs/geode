@@ -2001,11 +2001,12 @@ function registerIpc() {
     const state = win ? crashStates.get(win.id) : undefined;
     if (state) state.suppressPlugins = false;
   });
-  ipcMain.handle("artifact-register", async (e, root: string, options?: { devServerUrl?: unknown }) => {
+  ipcMain.handle("artifact-register", async (e, root: string, options?: { devServerUrl?: unknown; entry?: unknown }) => {
     try {
-      // Options are untrusted renderer input; the runtime validates devServerUrl.
+      // Options are untrusted renderer input; the runtime validates devServerUrl and entry.
       const devServerUrl = options && typeof options === "object" ? options.devServerUrl : undefined;
-      return { ok: true, registration: await artifactRuntime.register(e.sender, root, { devServerUrl }) } as const;
+      const entry = options && typeof options === "object" ? options.entry : undefined;
+      return { ok: true, registration: await artifactRuntime.register(e.sender, root, { devServerUrl, entry }) } as const;
     } catch (error) {
       return serializeArtifactRegistrationError(error);
     }
@@ -2014,8 +2015,19 @@ function registerIpc() {
     artifactRuntime.unregister(e.sender, registrationId));
   ipcMain.handle("artifact-state", (e, registrationId: string) =>
     artifactRuntime.getState(e.sender, registrationId));
-  ipcMain.handle("artifact-capture", (e, root: string, options?: { url?: unknown }) =>
-    artifactRuntime.capture(e.sender, root, { url: options && typeof options === "object" ? options.url : undefined }));
+  ipcMain.handle("artifact-capture", (e, root: string, options?: { url?: unknown; entry?: unknown; width?: unknown; height?: unknown }) =>
+    artifactRuntime.capture(e.sender, root, {
+      url: options && typeof options === "object" ? options.url : undefined,
+      entry: options && typeof options === "object" ? options.entry : undefined,
+      width: options && typeof options === "object" ? options.width : undefined,
+      height: options && typeof options === "object" ? options.height : undefined,
+    }));
+  ipcMain.handle("artifact-thumbnail", (_e, root: string, options?: { entry?: unknown; width?: unknown; height?: unknown }) =>
+    artifactRuntime.captureThumbnail(root, {
+      entry: options && typeof options === "object" ? options.entry : undefined,
+      width: options && typeof options === "object" ? options.width : undefined,
+      height: options && typeof options === "object" ? options.height : undefined,
+    }));
   ipcMain.handle("hotkeys-publish", (e, combos: unknown) => {
     const win = BrowserWindow.fromWebContents(e.sender);
     if (!win) return;

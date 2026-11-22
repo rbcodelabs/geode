@@ -48,6 +48,8 @@ function scheduleFrameOrTimeout(callback: () => void): () => void {
 export type { Viewport, ViewportPreset };
 export interface ArtifactViewState {
   root: string;
+  /** Optional relative HTML entry override (e.g. `screens/mobile.html`) for static artifacts. */
+  entry?: string;
   viewport?: Viewport;
   /** Dev server URL for `nextjs` artifacts. Untrusted here; main re-validates it on registration. */
   url?: string;
@@ -80,6 +82,7 @@ export class ArtifactView implements View, ReloadableView {
   private readonly forwardButton: HTMLButtonElement;
   private readonly homeButton: HTMLButtonElement;
   private root = "";
+  private entry: string | undefined;
   private devServerUrl: string | undefined;
   private viewport: Viewport | undefined;
   private loadGeneration = 0;
@@ -296,6 +299,8 @@ export class ArtifactView implements View, ReloadableView {
       return;
     }
     this.root = state.root;
+    const rawEntry = typeof state.entry === "string" ? state.entry.replace(/^#/, "").trim() : "";
+    this.entry = rawEntry || undefined;
     this.devServerUrl = typeof state.url === "string" && state.url ? state.url : undefined;
     this.viewport = state.viewport;
     this.persistState();
@@ -305,6 +310,7 @@ export class ArtifactView implements View, ReloadableView {
   getState(): ArtifactViewState {
     return {
       root: this.root,
+      ...(this.entry ? { entry: this.entry } : {}),
       viewport: this.viewport,
       ...(this.devServerUrl ? { url: this.devServerUrl, runtime: "nextjs" as const } : {}),
     };
@@ -343,10 +349,14 @@ export class ArtifactView implements View, ReloadableView {
     this.stageEl.replaceChildren();
     this.statusEl.textContent = "Validating artifact…";
     try {
-      const result = await window.geode.registerArtifact(
-        root,
-        this.devServerUrl ? { devServerUrl: this.devServerUrl } : undefined,
-      );
+      const registerOptions =
+        this.devServerUrl || this.entry
+          ? {
+              ...(this.devServerUrl ? { devServerUrl: this.devServerUrl } : {}),
+              ...(this.entry ? { entry: this.entry } : {}),
+            }
+          : undefined;
+      const result = await window.geode.registerArtifact(root, registerOptions);
       if (!result.ok) {
         const details = result.error.issues?.map((issue) => `${issue.path}: ${issue.message}`).join("\n");
         this.showError(details ? `${result.error.message}\n${details}` : result.error.message);

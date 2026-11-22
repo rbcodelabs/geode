@@ -2,7 +2,7 @@ import { nativeBackgroundVisibility, type BackgroundVisibility } from "../worksp
 import { SourceOwnedNavigation, captureNavigationOrigin } from "../markdown/source-owned-navigation";
 import { nativeRenderOwnership, ScopeCancelled, type RenderScope, type RenderToken, type RenderFailure, type PreparedRetirement } from "../workspaces/render-ownership";
 import type { App } from "../app";
-import { AUDIO_EXTENSIONS, IMAGE_EXTENSIONS, VIDEO_EXTENSIONS, type TFile } from "../types";
+import { AUDIO_EXTENSIONS, FileSystemAdapter, IMAGE_EXTENSIONS, VIDEO_EXTENSIONS, type TFile } from "../types";
 import { buildViewHeaderNavButtons, type View } from "../workspace";
 import { parseCanvas, serializeCanvas, type CanvasDocument, type CanvasEdge, type CanvasNode, type CanvasSide, type CanvasTextNode } from "../canvas/canvas-data";
 import { setIcon } from "../api/icons";
@@ -13,7 +13,7 @@ import { CanvasTouchGesture } from "../canvas/touch-gesture";
 
 const MIN_WIDTH = 80;
 const MIN_HEIGHT = 50;
-const MIN_SCALE = 0.2;
+const MIN_SCALE = 0.05;
 const MAX_SCALE = 4;
 const DEFAULT_PAN: Point = { x: 80, y: 80 };
 const TEXT_NODE_WIDTH = 250;
@@ -601,6 +601,8 @@ export class CanvasView implements View {
       Object.assign(el.style, { left: `${node.x}px`, top: `${node.y}px`, width: `${node.width}px`, height: `${node.height}px`, zIndex: String(index + 1) });
       el.dataset.width = String(node.width);
       el.dataset.height = String(node.height);
+      const artboardDims = typeof el.querySelector === "function" ? el.querySelector<HTMLElement>(".canvas-artboard-dims") : null;
+      if (artboardDims) artboardDims.textContent = `${Math.round(node.width)}×${Math.round(node.height)}`;
       el.classList.toggle("is-selected", this.selectedIds.has(node.id));
       delete el.dataset.canvasColor;
       el.style.removeProperty("--canvas-node-color");
@@ -839,6 +841,12 @@ export class CanvasView implements View {
       el.addEventListener("dblclick", (event) => {
         if (this.isEmbeddedInteraction(event.target)) return;
         const file = this.app.vault.getFileByPath(node.file);
+        if (file?.name === "artifact.json") {
+          event.preventDefault();
+          event.stopPropagation();
+          this.openArtifactNode(file, node, node.subpath ?? "");
+          return;
+        }
         if (file) void this.sourceNavigation.prepareNavigation({ kind: "file", file, newTab: true }, this.captureNodeNavigationOrigin(node, el, version)).dispatch();
       });
     } else {
@@ -1068,7 +1076,129 @@ export class CanvasView implements View {
       void this.loadFileMedia(file, media, version);
       return;
     }
+    if (resolved.kind === "artifact") {
+      this.renderArtifactNode(el, node, file, resolved.subpath, version);
+      return;
+    }
     this.renderFileFallback(el, file.name, "File");
+  }
+
+  private resolveArtifactNodeRoot(file: TFile): string | null {
+    if (!this.app.host.capabilities.artifacts || !(this.app.vault.adapter instanceof FileSystemAdapter)) return null;
+    return this.app.vault.adapter.getFullPath(file.parent);
+  }
+
+  private openArtifactNode(file: TFile, node: Extract<CanvasNode, { type: "file" }>, subpath: string): void {
+    const root = this.resolveArtifactNodeRoot(file);
+    if (!root) return;
+    const entry = subpath.replace(/^#/, "").trim() || undefined;
+    void this.app.openArtifact(root, {
+      entry,
+      viewport: { preset: "custom", width: Math.round(node.width), height: Math.round(node.height) },
+    });
+  }
+
+  private renderArtifactNode(
+    el: HTMLElement,
+    node: Extract<CanvasNode, { type: "file" }>,
+    file: TFile,
+    subpath: string,
+    version: number,
+  ): void {
+    const entry = subpath.replace(/^#/, "").trim() || undefined;
+    const root = this.resolveArtifactNodeRoot(file);
+    const wrapper = document.createElement("div");
+    wrapper.className = "canvas-node-file canvas-node-artifact";
+    if (entry) wrapper.dataset.artifactEntry = entry;
+
+    const header = document.createElement("div");
+    header.className = "canvas-artboard-header";
+    const title = document.createElement("span");
+    title.className = "canvas-artboard-title";
+    title.textContent = file.parent.split("/").pop() || "Design artboard";
+    header.appendChild(title);
+
+    if (entry) {
+      const entryEl = document.createElement("span");
+      entryEl.className = "canvas-artboard-entry";
+      entryEl.textContent = entry;
+      header.appendChild(entryEl);
+    }
+
+    const dims = document.createElement("span");
+    dims.className = "canvas-artboard-dims";
+    dims.textContent = `${Math.round(node.width)}×${Math.round(node.height)}`;
+    header.appendChild(dims);
+
+    const openBtn = document.createElement("button");
+    openBtn.type = "button";
+    openBtn.className = "clickable-icon canvas-artboard-open-btn";
+    openBtn.title = "Open in Artifact View";
+    openBtn.setAttribute("aria-label", "Open in Artifact View");
+    setIcon(openBtn, "external-link");
+    openBtn.addEventListener("pointerdown", (event) => event.stopPropagation());
+    openBtn.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      this.openArtifactNode(file, node, subpath);
+    });
+    header.appendChild(openBtn);
+
+    const stage = document.createElement("div");
+    stage.className = "canvas-artboard-stage";
+    const status = document.createElement("div");
+    status.className = "canvas-artboard-status";
+    status.textContent = root ? "Rendering artboard…" : "Artifact preview requires desktop";
+    stage.appendChild(status);
+
+    wrapper.append(header, stage);
+    el.appendChild(wrapper);
+
+    if (root) {
+      void this.loadArtifactThumbnail(root, entry, node, title, stage, version);
+    }
+  }
+
+  private async loadArtifactThumbnail(
+    root: string,
+    entry: string | undefined,
+    node: Extract<CanvasNode, { type: "file" }>,
+    titleEl: HTMLElement,
+    stage: HTMLElement,
+    version: number,
+  ): Promise<void> {
+    let result: { png: Uint8Array; width: number; height: number; title: string; entry: string };
+    try {
+      result = await window.geode.captureArtifactThumbnail(root, {
+        entry,
+        width: Math.round(node.width),
+        height: Math.round(node.height),
+      });
+    } catch (error) {
+      if (!this.isLiveNodeRender(version, stage)) return;
+      const status = document.createElement("div");
+      status.className = "canvas-artboard-status";
+      status.textContent = error instanceof Error ? error.message : "Could not render artboard";
+      stage.replaceChildren(status);
+      return;
+    }
+    if (!this.isLiveNodeRender(version, stage)) return;
+    if (result.title) titleEl.textContent = result.title;
+    const source = result.png instanceof Uint8Array ? result.png : new Uint8Array(result.png as ArrayBufferLike);
+    const bytes = new Uint8Array(source.byteLength);
+    bytes.set(source);
+    const url = URL.createObjectURL(new Blob([bytes], { type: "image/png" }));
+    if (!this.isLiveNodeRender(version, stage)) {
+      URL.revokeObjectURL(url);
+      return;
+    }
+    const img = document.createElement("img");
+    img.className = "canvas-node-file canvas-node-media canvas-artboard-image";
+    img.alt = result.title || "Design artboard";
+    img.draggable = false;
+    this.retainPresentationUrl(img, url);
+    img.src = url;
+    stage.replaceChildren(img);
   }
 
   private renderFileFallback(el: HTMLElement, label: string, kind: string): void {

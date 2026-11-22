@@ -98,6 +98,7 @@ export function createLegacyGeodeFacade(host: HostServices): GeodeApi {
     unregisterArtifact: unavailable("artifacts") as never,
     getArtifactState: unavailable("artifacts") as never,
     captureArtifact: unavailable("artifacts") as never,
+    captureArtifactThumbnail: unavailable("artifacts") as never,
     onVaultEvent: ((cb: Parameters<HostServices["vaultFiles"]["onChange"]>[0]) => host.vaultFiles.onChange(cb)) as never,
     onDeepLink: ((cb: Parameters<HostServices["runtime"]["onDeepLink"]>[0]) => host.runtime.onDeepLink(cb)) as never,
     getWindowChromeState: (() => host.runtime.getWindowChromeState()) as never,

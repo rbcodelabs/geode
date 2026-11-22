@@ -7416,6 +7416,93 @@ body.is-mobile .empty-state-action-hint {
   overflow-wrap: anywhere;
 }
 
+.canvas-node-artifact {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  border-radius: inherit;
+}
+
+.canvas-artboard-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  flex: 0 0 auto;
+  border-bottom: 1px solid var(--background-modifier-border);
+  background: var(--background-secondary);
+  font-size: 12px;
+  line-height: 1.2;
+  color: var(--text-normal);
+  user-select: none;
+}
+
+.canvas-artboard-title {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.canvas-artboard-entry {
+  color: var(--text-muted);
+  font-family: var(--font-monospace);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.canvas-artboard-dims {
+  margin-left: auto;
+  flex: 0 0 auto;
+  color: var(--text-faint);
+  font-family: var(--font-monospace);
+  font-size: 11px;
+}
+
+.canvas-artboard-open-btn {
+  flex: 0 0 auto;
+  padding: 2px 4px;
+  border-radius: 4px;
+  color: var(--text-muted);
+}
+
+.canvas-artboard-open-btn:hover {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
+
+.canvas-artboard-stage {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--background-primary);
+  overflow: hidden;
+}
+
+.canvas-artboard-status {
+  color: var(--text-muted);
+  font-size: 12px;
+  padding: 12px;
+  text-align: center;
+}
+
+.canvas-artboard-image {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: top left;
+  pointer-events: none;
+}
+
 .canvas-node-web-link {
   display: flex;
   width: 100%;
