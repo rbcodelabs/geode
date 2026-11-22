@@ -10,6 +10,7 @@ import { PromptModal, SuggestModal } from "../modals/modals";
 import { loadEmbedBlobUrl, resolveEmbed, type EmbedKind } from "../markdown/embed";
 import { isValidVaultFileDragPath, VAULT_FILE_DRAG_MIME } from "../file-drag";
 import { CanvasTouchGesture } from "../canvas/touch-gesture";
+import { ArtifactCanvasLodPool, type ArtifactLodWebview } from "../canvas/artifact-lod-pool";
 
 const MIN_WIDTH = 80;
 const MIN_HEIGHT = 50;
@@ -185,6 +186,7 @@ export class CanvasView implements View {
   private readonly previewCloseIntents = new WeakMap<object, PreviewCloseIntent>();
   private readonly saveStatusEl: HTMLElement;
   private readonly touchGesture: CanvasTouchGesture;
+  private readonly artifactLodPool: ArtifactCanvasLodPool;
   private readonly capturedTouchPointers = new Set<number>();
   private touchDragSnapshot: { id: string; x: number; y: number } | null = null;
   private readonly touchCleanups: Array<() => void> = [];
@@ -246,6 +248,22 @@ export class CanvasView implements View {
       rollbackNode: () => this.rollbackTouchNodeDrag(),
       pan: (dx, dy) => { this.pan.x += dx; this.pan.y += dy; this.updateTransform(); },
       zoom: (factor, x, y) => this.zoomAt(factor, { x, y }),
+    });
+    this.artifactLodPool = new ArtifactCanvasLodPool({
+      registerArtifact: (root) => window.geode.registerArtifact(root),
+      unregisterArtifact: (registrationId) => window.geode.unregisterArtifact(registrationId),
+      getArtifactState: (registrationId) => window.geode.getArtifactState(registrationId),
+      captureThumbnail: (root, options) => window.geode.captureArtifactThumbnail(root, options),
+      createWebview: () => document.createElement("webview") as unknown as ArtifactLodWebview,
+      createObjectUrl: (blob) => URL.createObjectURL(blob),
+      revokeObjectUrl: (url) => URL.revokeObjectURL(url),
+    });
+    this.containerEl.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && this.artifactLodPool.interactingNodeId) {
+        event.preventDefault();
+        event.stopPropagation();
+        this.artifactLodPool.exitInteract();
+      }
     });
     this.installCameraControls();
     this.installTouchControls();
@@ -355,6 +373,7 @@ export class CanvasView implements View {
     this.edgesEl = null;
     this.disposeMarkdownContents();
     this.revokeObjectUrls();
+    await this.artifactLodPool?.dispose();
     for (const cleanup of this.touchCleanups.splice(0)) cleanup();
   }
 
@@ -478,6 +497,7 @@ export class CanvasView implements View {
     this.edgesEl = null;
     this.disposeMarkdownContents();
     this.revokeObjectUrls();
+    void this.artifactLodPool?.dispose();
     this.selectionControlsEl?.remove();
     this.selectionControlsEl = null;
     this.colorPaletteEl?.remove();
@@ -602,7 +622,10 @@ export class CanvasView implements View {
       el.dataset.width = String(node.width);
       el.dataset.height = String(node.height);
       const artboardDims = typeof el.querySelector === "function" ? el.querySelector<HTMLElement>(".canvas-artboard-dims") : null;
-      if (artboardDims) artboardDims.textContent = `${Math.round(node.width)}×${Math.round(node.height)}`;
+      if (artboardDims) {
+        artboardDims.textContent = `${Math.round(node.width)}×${Math.round(node.height)}`;
+        this.artifactLodPool?.updateNodeSize(node.id, node.width, node.height);
+      }
       el.classList.toggle("is-selected", this.selectedIds.has(node.id));
       delete el.dataset.canvasColor;
       el.style.removeProperty("--canvas-node-color");
@@ -641,6 +664,7 @@ export class CanvasView implements View {
       this.objectUrls.delete(url);
     }
     this.presentationUrls.delete(el);
+    if (el.dataset?.nodeId) this.artifactLodPool?.removeNode(el.dataset.nodeId);
     el.remove();
   }
 
@@ -1130,6 +1154,22 @@ export class CanvasView implements View {
     dims.textContent = `${Math.round(node.width)}×${Math.round(node.height)}`;
     header.appendChild(dims);
 
+    const interactBtn = document.createElement("button");
+    interactBtn.type = "button";
+    interactBtn.className = "clickable-icon canvas-artboard-interact-btn";
+    interactBtn.title = "Interact with live artboard";
+    interactBtn.setAttribute("aria-label", "Interact with artboard");
+    interactBtn.setAttribute("aria-pressed", "false");
+    interactBtn.disabled = !root;
+    setIcon(interactBtn, "mouse-pointer-click");
+    interactBtn.addEventListener("pointerdown", (event) => event.stopPropagation());
+    interactBtn.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      void this.artifactLodPool.toggleInteract(node.id);
+    });
+    header.appendChild(interactBtn);
+
     const openBtn = document.createElement("button");
     openBtn.type = "button";
     openBtn.className = "clickable-icon canvas-artboard-open-btn";
@@ -1155,50 +1195,19 @@ export class CanvasView implements View {
     el.appendChild(wrapper);
 
     if (root) {
-      void this.loadArtifactThumbnail(root, entry, node, title, stage, version);
-    }
-  }
-
-  private async loadArtifactThumbnail(
-    root: string,
-    entry: string | undefined,
-    node: Extract<CanvasNode, { type: "file" }>,
-    titleEl: HTMLElement,
-    stage: HTMLElement,
-    version: number,
-  ): Promise<void> {
-    let result: { png: Uint8Array; width: number; height: number; title: string; entry: string };
-    try {
-      result = await window.geode.captureArtifactThumbnail(root, {
+      this.artifactLodPool.registerArtboard({
+        nodeId: node.id,
+        root,
         entry,
-        width: Math.round(node.width),
-        height: Math.round(node.height),
+        width: node.width,
+        height: node.height,
+        titleEl: title,
+        stageEl: stage,
+        wrapperEl: wrapper,
+        interactBtn,
+        isAlive: () => this.isLiveNodeRender(version, stage),
       });
-    } catch (error) {
-      if (!this.isLiveNodeRender(version, stage)) return;
-      const status = document.createElement("div");
-      status.className = "canvas-artboard-status";
-      status.textContent = error instanceof Error ? error.message : "Could not render artboard";
-      stage.replaceChildren(status);
-      return;
     }
-    if (!this.isLiveNodeRender(version, stage)) return;
-    if (result.title) titleEl.textContent = result.title;
-    const source = result.png instanceof Uint8Array ? result.png : new Uint8Array(result.png as ArrayBufferLike);
-    const bytes = new Uint8Array(source.byteLength);
-    bytes.set(source);
-    const url = URL.createObjectURL(new Blob([bytes], { type: "image/png" }));
-    if (!this.isLiveNodeRender(version, stage)) {
-      URL.revokeObjectURL(url);
-      return;
-    }
-    const img = document.createElement("img");
-    img.className = "canvas-node-file canvas-node-media canvas-artboard-image";
-    img.alt = result.title || "Design artboard";
-    img.draggable = false;
-    this.retainPresentationUrl(img, url);
-    img.src = url;
-    stage.replaceChildren(img);
   }
 
   private renderFileFallback(el: HTMLElement, label: string, kind: string): void {
@@ -2370,6 +2379,10 @@ export class CanvasView implements View {
     if (this.interactionBlocked()) return;
     if (this.isEmbeddedInteraction(event.target)) return;
     if (event.pointerType === "touch") return;
+    if ((event.target as HTMLElement).closest(".canvas-node-artifact.is-interacting .canvas-artboard-stage")) return;
+    if (this.artifactLodPool?.interactingNodeId && this.artifactLodPool.interactingNodeId !== node.id) {
+      this.artifactLodPool.exitInteract();
+    }
     if (event.button !== 0 || (event.target as HTMLElement).closest("textarea, .canvas-node-resize-handle, .canvas-node-resize-touch-hit, .canvas-node-resize-edge, .canvas-node-connection-handle, .canvas-node-connection-touch-hit")) return;
     event.stopPropagation();
     this.surfaceEl.focus({ preventScroll: true });
@@ -3082,6 +3095,7 @@ export class CanvasView implements View {
       if (this.interactionBlocked()) return;
       if (event.pointerType === "touch") return;
       if (event.target !== this.surfaceEl && event.target !== this.viewportEl) return;
+      this.artifactLodPool?.exitInteract();
       this.surfaceEl.focus({ preventScroll: true });
       if (event.button !== 0 && event.button !== 1) return;
       const selectionSnapshot = new Set(this.selectedIds);
@@ -3499,6 +3513,7 @@ export class CanvasView implements View {
 
   async prepareVaultSwitch(): Promise<void> {
     this.vaultSwitching = true;
+    await this.artifactLodPool?.dispose();
     await this.persistQueue;
   }
 
