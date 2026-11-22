@@ -190,3 +190,118 @@ test("renders 8 full-size design artboards (shared tokens + independent) with Ti
     fs.rmSync(userDataDir, { recursive: true, force: true });
   }
 });
+
+test("Phase 1: LRU cap of 4 live webviews, Interact toggle pointer-events gating, shared session hot reload, and vault-switch teardown", async () => {
+  const vaultDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-design-canvas-p1-vault-"));
+  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-design-canvas-p1-user-"));
+
+  const boardFolderRel = "Artifacts/threads-artifacts/pricing-redesign";
+  const sharedDir = path.join(vaultDir, boardFolderRel);
+  const sharedManifestRel = `${boardFolderRel}/artifact.json`;
+
+  writeStaticArtifact(
+    sharedDir,
+    "pricing-redesign",
+    "Pricing Redesign",
+    {
+      "index.html": `<!doctype html><link rel="stylesheet" href="tokens.css"><body style="margin:0;background:var(--bg)"><h1>Screen 1</h1></body>`,
+      "screens/s2.html": `<!doctype html><link rel="stylesheet" href="../tokens.css"><body style="margin:0;background:var(--bg)"><h1>Screen 2</h1></body>`,
+      "screens/s3.html": `<!doctype html><link rel="stylesheet" href="../tokens.css"><body style="margin:0;background:var(--bg)"><h1>Screen 3</h1></body>`,
+      "screens/s4.html": `<!doctype html><link rel="stylesheet" href="../tokens.css"><body style="margin:0;background:var(--bg)"><h1>Screen 4</h1></body>`,
+      "screens/s5.html": `<!doctype html><link rel="stylesheet" href="../tokens.css"><body style="margin:0;background:var(--bg)"><h1>Screen 5</h1></body>`,
+    },
+    {
+      "tokens.css": `:root { --bg: #1e3a8a; }`,
+    },
+  );
+
+  fs.writeFileSync(
+    path.join(sharedDir, "board.canvas"),
+    JSON.stringify({
+      nodes: [
+        { id: "ab-1", type: "file", file: sharedManifestRel, x: 0, y: 0, width: 640, height: 420 },
+        { id: "ab-2", type: "file", file: sharedManifestRel, subpath: "#screens/s2.html", x: 700, y: 0, width: 640, height: 420 },
+        { id: "ab-3", type: "file", file: sharedManifestRel, subpath: "#screens/s3.html", x: 1400, y: 0, width: 640, height: 420 },
+        { id: "ab-4", type: "file", file: sharedManifestRel, subpath: "#screens/s4.html", x: 0, y: 480, width: 640, height: 420 },
+        { id: "ab-5", type: "file", file: sharedManifestRel, subpath: "#screens/s5.html", x: 700, y: 480, width: 640, height: 420 },
+      ],
+      edges: [],
+    }, null, 2),
+  );
+
+  fs.writeFileSync(path.join(userDataDir, "geode.json"), JSON.stringify({ recentVaults: [vaultDir], lastVault: vaultDir }));
+
+  const app = await electron.launch({ args: [repoRoot, `--user-data-dir=${userDataDir}`], cwd: repoRoot });
+  try {
+    const window = await app.firstWindow();
+    await window.waitForFunction(() => (window as any).app?.workspace?.layoutReady);
+
+    await window.evaluate(async (canvasRelPath) => {
+      const a = (window as any).app;
+      const file = a.vault.getFileByPath(canvasRelPath);
+      await a.workspace.getLeaf(false).openFile(file);
+    }, `${boardFolderRel}/board.canvas`);
+
+    await expect(window.locator(".canvas-node-artifact img.canvas-artboard-image")).toHaveCount(5, { timeout: 25_000 });
+    await expect(window.locator(".canvas-view webview")).toHaveCount(0);
+
+    // Click Interact on ab-1..ab-5 sequentially -> LRU cap of 4 evicts ab-1 back to Tier 1 PNG.
+    for (const id of ["ab-1", "ab-2", "ab-3", "ab-4", "ab-5"]) {
+      await window.locator(`.canvas-node[data-node-id="${id}"] .canvas-artboard-interact-btn`).click();
+      await expect(window.locator(`.canvas-node[data-node-id="${id}"] .canvas-node-artifact`)).toHaveAttribute("data-lod-tier", "2");
+    }
+
+    await expect(window.locator(".canvas-view webview.canvas-artboard-webview")).toHaveCount(4);
+    await expect(window.locator('.canvas-node[data-node-id="ab-1"] .canvas-node-artifact')).toHaveAttribute("data-lod-tier", "1");
+    await expect(window.locator('.canvas-node[data-node-id="ab-1"] img.canvas-artboard-image')).toHaveCount(1);
+
+    // All 4 live webviews share the exact same ArtifactRuntime partition (one shared session + watcher).
+    const partitions = await window.locator(".canvas-view webview.canvas-artboard-webview").evaluateAll((els) =>
+      els.map((el) => el.getAttribute("partition")),
+    );
+    expect(partitions.every((p) => p && p.startsWith("geode-artifact-"))).toBe(true);
+    expect(new Set(partitions).size).toBe(1);
+
+    // Pointer-events gating: ab-5 is interacting (pointer-events: auto), ab-2 is warm but non-interacting (pointer-events: none).
+    const pointerEvents = await window.evaluate(() => {
+      const active = document.querySelector('.canvas-node[data-node-id="ab-5"] webview.canvas-artboard-webview');
+      const warm = document.querySelector('.canvas-node[data-node-id="ab-2"] webview.canvas-artboard-webview');
+      return {
+        active: active ? getComputedStyle(active).pointerEvents : null,
+        warm: warm ? getComputedStyle(warm).pointerEvents : null,
+      };
+    });
+    expect(pointerEvents).toEqual({ active: "auto", warm: "none" });
+
+    // Toggling Interact off on ab-5 gates pointer-events back to none while keeping webview warm.
+    await window.locator('.canvas-node[data-node-id="ab-5"] .canvas-artboard-interact-btn').click();
+    const afterExit = await window.evaluate(() => {
+      const wv = document.querySelector('.canvas-node[data-node-id="ab-5"] webview.canvas-artboard-webview');
+      return wv ? getComputedStyle(wv).pointerEvents : null;
+    });
+    expect(afterExit).toBe("none");
+
+    // Revision-driven hot reload: editing tokens.css refreshes ab-1's Tier 1 snapshot (new blob URL).
+    const beforeSnapUrl = await window.locator('.canvas-node[data-node-id="ab-1"] img.canvas-artboard-image').getAttribute("src");
+    fs.writeFileSync(path.join(sharedDir, "tokens.css"), `:root { --bg: #059669; }\n`);
+    await expect.poll(async () => {
+      return window.locator('.canvas-node[data-node-id="ab-1"] img.canvas-artboard-image').getAttribute("src");
+    }, { timeout: 10_000 }).not.toBe(beforeSnapUrl);
+
+    // Clean teardown on vault switch: prepareVaultSwitch removes all webviews and clears sessions.
+    await window.evaluate(async () => {
+      const leaf = (window as any).app.workspace.getLeavesOfType("canvas")[0];
+      await leaf.view.prepareVaultSwitch();
+    });
+    await expect(window.locator(".canvas-view webview")).toHaveCount(0);
+    const remainingRoots = await window.evaluate(() => {
+      const leaf = (window as any).app.workspace.getLeavesOfType("canvas")[0];
+      return leaf.view.artifactLodPool.registeredSessionRoots;
+    });
+    expect(remainingRoots).toEqual([]);
+  } finally {
+    await app.close().catch(() => {});
+    fs.rmSync(vaultDir, { recursive: true, force: true });
+    fs.rmSync(userDataDir, { recursive: true, force: true });
+  }
+});
