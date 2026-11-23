@@ -436,6 +436,14 @@ export class FileExplorerView implements View {
     // render in one list (plugin items land after a separator — see
     // `App.buildMenu`'s doc comment for why no explicit separator is needed).
     const menu = this.app.buildMenu(items);
+    // A plain click on an artifact's artifact.json / index.html opens its board; keep the single page one click away.
+    if (this.app.artifactBoardFor(file)) {
+      const folder = this.app.vault.getFolderByPath(file.parent);
+      if (folder) menu.addItem((item) => item
+        .setTitle("Open artifact page")
+        .setIcon("globe")
+        .onClick(() => void this.app.openArtifactFolder(folder, { plain: true })));
+    }
     this.app.workspace.trigger("file-menu", menu, file, FileExplorerView.MENU_SOURCE);
     menu.showAtMouseEvent(e);
   }
@@ -458,10 +466,18 @@ export class FileExplorerView implements View {
     // while a folder-aware plugin can still act on the TFolder it receives.
     const menu = this.app.buildMenu(resourceItems);
     if (this.app.isArtifactFolder(folder)) {
+      const hasBoard = this.app.artifactFolderHasBoard(folder);
       menu.addItem((item) => item
-        .setTitle("Open artifact")
+        .setTitle(hasBoard ? "Open artifact board" : "Open artifact")
         .setIcon("layout-dashboard")
         .onClick(() => void this.app.openArtifactFolder(folder)));
+      // The single-page artifact stays reachable when a board would otherwise take over.
+      if (hasBoard) {
+        menu.addItem((item) => item
+          .setTitle("Open artifact page")
+          .setIcon("globe")
+          .onClick(() => void this.app.openArtifactFolder(folder, { plain: true })));
+      }
     }
     this.app.workspace.trigger("file-menu", menu, folder, FileExplorerView.MENU_SOURCE);
     menu.showAtMouseEvent(e);
