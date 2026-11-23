@@ -4085,6 +4085,10 @@ export class App {
     // `.base` file path across the restart; `GraphView` is stateless.
     this.workspace.registerViewFactory("graph", () => new GraphView(this));
     this.workspace.registerViewFactory("base", () => new BaseView(this));
+    // Obsidian parity: `setViewState({ type: "canvas", state: { file } })` (and
+    // a plugin's `host.openView`) must open a board. `CanvasView.setState`
+    // loads the file; `openFile` keeps constructing the view directly.
+    this.workspace.registerViewFactory("canvas", () => new CanvasView(this));
 
     // Internal plugins: features Geode ships that go through the *public*
     // plugin API rather than being hardcoded into the renderer. Mermaid is
