@@ -5707,6 +5707,8 @@ export class App {
 
   /** The `board.canvas` to open instead of `file` (an artifact's artifact.json / index.html), or null. */
   artifactBoardFor(file: TFile): TFile | null {
+    // Cheap filename gate first: every ordinary file open passes through here.
+    if (file.name !== "artifact.json" && file.name !== "index.html") return null;
     if (!this.host.capabilities.artifacts) return null;
     const parent = file.parent ? this.vault.getFolderByPath(file.parent) : this.vault.getRoot();
     return resolveArtifactBoardForFile(file, parent);
