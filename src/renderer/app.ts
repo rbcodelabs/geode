@@ -76,7 +76,7 @@ import { SearchView } from "./views/search-view";
 import { GraphView } from "./views/graph-view";
 import { WebView, isUrlShaped, resolveWebInput } from "./views/web-view";
 import { ArtifactView } from "./views/artifact-view";
-import { collectArtifactFolders, isArtifactFolder } from "./artifacts/artifact-folders";
+import { collectArtifactFolders, findArtifactBoard, isArtifactFolder, resolveArtifactBoardForFile } from "./artifacts/artifact-folders";
 import { Modal, PromptModal, SuggestList, SuggestModal, fuzzyMatch, type FuzzyMatch } from "./modals/modals";
 import { ConflictCompareModal } from "./modals/conflict-compare-modal";
 import { ErrorDetailsModal } from "./modals/error-details-modal";
@@ -5459,6 +5459,12 @@ export class App {
    * switcher, File Explorer) are unchanged.
    */
   async openFile(file: TFile, newTab: boolean, sourceLeaf?: WorkspaceLeaf | null): Promise<void> {
+    // An artifact's own files (artifact.json, index.html) open its design board when it has one.
+    const board = this.artifactBoardFor(file);
+    if (board) {
+      await this.openFile(board, newTab, sourceLeaf);
+      return;
+    }
     if (file.extension === "canvas") {
       const existing = this.workspace.findLeafForFile(file.path);
       if (existing && !newTab) {
@@ -5699,8 +5705,28 @@ export class App {
     return this.host.capabilities.artifacts && isArtifactFolder(folder);
   }
 
-  /** Open an artifact that lives inside the vault (a folder containing `artifact.json`). */
-  async openArtifactFolder(folder: TFolder): Promise<void> {
+  /** The `board.canvas` to open instead of `file` (an artifact's artifact.json / index.html), or null. */
+  artifactBoardFor(file: TFile): TFile | null {
+    if (!this.host.capabilities.artifacts) return null;
+    const parent = file.parent ? this.vault.getFolderByPath(file.parent) : this.vault.getRoot();
+    return resolveArtifactBoardForFile(file, parent);
+  }
+
+  /** True when `folder` is an artifact that carries a `board.canvas`. */
+  artifactFolderHasBoard(folder: TFolder): boolean {
+    return this.host.capabilities.artifacts && findArtifactBoard(folder) !== null;
+  }
+
+  /**
+   * Open an artifact that lives inside the vault (a folder containing `artifact.json`).
+   * An artifact with a `board.canvas` opens that board; `plain` forces the single-page artifact view.
+   */
+  async openArtifactFolder(folder: TFolder, opts: { plain?: boolean } = {}): Promise<void> {
+    const board = opts.plain || !this.host.capabilities.artifacts ? null : findArtifactBoard(folder);
+    if (board) {
+      await this.openFile(board, false);
+      return;
+    }
     if (!(this.vault.adapter instanceof FileSystemAdapter)) {
       this.notify("Artifacts can only be opened from a local vault");
       return;

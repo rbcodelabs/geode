@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { collectArtifactFolders, isArtifactFolder } from "../../src/renderer/artifacts/artifact-folders";
+import { collectArtifactFolders, findArtifactBoard, isArtifactFolder, resolveArtifactBoardForFile } from "../../src/renderer/artifacts/artifact-folders";
 import type { TFolder } from "../../src/renderer/types";
 
 const file = (path: string) => ({ kind: "file", path, name: path.split("/").pop()! });
@@ -27,5 +27,35 @@ describe("artifact folders", () => {
 
   it("returns nothing for a vault without artifacts", () => {
     expect(collectArtifactFolders(folder("", [folder("Notes", [file("Notes/a.md")])]))).toEqual([]);
+  });
+
+  describe("board resolution", () => {
+    const withBoard = () => folder("A/b", [file("A/b/artifact.json"), file("A/b/index.html"), file("A/b/board.canvas")]);
+    const noBoard = () => folder("A/p", [file("A/p/artifact.json"), file("A/p/index.html")]);
+
+    it("finds board.canvas only inside an artifact folder", () => {
+      expect(findArtifactBoard(withBoard())?.path).toBe("A/b/board.canvas");
+      expect(findArtifactBoard(noBoard())).toBeNull();
+      // a board.canvas without a manifest is just a canvas, not an artifact board
+      expect(findArtifactBoard(folder("C", [file("C/board.canvas")]))).toBeNull();
+      // a folder named board.canvas is not a board
+      expect(findArtifactBoard(folder("D", [file("D/artifact.json"), folder("D/board.canvas")]))).toBeNull();
+    });
+
+    it("artifact.json and index.html resolve to the board; other files do not", () => {
+      const parent = withBoard();
+      expect(resolveArtifactBoardForFile({ name: "artifact.json" }, parent)?.path).toBe("A/b/board.canvas");
+      expect(resolveArtifactBoardForFile({ name: "index.html" }, parent)?.path).toBe("A/b/board.canvas");
+      expect(resolveArtifactBoardForFile({ name: "styles.css" }, parent)).toBeNull();
+      expect(resolveArtifactBoardForFile({ name: "board.canvas" }, parent)).toBeNull();
+      expect(resolveArtifactBoardForFile({ name: "artifact.json" }, null)).toBeNull();
+    });
+
+    it("single-screen artifacts without a board resolve to nothing (behavior unchanged)", () => {
+      expect(resolveArtifactBoardForFile({ name: "artifact.json" }, noBoard())).toBeNull();
+      expect(resolveArtifactBoardForFile({ name: "index.html" }, noBoard())).toBeNull();
+      // an index.html outside any artifact is a plain page
+      expect(resolveArtifactBoardForFile({ name: "index.html" }, folder("Web", [file("Web/index.html"), file("Web/board.canvas")]))).toBeNull();
+    });
   });
 });
