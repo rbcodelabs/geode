@@ -65,7 +65,7 @@ test("setViewState({type:'canvas', state:{file}}) opens a board; live artboard g
     expect(probe.bg).toBe("rgb(0, 128, 0)");
     expect(probe.frameHeight).toBeGreaterThan(800);
     expect(Math.abs(probe.guestHeight - probe.frameHeight)).toBeLessThanOrEqual(1);
-    await window.screenshot({ path: test.info().outputPath("live-artboard.png") });
+    await window.screenshot({ path: path.join(process.env.QA_SCREENSHOT_DIR ?? test.info().outputDir, "live-artboard.png") });
   } finally {
     await app.close().catch(() => {});
     fs.rmSync(vaultDir, { recursive: true, force: true });
