@@ -89,15 +89,73 @@ interface ActiveArtifact extends ArtifactRegistration {
 export interface ArtifactRegisterOptions {
   /** Untrusted. Validated here; required for `nextjs` manifests and forbidden for `static`. */
   devServerUrl?: unknown;
+  /** Untrusted. Optional relative HTML entry override (with or without leading `#`), valid for `static` artifacts only. */
+  entry?: unknown;
 }
 
 export interface ArtifactCaptureOptions {
   /** Untrusted. Only used for `nextjs` artifacts when no live guest exists. */
   url?: unknown;
+  /** Untrusted. Optional relative HTML entry override for static headless capture. */
+  entry?: unknown;
+  /** Untrusted. Optional viewport width override for headless capture. */
+  width?: unknown;
+  /** Untrusted. Optional viewport height override for headless capture. */
+  height?: unknown;
+}
+
+export interface ArtifactThumbnailResult {
+  png: Uint8Array;
+  width: number;
+  height: number;
+  title: string;
+  entry: string;
 }
 
 const CAPTURE_LOAD_TIMEOUT_MS = 20_000;
 const CAPTURE_SETTLE_MS = 600;
+const STATIC_CAPTURE_SETTLE_MS = 120;
+const MAX_CONCURRENT_HEADLESS_CAPTURES = 2;
+
+function buildStaticEntryUrl(artifactId: string, entry: string): string {
+  return `${ARTIFACT_SCHEME}://${artifactId}/${entry.split("/").map(encodeURIComponent).join("/")}`;
+}
+
+function normalizeOptionalEntry(entry: unknown): string | undefined {
+  if (entry === undefined || entry === null) return undefined;
+  if (typeof entry !== "string") {
+    throw new ArtifactRegistrationError("entry_invalid", "Artifact entry override must be a string.");
+  }
+  const stripped = entry.replace(/^#/, "").trim();
+  if (!stripped) return undefined;
+  const segments = stripped.split("/");
+  const portable =
+    stripped.length <= 512 &&
+    !stripped.startsWith("/") &&
+    !stripped.includes("\\") &&
+    !stripped.includes("\0") &&
+    !/^[A-Za-z]:/.test(stripped) &&
+    segments.every((segment) => segment !== "" && segment !== "." && segment !== "..");
+  if (!portable) {
+    throw new ArtifactRegistrationError(
+      "entry_invalid",
+      "Artifact entry must be a portable relative path without empty, dot, or parent segments.",
+    );
+  }
+  return stripped;
+}
+
+function resolveCaptureViewport(
+  fallback: { width: number; height: number },
+  width: unknown,
+  height: unknown,
+): { width: number; height: number } {
+  const clamp = (value: unknown, def: number): number => {
+    if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return def;
+    return Math.min(3840, Math.max(240, Math.round(value)));
+  };
+  return { width: clamp(width, fallback.width), height: clamp(height, fallback.height) };
+}
 
 function vaultGrant(manifest: ArtifactManifest): Pick<ArtifactRegistration, "vault"> {
   if (manifest.runtime !== "static") return {};
@@ -164,6 +222,22 @@ export class ArtifactRuntime {
 
   private readonly registrations = new Map<string, ActiveArtifact>();
   private readonly registrationsByPartition = new Map<string, ActiveArtifact>();
+  private activeHeadlessCaptures = 0;
+  private readonly headlessCaptureQueue: Array<() => void> = [];
+
+  private async runQueuedHeadlessCapture<T>(task: () => Promise<T>): Promise<T> {
+    if (this.activeHeadlessCaptures >= MAX_CONCURRENT_HEADLESS_CAPTURES) {
+      await new Promise<void>((resolve) => this.headlessCaptureQueue.push(resolve));
+    }
+    this.activeHeadlessCaptures += 1;
+    try {
+      return await task();
+    } finally {
+      this.activeHeadlessCaptures -= 1;
+      const next = this.headlessCaptureQueue.shift();
+      next?.();
+    }
+  }
 
   private async readManifest(requestedRoot: string): Promise<{ root: string; manifest: ArtifactManifest }> {
     let root: string;
@@ -194,6 +268,18 @@ export class ArtifactRuntime {
   async register(owner: WebContents, requestedRoot: string, options: ArtifactRegisterOptions = {}): Promise<ArtifactRegistration> {
     const { root, manifest } = await this.readManifest(requestedRoot);
     const devServer = resolveDevServerOrigin(manifest, options?.devServerUrl);
+    const entryOverride = normalizeOptionalEntry(options?.entry);
+    if (entryOverride && manifest.runtime !== "static") {
+      throw new ArtifactRegistrationError("entry_invalid", "An entry override is only valid for a static artifact.");
+    }
+    const effectiveEntry = entryOverride ?? manifest.entry;
+    if (entryOverride) {
+      try {
+        await resolveArtifactEntry(root, entryOverride);
+      } catch (error) {
+        throw new ArtifactRegistrationError("entry_invalid", (error as Error).message);
+      }
+    }
 
     const registrationId = randomUUID();
     const partition = `geode-artifact-${registrationId}`;
@@ -204,7 +290,7 @@ export class ArtifactRuntime {
       title: manifest.title,
       entryUrl: devServer
         ? devServer.url
-        : `${ARTIFACT_SCHEME}://${manifest.id}/${manifest.entry.split("/").map(encodeURIComponent).join("/")}`,
+        : buildStaticEntryUrl(manifest.id, effectiveEntry),
       partition,
       runtime: manifest.runtime,
       viewport: manifest.viewport,
@@ -378,21 +464,69 @@ export class ArtifactRuntime {
 
   async capture(owner: WebContents, requestedRoot: string, options: ArtifactCaptureOptions = {}): Promise<ArtifactCaptureResult> {
     const root = await fsp.realpath(path.resolve(requestedRoot));
+    const entryOverride = normalizeOptionalEntry(options?.entry);
     const active = [...this.registrations.values()].find((candidate) =>
       candidate.ownerWebContentsId === owner.id && candidate.root === root);
-    if (active?.guest && !active.guest.isDestroyed()) {
+    if (!entryOverride && active?.guest && !active.guest.isDestroyed()) {
       return this.writeCapture(root, await active.guest.capturePage());
     }
     const url = options?.url;
     if (url === undefined || url === null) {
-      if (active?.allowedOrigin) return this.captureHeadless(root, active.artifactId, active.allowedOrigin, active.viewport);
+      if (active?.allowedOrigin) return this.captureHeadless(root, active.artifactId, `${active.allowedOrigin}/`, active.viewport, active.allowedOrigin);
+      if (entryOverride !== undefined) {
+        const { manifest } = await this.readManifest(root);
+        if (manifest.runtime !== "static") {
+          throw new ArtifactRegistrationError("entry_invalid", "An entry override is only valid for a static artifact.");
+        }
+        try {
+          await resolveArtifactEntry(root, entryOverride);
+        } catch (error) {
+          throw new ArtifactRegistrationError("entry_invalid", (error as Error).message);
+        }
+        const viewport = resolveCaptureViewport(manifest.viewport, options?.width, options?.height);
+        return this.captureHeadless(root, manifest.id, buildStaticEntryUrl(manifest.id, entryOverride), viewport);
+      }
       throw new ArtifactRegistrationError("registration_missing", "Open the artifact preview before capturing it.");
     }
     // A URL means "capture the dev server", which is only valid for a nextjs manifest.
     const { manifest } = await this.readManifest(root);
     const devServer = resolveDevServerOrigin(manifest, url);
     if (!devServer) throw new ArtifactRegistrationError("dev_server_invalid", "A capture URL is only valid for a nextjs artifact.");
-    return this.captureHeadless(root, manifest.id, devServer.origin, manifest.viewport);
+    return this.captureHeadless(root, manifest.id, `${devServer.origin}/`, manifest.viewport, devServer.origin);
+  }
+
+  /**
+   * Render a static artifact (or a specific `#subpath` entry within it) headlessly
+   * and return an in-memory PNG for canvas artboard cards without writing to `<root>/captures/`.
+   */
+  async captureThumbnail(
+    requestedRoot: string,
+    options: { entry?: unknown; width?: unknown; height?: unknown } = {},
+  ): Promise<ArtifactThumbnailResult> {
+    const { root, manifest } = await this.readManifest(requestedRoot);
+    if (manifest.runtime !== "static") {
+      throw new ArtifactRegistrationError("capture_failed", "Canvas artboard thumbnails only support static artifacts.");
+    }
+    const entryOverride = normalizeOptionalEntry(options?.entry);
+    const effectiveEntry = entryOverride ?? manifest.entry;
+    if (entryOverride) {
+      try {
+        await resolveArtifactEntry(root, entryOverride);
+      } catch (error) {
+        throw new ArtifactRegistrationError("entry_invalid", (error as Error).message);
+      }
+    }
+    const viewport = resolveCaptureViewport(manifest.viewport, options?.width, options?.height);
+    const targetUrl = buildStaticEntryUrl(manifest.id, effectiveEntry);
+    const image = await this.captureHeadlessImage(root, manifest.id, targetUrl, viewport);
+    const size = image.getSize();
+    return {
+      png: image.toPNG(),
+      width: size.width,
+      height: size.height,
+      title: manifest.title,
+      entry: effectiveEntry,
+    };
   }
 
   private async writeCapture(root: string, image: Electron.NativeImage): Promise<ArtifactCaptureResult> {
@@ -404,66 +538,86 @@ export class ArtifactRuntime {
     return { path: capturePath, width: size.width, height: size.height };
   }
 
+  private async captureHeadless(
+    root: string,
+    artifactId: string,
+    targetUrl: string,
+    viewport: { width: number; height: number },
+    allowedOrigin?: string,
+  ): Promise<ArtifactCaptureResult> {
+    const image = await this.captureHeadlessImage(root, artifactId, targetUrl, viewport, allowedOrigin);
+    return this.writeCapture(root, image);
+  }
+
   /**
    * Capture without a visible window: a never-shown offscreen BrowserWindow
    * bound to a throwaway session with exactly the same restrictions as a live
    * guest (origin filter, CSP, denied permissions), no preload, no Node.
    */
-  private async captureHeadless(
+  private async captureHeadlessImage(
     root: string,
     artifactId: string,
-    allowedOrigin: string,
+    targetUrl: string,
     viewport: { width: number; height: number },
-  ): Promise<ArtifactCaptureResult> {
-    const partition = `geode-artifact-capture-${randomUUID()}`;
-    const captureSession = session.fromPartition(partition, { cache: false });
-    let win: BrowserWindow | undefined;
-    try {
-      await this.configureSession(captureSession, { artifactId, root, allowedOrigin });
-      // A never-shown offscreen window, not an unattached view: a detached
-      // WebContentsView has no host to size it, so capturePage() returns 0x0.
-      win = new BrowserWindow({
-        show: false,
-        width: viewport.width,
-        height: viewport.height,
-        useContentSize: true,
-        frame: false,
-        skipTaskbar: true,
-        webPreferences: {
-          session: captureSession,
-          offscreen: true,
-          nodeIntegration: false,
-          nodeIntegrationInSubFrames: false,
-          contextIsolation: true,
-          sandbox: true,
-          webSecurity: true,
-          allowRunningInsecureContent: false,
-        },
-      });
-      const contents = win.webContents;
-      contents.setFrameRate(5);
-      contents.setWindowOpenHandler(() => ({ action: "deny" }));
-      this.denyOffOriginNavigation(contents, allowedOrigin);
-      const loaded = new Promise<void>((resolve, reject) => {
-        const timer = setTimeout(() => reject(new Error("Timed out loading the dev server.")), CAPTURE_LOAD_TIMEOUT_MS);
-        contents.once("did-finish-load", () => { clearTimeout(timer); resolve(); });
-        contents.once("did-fail-load", (_event, _code, description) => {
-          clearTimeout(timer);
-          reject(new Error(description || "Dev server failed to load."));
+    allowedOrigin?: string,
+  ): Promise<Electron.NativeImage> {
+    return this.runQueuedHeadlessCapture(async () => {
+      const partition = `geode-artifact-capture-${randomUUID()}`;
+      const captureSession = session.fromPartition(partition, { cache: false });
+      let win: BrowserWindow | undefined;
+      try {
+        await this.configureSession(captureSession, { artifactId, root, allowedOrigin });
+        // A never-shown offscreen window, not an unattached view: a detached
+        // WebContentsView has no host to size it, so capturePage() returns 0x0.
+        win = new BrowserWindow({
+          show: false,
+          width: viewport.width,
+          height: viewport.height,
+          useContentSize: true,
+          frame: false,
+          skipTaskbar: true,
+          webPreferences: {
+            session: captureSession,
+            offscreen: true,
+            nodeIntegration: false,
+            nodeIntegrationInSubFrames: false,
+            contextIsolation: true,
+            sandbox: true,
+            webSecurity: true,
+            allowRunningInsecureContent: false,
+          },
         });
-      });
-      loaded.catch(() => { /* observed below; avoids an unhandled rejection while loadURL is pending */ });
-      await contents.loadURL(`${allowedOrigin}/`).catch(() => { /* surfaced through did-fail-load */ });
-      await loaded;
-      await new Promise((resolve) => setTimeout(resolve, CAPTURE_SETTLE_MS));
-      return await this.writeCapture(root, await contents.capturePage());
-    } catch (error) {
-      if (error instanceof ArtifactRegistrationError) throw error;
-      throw new ArtifactRegistrationError("capture_failed", `Capture failed: ${(error as Error).message}`);
-    } finally {
-      if (win && !win.isDestroyed()) win.destroy();
-      await Promise.allSettled([captureSession.clearCache(), captureSession.clearStorageData()]);
-    }
+        const contents = win.webContents;
+        contents.setFrameRate(5);
+        contents.setWindowOpenHandler(() => ({ action: "deny" }));
+        const deny = (event: { preventDefault(): void }, url: string): void => {
+          if (!isArtifactUrlAllowed(url, artifactId, "document", allowedOrigin)) event.preventDefault();
+        };
+        contents.on("will-navigate", deny);
+        contents.on("will-redirect", deny);
+        contents.on("will-frame-navigate", (event) => deny(event, event.url));
+        const loaded = new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(() => reject(new Error("Timed out loading artifact for capture.")), CAPTURE_LOAD_TIMEOUT_MS);
+          contents.once("did-finish-load", () => { clearTimeout(timer); resolve(); });
+          contents.once("did-fail-load", (_event, _code, description) => {
+            clearTimeout(timer);
+            reject(new Error(description || "Artifact failed to load."));
+          });
+        });
+        loaded.catch(() => { /* observed below; avoids an unhandled rejection while loadURL is pending */ });
+        await contents.loadURL(targetUrl).catch(() => { /* surfaced through did-fail-load */ });
+        await loaded;
+        await new Promise((resolve) => setTimeout(resolve, allowedOrigin ? CAPTURE_SETTLE_MS : STATIC_CAPTURE_SETTLE_MS));
+        return await contents.capturePage();
+      } catch (error) {
+        if (error instanceof ArtifactRegistrationError) throw error;
+        throw new ArtifactRegistrationError("capture_failed", `Capture failed: ${(error as Error).message}`);
+      } finally {
+        if (win && !win.isDestroyed()) win.destroy();
+        if (!allowedOrigin) captureSession.protocol.unhandle(ARTIFACT_SCHEME);
+        await Promise.allSettled([captureSession.clearCache(), captureSession.clearStorageData()]);
+      }
+    });
   }
 
   private async dispose(active: ActiveArtifact): Promise<void> {

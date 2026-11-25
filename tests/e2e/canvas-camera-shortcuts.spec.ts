@@ -24,7 +24,7 @@ async function expectedFit(surface: Locator, bounds: Bounds): Promise<{ scale: n
   }));
   const width = Math.max(1, bounds.right - bounds.left);
   const height = Math.max(1, bounds.bottom - bounds.top);
-  const scale = Math.min(4, Math.max(0.2, Math.min((size.width - 160) / width, (size.height - 160) / height)));
+  const scale = Math.min(4, Math.max(0.05, Math.min((size.width - 160) / width, (size.height - 160) / height)));
   return {
     scale,
     panX: size.width / 2 - (bounds.left + width / 2) * scale,

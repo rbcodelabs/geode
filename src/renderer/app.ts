@@ -5660,24 +5660,34 @@ export class App {
    * Open a validated design artifact in an isolated guest session. `opts.url` is
    * the producer-owned dev server for `nextjs` artifacts; main re-validates it.
    */
-  async openArtifact(root: string, opts: { url?: string } = {}): Promise<void> {
+  async openArtifact(
+    root: string,
+    opts: { url?: string; entry?: string; viewport?: { preset: "desktop" | "tablet" | "mobile" | "custom" | "fill"; width: number; height: number } } = {},
+  ): Promise<void> {
     if (!this.host.capabilities.artifacts) {
       this.notify("Artifacts are available on desktop only");
       return;
     }
-    // Focus the tab that already shows this artifact instead of stacking duplicates.
+    const normalizedEntry = typeof opts.entry === "string" ? opts.entry.replace(/^#/, "").trim() || undefined : undefined;
+    // Focus the tab that already shows this artifact (+ entry) instead of stacking duplicates.
     for (const existing of this.workspace.getLeavesOfType("geode-artifact")) {
-      if (existing.view instanceof ArtifactView && existing.view.getState().root === root) {
-        // Same root, new dev server (restart on another port): re-register in place.
-        if (opts.url && existing.view.getState().url !== opts.url) {
-          await existing.view.setState({ ...existing.view.getState(), url: opts.url });
+      if (existing.view instanceof ArtifactView) {
+        const existingState = existing.view.getState();
+        if (existingState.root === root && (existingState.entry ?? undefined) === normalizedEntry) {
+          // Same root, new dev server (restart on another port): re-register in place.
+          if (opts.url && existingState.url !== opts.url) {
+            await existing.view.setState({ ...existingState, url: opts.url });
+          }
+          this.workspace.setActiveLeaf(existing);
+          return;
         }
-        this.workspace.setActiveLeaf(existing);
-        return;
       }
     }
     const leaf = this.workspace.getLeaf(true);
-    await leaf.setViewState({ type: "geode-artifact", active: true, state: opts.url ? { root, url: opts.url, runtime: "nextjs" } : { root } });
+    const state = opts.url
+      ? { root, url: opts.url, runtime: "nextjs" as const, ...(opts.viewport ? { viewport: opts.viewport } : {}) }
+      : { root, ...(normalizedEntry ? { entry: normalizedEntry } : {}), ...(opts.viewport ? { viewport: opts.viewport } : {}) };
+    await leaf.setViewState({ type: "geode-artifact", active: true, state });
   }
 
   /** True when this platform can run artifacts and `folder` holds an `artifact.json`. */

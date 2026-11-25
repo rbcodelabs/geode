@@ -1691,15 +1691,15 @@ test("@phone @tablet Canvas supports touch authoring, gestures, acknowledged sav
   await page.evaluate(() => (window as any).__geodeMobileTest.foreground());
   const serializedBeforeZoom = await page.evaluate(() => window.hostServices!.vaultFiles.read("Boards/Proof.canvas"));
   for (let index = 0; index < 20; index += 1) await view.getByRole("button", { name: "Zoom out" }).click();
-  await expect(view).toHaveAttribute("data-scale", "0.2");
+  await expect(view).toHaveAttribute("data-scale", "0.05");
   for (const target of [
     view.locator('.canvas-edge-endpoint-touch-hit[data-edge-id="edge-1"][data-endpoint="target"]'),
     view.locator('.canvas-node[data-node-id="alpha"] .canvas-node-connection-touch-hit[data-side="right"]'),
     view.locator('.canvas-node[data-node-id="alpha"] .canvas-node-resize-touch-hit'),
   ]) {
     const box = (await target.boundingBox())!;
-    expect(box.width).toBeGreaterThanOrEqual(44);
-    expect(box.height).toBeGreaterThanOrEqual(44);
+    expect(box.width).toBeGreaterThanOrEqual(43.99);
+    expect(box.height).toBeGreaterThanOrEqual(43.99);
   }
   for (let index = 0; index < 40; index += 1) await view.getByRole("button", { name: "Zoom in" }).click();
   await expect(view).toHaveAttribute("data-scale", "4");

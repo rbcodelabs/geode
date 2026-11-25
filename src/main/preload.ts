@@ -351,12 +351,15 @@ const api = {
   reportActivePlugins: (pluginIds: string[]): Promise<void> =>
     ipcRenderer.invoke("crash-active-plugins", pluginIds),
   leaveCrashRecovery: (): Promise<void> => ipcRenderer.invoke("crash-recovery-leave"),
-  registerArtifact: (root: string, options?: { devServerUrl?: string }): Promise<ArtifactRegistrationResult> =>
+  registerArtifact: (root: string, options?: { devServerUrl?: string; entry?: string }): Promise<ArtifactRegistrationResult> =>
     ipcRenderer.invoke("artifact-register", root, options),
   unregisterArtifact: (registrationId: string): Promise<boolean> =>
     ipcRenderer.invoke("artifact-unregister", registrationId),
   getArtifactState: (registrationId: string) => ipcRenderer.invoke("artifact-state", registrationId),
-  captureArtifact: (root: string, options?: { url?: string }) => ipcRenderer.invoke("artifact-capture", root, options),
+  captureArtifact: (root: string, options?: { url?: string; entry?: string; width?: number; height?: number }) =>
+    ipcRenderer.invoke("artifact-capture", root, options),
+  captureArtifactThumbnail: (root: string, options?: { entry?: string; width?: number; height?: number }): Promise<{ png: Uint8Array; width: number; height: number; title: string; entry: string }> =>
+    ipcRenderer.invoke("artifact-thumbnail", root, options),
   onVaultEvent: (cb: (ev: VaultEvent) => void) => {
     const listener = (_e: Electron.IpcRendererEvent, ev: VaultEvent) => cb(ev);
     ipcRenderer.on("vault-event", listener);
