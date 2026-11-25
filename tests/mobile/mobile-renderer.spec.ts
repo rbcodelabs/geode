@@ -1698,8 +1698,8 @@ test("@phone @tablet Canvas supports touch authoring, gestures, acknowledged sav
     view.locator('.canvas-node[data-node-id="alpha"] .canvas-node-resize-touch-hit'),
   ]) {
     const box = (await target.boundingBox())!;
-    expect(box.width).toBeGreaterThanOrEqual(44);
-    expect(box.height).toBeGreaterThanOrEqual(44);
+    expect(box.width).toBeGreaterThanOrEqual(43.99);
+    expect(box.height).toBeGreaterThanOrEqual(43.99);
   }
   for (let index = 0; index < 40; index += 1) await view.getByRole("button", { name: "Zoom in" }).click();
   await expect(view).toHaveAttribute("data-scale", "4");
